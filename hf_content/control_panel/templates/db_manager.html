@@ -1,0 +1,82 @@
+{% extends "base.html" %}
+{% block title %}قاعدة البيانات — TitanX{% endblock %}
+{% block page_title %}🗄️ مدير قاعدة البيانات{% endblock %}
+
+{% block content %}
+<!-- DB Overview -->
+<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:16px;margin-bottom:24px">
+  {% for db in dbs %}
+  <div class="card">
+    <div style="display:flex;align-items:center;gap:10px;margin-bottom:14px">
+      <span style="font-size:1.5rem">{% if db.ok %}🟢{% else %}🔴{% endif %}</span>
+      <div>
+        <div style="font-weight:700">{{ db.name }}</div>
+        <div style="font-size:.8rem;color:var(--text2)">{{ fmt_size(db.size) }}</div>
+      </div>
+    </div>
+
+    {% if db.error %}
+    <div class="alert alert-error">{{ db.error }}</div>
+    {% else %}
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>الجدول</th><th>السجلات</th></tr></thead>
+        <tbody>
+          {% for t in db.tables %}
+          <tr>
+            <td><code style="font-size:.82rem">{{ t.name }}</code></td>
+            <td><span style="font-weight:600">{{ "{:,}".format(t.count) }}</span></td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% endif %}
+  </div>
+  {% endfor %}
+</div>
+
+<!-- Issues -->
+{% set has_issues = dups.dup_users or dups.dup_referrals or dups.orphan_downloads > 0 %}
+<div class="grid-2" style="margin-bottom:24px">
+  <div class="card">
+    <div class="card-title">🔍 اكتشاف المشكلات</div>
+    {% if not has_issues %}
+    <div class="alert alert-success">✅ لم يتم اكتشاف أي مشكلات في قواعد البيانات</div>
+    {% else %}
+    {% if dups.dup_users %}
+    <div class="alert alert-warning">
+      ⚠️ مستخدمون مكررون:
+      {% for d in dups.dup_users %}
+      <code>@{{ d.username }}</code> ({{ d.count }}x){% if not loop.last %}, {% endif %}
+      {% endfor %}
+    </div>
+    {% endif %}
+    {% if dups.dup_referrals %}
+    <div class="alert alert-warning">⚠️ إحالات مكررة: {{ dups.dup_referrals | length }} حالة</div>
+    {% endif %}
+    {% if dups.orphan_downloads > 0 %}
+    <div class="alert alert-warning">⚠️ تحميلات يتيمة: {{ dups.orphan_downloads }} سجل</div>
+    {% endif %}
+    {% endif %}
+  </div>
+
+  <div class="card">
+    <div class="card-title">🔧 أدوات الإصلاح</div>
+    <div style="display:flex;flex-direction:column;gap:10px">
+      <button class="btn btn-ghost" onclick="dbFixOrphans()">
+        🗑️ حذف التحميلات اليتيمة
+      </button>
+      <button class="btn btn-ghost" onclick="dbVacuum()">
+        🧹 تحسين قاعدة البيانات (VACUUM)
+      </button>
+      <button class="btn btn-ghost" onclick="dbIntegrity()">
+        🔍 فحص سلامة البيانات
+      </button>
+      <button class="btn btn-primary" onclick="createBackup()">
+        💾 إنشاء نسخة احتياطية
+      </button>
+    </div>
+  </div>
+</div>
+{% endblock %}
