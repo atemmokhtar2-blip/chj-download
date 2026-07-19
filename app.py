@@ -4,8 +4,9 @@ import os
 import sys
 import time
 import logging
+import asyncio
 
-# Configure logging to see everything in HF logs
+# Configure logging
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
@@ -34,32 +35,29 @@ def dummy_gpu_task():
 
 def start_bot():
     logger.info("--- STARTING BOT THREAD ---")
-    time.sleep(10) # Wait for Gradio to be fully up
+    time.sleep(5)
+    
+    # Create and set a new event loop for this thread
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    
     try:
-        logger.info("Checking for token.txt...")
-        token_path = "/home/user/app/token.txt"
-        if os.path.exists(token_path):
-            with open(token_path, 'r') as f:
-                t = f.read().strip()
-                logger.info(f"Token found! Starts with: {t[:10]}...")
-        else:
-            logger.error("token.txt NOT FOUND at /home/user/app/token.txt")
-            
         logger.info("Importing main from bot...")
         from bot import main
         logger.info("Calling main()...")
+        # main() in bot.py calls app.run_polling() which is synchronous but uses the loop
         main()
     except Exception as e:
         logger.error(f"CRITICAL ERROR IN BOT THREAD: {e}", exc_info=True)
 
-# Start bot
+# Start bot thread
 threading.Thread(target=start_bot, daemon=True).start()
 
 # UI
 with gr.Blocks() as demo:
     gr.Markdown("# 🤖 Bot Status Monitor")
-    gr.Markdown("If the bot is not responding, check the logs below.")
-    status_box = gr.Textbox(label="Last Action", value="Initializing...")
+    gr.Markdown("Status: **Active** (Check Telegram)")
+    status_box = gr.Textbox(label="Last Action", value="Bot is starting...")
     refresh_btn = gr.Button("Refresh Status")
     
     def get_status():
