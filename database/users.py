@@ -224,3 +224,13 @@ def adjust_points_admin(user_id: int, amount: int, admin_id: int, note: str = ""
             (user_id, abs(amount), label)
         )
         return new_total
+
+def deduct_high_quality_credit(user_id: int) -> bool:
+    """Deduct 1 high quality credit from user. Returns True if successful."""
+    with db_cursor() as c:
+        c.execute("SELECT high_quality_rem FROM users WHERE user_id = ?", (user_id,))
+        row = c.fetchone()
+        if not row or row["high_quality_rem"] <= 0:
+            return False
+        c.execute("UPDATE users SET high_quality_rem = high_quality_rem - 1 WHERE user_id = ?", (user_id,))
+        return True

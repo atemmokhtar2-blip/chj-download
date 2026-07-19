@@ -1,6 +1,6 @@
 STRINGS = {
     "choose_language": (
-        "🚀 <b>PrimeDownloader</b>\n\n"
+        "🚀 <b>X</b>\n\n"
         "⚡ تحميل سريع\n"
         "🎬 فيديو وصوت وصور\n"
         "🎵 MP3 عالي الجودة\n"
@@ -16,13 +16,13 @@ STRINGS = {
     "language_set": "✅ تم ضبط اللغة على العربية!",
 
     "welcome": (
-        "🎬 <b>مرحباً بك في PrimeDownloader</b>\n\n"
-        "أرسل رابط أي فيديو أو صورة من أي منصة للتحميل مباشرة بأعلى جودة.\n\n"
-        "أرسل الرابط الآن للبدء:"
+        "🎬 ➤ <b>مرحباً بك في X ✨</b>\n\n"
+        "➜ أرسل رابط أي فيديو أو صورة من أي منصة، وسيتم تحميلها مباشرة بأعلى جودة.\n\n"
+        "➜ 📎 <b>أرسل الرابط الآن للبدء.</b>"
     ),
     "welcome_back": (
-        "🎬 <b>مرحباً بك مجدداً</b>\n\n"
-        "أرسل رابط أي فيديو أو صورة للتحميل مباشرة بأعلى جودة:"
+        "🎬 ➤ <b>مرحباً بك مجدداً ✨</b>\n\n"
+        "➜ أرسل رابط أي فيديو أو صورة للتحميل مباشرة بأعلى جودة."
     ),
 
     "menu_download":     "📥 تحميل",
@@ -102,7 +102,7 @@ STRINGS = {
         "🎬 <b>المنصة:</b> {platform}\n"
         "🎞 <b>الجودة:</b> {quality}\n"
         "📦 <b>الحجم:</b> {size}\n\n"
-        "شكراً لاستخدامك PrimeDownloader. 🙏"
+        "شكراً لاستخدامك X. 🙏"
     ),
     "from_cache":      "⚡ <b>تم الإرسال فوراً من الذاكرة المؤقتة!</b>",
     "download_failed": "❌ فشل التحميل. يرجى المحاولة مجدداً.",
@@ -186,7 +186,7 @@ STRINGS = {
     "achievements_title":   "🏆 <b>إنجازاتك</b>\n\n",
     "achievement_unlocked": "🏆 تم فتح إنجاز: {name}!",
 
-    "feedback_text":    "❤️ <b>هل استمتعت بـ PrimeDownloader؟</b>",
+    "feedback_text":    "❤️ <b>هل استمتعت بـ X؟</b>",
     "feedback_like":    "👍 إعجاب",
     "feedback_dislike": "👎 عدم إعجاب",
     "feedback_report":  "🐞 الإبلاغ عن مشكلة",
@@ -280,11 +280,11 @@ STRINGS = {
 
     "maintenance_text": (
         "🚧 <b>البوت في وضع الصيانة</b>\n\n"
-        "PrimeDownloader تحت الصيانة مؤقتاً.\n"
+        "X تحت الصيانة مؤقتاً.\n"
         "يرجى المحاولة لاحقاً. 🙏"
     ),
-    "maintenance_on":  "🔧 وضع الصيانة <b>مفعّل</b>. سيرى المستخدمون رسالة الصيانة.",
-    "maintenance_off": "✅ وضع الصيانة <b>معطّل</b>. البوت يعمل مجدداً.",
+    "maintenance_on":  "🔧 وضع الصيانة <b>مفعّل</b>. سيرى المستخدمون رسالة صيانة.",
+    "maintenance_off": "✅ وضع الصيانة <b>معطّل</b>. البوت عاد للعمل.",
 
     "admin_report_reply_btn":  "📩 رد",
     "admin_report_close_btn":  "🗑 إغلاق",
@@ -295,106 +295,73 @@ STRINGS = {
     "banned": "🚫 لقد تم حظرك من استخدام هذا البوت.",
 
     "admin_panel": (
-        "👑 <b>لوحة تحكم PrimeDownloader</b>\n\n"
-        "👥 المستخدمون: <b>{total_users}</b>  🟢 نشطون اليوم: <b>{active_today}</b>\n"
+        "👑 <b>لوحة تحكم X</b>\n\n"
+        "👥 إجمالي المستخدمين: <b>{total_users}</b>  🟢 نشط اليوم: <b>{active_today}</b>\n"
         "📥 اليوم: <b>{downloads_today}</b>  📅 الأسبوع: <b>{downloads_week}</b>  📅 الشهر: <b>{downloads_month}</b>\n\n"
-        "🎬 يوتيوب: <b>{youtube}</b>  📸 إنستغرام: <b>{instagram}</b>  📘 فيسبوك: <b>{facebook}</b>\n\n"
-        "💾 كاش هيتس: <b>{cache_hits}</b>  📦 الطابور: <b>{queue}</b>\n"
-        "⭐ النقاط: <b>{points_issued}</b>  🎁 الدعوات: <b>{referrals}</b>\n"
+        "🎬 YouTube: <b>{youtube}</b>  📘 Facebook: <b>{facebook}</b>  📌 Pinterest: <b>{pinterest}</b>\n\n"
+        "💾 نجاح الكاش: <b>{cache_hits}</b>  📦 الانتظار: <b>{queue}</b>\n"
+        "⭐ نقاط موزعة: <b>{points_issued}</b>  🎁 دعوات: <b>{referrals}</b>\n"
         "🟢 حالة البوت: <b>متصل</b>"
     ),
-    "admin_btn_dashboard":  "📊 لوحة البيانات",
+    "admin_btn_dashboard":  "📊 الإحصائيات",
     "admin_btn_system":     "🖥 النظام",
-    "admin_btn_search":     "🔍 بحث مستخدم",
+    "admin_btn_search":     "🔍 بحث عن مستخدم",
     "admin_btn_points":     "⭐ النقاط",
     "admin_btn_reports":    "🐞 التقارير",
     "admin_btn_broadcast":  "📢 إذاعة",
     "admin_btn_referrals":  "📈 الدعوات",
-    "admin_btn_maint_off":  "🟢 الصيانة: معطّلة",
-    "admin_btn_maint_on":   "🔴 الصيانة: مفعّلة",
-    "admin_btn_stats":     "📊 الإحصائيات",
-    "admin_btn_users":     "👥 المستخدمين",
-    "admin_btn_ban":       "🚫 الحظر",
+    "admin_btn_maint_off":  "🟢 الصيانة: OFF",
+    "admin_btn_maint_on":   "🔴 الصيانة: ON",
+    "admin_btn_stats":     "📊 إحصائيات مفصلة",
+    "admin_btn_users":     "👥 قائمة المستخدمين",
+    "admin_btn_ban":       "🚫 حظر / إلغاء حظر",
     "admin_btn_logs":      "📜 السجلات",
-    "admin_no_perm":       "❌ ليس لديك إذن لاستخدام هذا الأمر.",
+    "admin_no_perm":       "❌ ليس لديك صلاحية لاستخدام هذا الأمر.",
 
     "system_monitor": (
-        "🖥 <b>مراقبة النظام</b>\n\n"
-        "🖥 المعالج: <b>{cpu}%</b>\n"
-        "🧠 الذاكرة: <b>{ram_used} MB / {ram_total} MB</b> ({ram_pct}%)\n"
-        "💿 التخزين: <b>{disk_used} GB / {disk_total} GB</b> ({disk_pct}%)\n"
-        "💽 حجم DB: <b>{db_size} KB</b>\n"
-        "⏱ وقت التشغيل: <b>{uptime}</b>\n"
+        "🖥 <b>مراقب النظام</b>\n\n"
+        "🖥 CPU: <b>{cpu}%</b>\n"
+        "🧠 RAM: <b>{ram_used} MB / {ram_total} MB</b> ({ram_pct}%)\n"
+        "💿 Disk: <b>{disk_used} GB / {disk_total} GB</b> ({disk_pct}%)\n"
+        "💽 حجم القاعدة: <b>{db_size} KB</b>\n"
+        "⏱ مدة التشغيل: <b>{uptime}</b>\n"
         "🕐 آخر نبضة: <b>{heartbeat_age}</b>"
     ),
 
-    "admin_search_prompt":  "🔍 أرسل معرف المستخدم أو @اسم_المستخدم للبحث:",
+    "admin_search_prompt":  "🔍 أرسل ID المستخدم أو @username للبحث:",
     "admin_user_card": (
         "👤 <b>معلومات المستخدم</b>\n\n"
         "🆔 ID: <code>{user_id}</code>\n"
         "👤 الاسم: <b>{name}</b>\n"
-        "🔖 المعرف: {username}\n"
-        "🌐 اللغة: {language}\n"
+        "🔖 اليوزر: {username}\n"
+        "⭐ النقاط: <b>{points}</b>\n"
         "📥 التحميلات: <b>{downloads}</b>\n"
         "👥 الدعوات: <b>{referrals}</b>\n"
-        "⭐ النقاط: <b>{points}</b>\n"
-        "📅 تاريخ الانضمام: {join_date}\n"
-        "🕐 آخر ظهور: {last_seen}\n"
-        "🚫 محظور: {banned}"
+        "🚫 محظور: <b>{is_banned}</b>\n"
+        "📅 انضم: {join_date}"
     ),
-    "admin_user_not_found": "❌ المستخدم غير موجود.",
+    "admin_user_ban_btn":   "🚫 حظر",
+    "admin_user_unban_btn": "✅ إلغاء الحظر",
+    "admin_user_points_btn": "⭐ تعديل النقاط",
+    "admin_user_not_found": "❌ لم يتم العثور على المستخدم.",
 
-    "admin_pts_added":      "✅ أضفت <b>{amount}</b> نقطة لـ <code>{user_id}</code>. الإجمالي: <b>{total}</b>.",
-    "admin_pts_removed":    "✅ أزلت <b>{amount}</b> نقطة من <code>{user_id}</code>. الإجمالي: <b>{total}</b>.",
-    "admin_pts_not_enough": "❌ لدى المستخدم {have} نقطة فقط — لا يمكن إزالة {amount}.",
-    "admin_pts_usage":      "الاستخدام: /addpoints <id> <amount> [reason]\n         /removepoints <id> <amount> [reason]",
+    "broadcast_prompt":     "📢 أرسل الرسالة التي تريد إذاعتها لجميع المستخدمين (نص، صورة، فيديو):",
+    "broadcast_started":    "🚀 بدأت عملية الإذاعة لـ {count} مستخدم...",
+    "broadcast_done":       "✅ اكتملت الإذاعة!\n\nنجاح: {success}\nفشل: {failed}",
+    "broadcast_cancelled":  "❌ تم إلغاء الإذاعة.",
 
-    "admin_reports_open_tab":   "🔴 مفتوحة ({count})",
-    "admin_reports_closed_tab": "✅ مغلقة ({count})",
-    "admin_no_reports":   "📭 لا توجد تقارير.",
-    "admin_report_item":  "#{id} | {user} | 📺 {platform} | 🕐 {date}\n📝 {message}\n",
+    "points_add_prompt":    "➕ أرسل عدد النقاط لإضافتها للمستخدم {user_id}:",
+    "points_remove_prompt": "➖ أرسل عدد النقاط لخصمها من المستخدم {user_id}:",
+    "points_updated":       "✅ تم تحديث النقاط. الرصيد الحالي: {points}",
 
-    "admin_referral_analytics": (
-        "📈 <b>إحصائيات الدعوات</b>\n\n"
-        "✅ مكتملة: <b>{completed}</b>  ⏳ معلقة: <b>{pending}</b>\n"
-        "⭐ نقاط ممنوحة: <b>{pts_awarded}</b>\n\n"
-        "<b>أفضل المحيلين:</b>\n{top_list}"
-    ),
-    "admin_referral_item": "{rank}. {name} — {count} دعوة\n",
-
-    "broadcast_start":     "📡 بدء البث لـ <b>{total}</b> مستخدم...",
-    "broadcast_progress":  "📡 <b>البث جارٍ</b>\n\n{bar} {pct}%\n\n✅ أُرسل: {success}  ❌ فشل: {failed}\n📊 {sent}/{total}",
-    "broadcast_done":      "📡 <b>اكتمل البث!</b>\n\n✅ نجح: <b>{success}</b>\n❌ فشل: <b>{failed}</b>\n📊 الإجمالي: <b>{total}</b>",
-    "broadcast_cancelled": "🛑 <b>تم إلغاء البث.</b>\n✅ أُرسل لـ: {sent}/{total}",
-    "broadcast_cancel_btn": "🛑 إلغاء البث",
-    "broadcast_no_active": "❌ لا يوجد بث نشط للإلغاء.",
-
-    "ban_success":    "✅ تم حظر المستخدم {user_id}.",
-    "unban_success":  "✅ تم رفع الحظر عن المستخدم {user_id}.",
-    "user_not_found": "❌ المستخدم غير موجود.",
-    "stats_text": (
-        "📊 <b>الإحصائيات</b>\n\n"
-        "👥 إجمالي المستخدمين: {total}\n"
-        "🆕 جدد اليوم: {new_today}\n"
-        "🟢 نشطون اليوم: {active_today}\n"
-        "📥 إجمالي التحميلات: {downloads_total}\n"
-        "📥 تحميلات اليوم: {downloads_today}\n"
-        "📅 هذا الأسبوع: {downloads_week}\n"
-        "📅 هذا الشهر: {downloads_month}\n\n"
-        "🎬 يوتيوب: {youtube}  📸 إنستغرام: {instagram}  📘 فيسبوك: {facebook}\n"
-        "🐦 تويتر/X: {twitter}  📌 بينتيريست: {pinterest}\n\n"
-        "⭐ النقاط المتداولة: {points}\n"
-        "💾 معدل الكاش: {cache_rate}%\n"
+    "status_text": (
+        "📊 <b>حالة البوت</b>\n\n"
+        "🕒 الوقت الحالي: {current_time}\n"
+        "⏱ مدة التشغيل: {uptime}\n"
+        "📦 التحميلات النشطة: {active_tasks}\n"
+        "👥 المستخدمين النشطين: {active_users}"
     ),
 
-    "admin_btn_activity":       "📡 السجل المباشر",
-    "activity_feed_title":      "📡 <b>سجل النشاط المباشر</b>  (آخر 50)\n\n",
-    "activity_feed_empty":      "📭 لا يوجد نشاط مسجل بعد.",
-    "activity_feed_refresh":    "🔄 تحديث",
-    "activity_event_new_user":  "🆕 مستخدم جديد انضم",
-    "activity_event_download":  "📥 اكتمل التحميل",
-    "activity_event_referral":  "🎁 اكتملت الدعوة",
-    "activity_event_report":    "🐞 تقرير جديد",
-    "activity_event_points":    "⭐ نقاط أضيفت",
-    "activity_event_broadcast": "📢 اكتمل البث",
+    "admin_top_users_title": "🏆 <b>أكثر المستخدمين تحميلاً</b>\n\n",
+    "admin_top_referrers_title": "🎁 <b>أكثر المحيلين</b>\n\n",
 }

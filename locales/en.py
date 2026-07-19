@@ -1,6 +1,6 @@
 STRINGS = {
     "choose_language": (
-        "🚀 <b>PrimeDownloader</b>\n\n"
+        "🚀 <b>X</b>\n\n"
         "⚡ Fast Downloads\n"
         "🎬 Video, Audio & Images\n"
         "🎵 High Quality MP3\n"
@@ -16,13 +16,13 @@ STRINGS = {
     "language_set": "✅ Language set to English!",
 
     "welcome": (
-        "🎬 <b>Welcome to PrimeDownloader</b>\n\n"
-        "Send any video or image link to download directly in best quality.\n\n"
-        "Send the link now to start:"
+        "🎬 ➤ <b>Welcome to X ✨</b>\n\n"
+        "➜ Send any video or image link from any platform to download directly in best quality.\n\n"
+        "➜ 📎 <b>Send the link now to start.</b>"
     ),
     "welcome_back": (
-        "🎬 <b>Welcome back</b>\n\n"
-        "Send any video or image link to download directly in best quality:"
+        "🎬 ➤ <b>Welcome back ✨</b>\n\n"
+        "➜ Send any video or image link to download directly in best quality."
     ),
 
     "menu_download":     "📥 Download",
@@ -102,7 +102,7 @@ STRINGS = {
         "🎬 <b>Platform:</b> {platform}\n"
         "🎞 <b>Quality:</b> {quality}\n"
         "📦 <b>Size:</b> {size}\n\n"
-        "Thank you for using PrimeDownloader. 🙏"
+        "Thank you for using X. 🙏"
     ),
     "from_cache":      "⚡ <b>Sent instantly from cache!</b>",
     "download_failed": "❌ Download failed. Please try again.",
@@ -186,7 +186,7 @@ STRINGS = {
     "achievements_title":   "🏆 <b>Your Achievements</b>\n\n",
     "achievement_unlocked": "🏆 Achievement unlocked: {name}!",
 
-    "feedback_text":    "❤️ <b>Did you enjoy PrimeDownloader?</b>",
+    "feedback_text":    "❤️ <b>Did you enjoy X?</b>",
     "feedback_like":    "👍 Like",
     "feedback_dislike": "👎 Dislike",
     "feedback_report":  "🐞 Report Problem",
@@ -280,7 +280,7 @@ STRINGS = {
 
     "maintenance_text": (
         "🚧 <b>Bot Under Maintenance</b>\n\n"
-        "PrimeDownloader is temporarily under maintenance.\n"
+        "X is temporarily under maintenance.\n"
         "Please try again later. 🙏"
     ),
     "maintenance_on":  "🔧 Maintenance mode <b>enabled</b>. Users will see maintenance message.",
@@ -295,7 +295,7 @@ STRINGS = {
     "banned": "🚫 You have been banned from using this bot.",
 
     "admin_panel": (
-        "👑 <b>PrimeDownloader Admin Panel</b>\n\n"
+        "👑 <b>X Admin Panel</b>\n\n"
         "👥 Total Users: <b>{total_users}</b>  🟢 Active Today: <b>{active_today}</b>\n"
         "📥 Today: <b>{downloads_today}</b>  📅 Week: <b>{downloads_week}</b>  📅 Month: <b>{downloads_month}</b>\n\n"
         "🎬 YouTube: <b>{youtube}</b>  📘 Facebook: <b>{facebook}</b>  📌 Pinterest: <b>{pinterest}</b>\n\n"
@@ -334,67 +334,34 @@ STRINGS = {
         "🆔 ID: <code>{user_id}</code>\n"
         "👤 Name: <b>{name}</b>\n"
         "🔖 Username: {username}\n"
-        "🌐 Language: {language}\n"
+        "⭐ Points: <b>{points}</b>\n"
         "📥 Downloads: <b>{downloads}</b>\n"
         "👥 Referrals: <b>{referrals}</b>\n"
-        "⭐ Points: <b>{points}</b>\n"
-        "📅 Joined: {join_date}\n"
-        "🕐 Last Seen: {last_seen}\n"
-        "🚫 Banned: {banned}"
+        "🚫 Banned: <b>{is_banned}</b>\n"
+        "📅 Joined: {join_date}"
     ),
+    "admin_user_ban_btn":   "🚫 Ban",
+    "admin_user_unban_btn": "✅ Unban",
+    "admin_user_points_btn": "⭐ Edit Points",
     "admin_user_not_found": "❌ User not found.",
 
-    "admin_pts_added":    "✅ Added <b>{amount}</b> pts to <code>{user_id}</code>. New total: <b>{total}</b> pts.",
-    "admin_pts_removed":  "✅ Removed <b>{amount}</b> pts from <code>{user_id}</code>. New total: <b>{total}</b> pts.",
-    "admin_pts_not_enough": "❌ User only has {have} pts — cannot remove {amount}.",
-    "admin_pts_usage":    "Usage: /addpoints <user_id> <amount> [reason]\n       /removepoints <user_id> <amount> [reason]",
+    "broadcast_prompt":     "📢 Send the message to broadcast (text, photo, video):",
+    "broadcast_started":    "🚀 Broadcast started to {count} users...",
+    "broadcast_done":       "✅ Broadcast completed!\n\nSuccess: {success}\nFailed: {failed}",
+    "broadcast_cancelled":  "❌ Broadcast cancelled.",
 
-    "admin_reports_open_tab":   "🔴 Open ({count})",
-    "admin_reports_closed_tab": "✅ Closed ({count})",
-    "admin_no_reports":  "📭 No reports found.",
-    "admin_report_item": "#{id} | {user} | 📺 {platform} | 🕐 {date}\n📝 {message}\n",
+    "points_add_prompt":    "➕ Send number of points to ADD to user {user_id}:",
+    "points_remove_prompt": "➖ Send number of points to REMOVE from user {user_id}:",
+    "points_updated":       "✅ Points updated. Current: {points}",
 
-    "admin_referral_analytics": (
-        "📈 <b>Referral Analytics</b>\n\n"
-        "✅ Completed: <b>{completed}</b>  ⏳ Pending: <b>{pending}</b>\n"
-        "⭐ Points Awarded: <b>{pts_awarded}</b>\n\n"
-        "<b>Top Referrers:</b>\n{top_list}"
-    ),
-    "admin_referral_item": "{rank}. {name} — {count} referrals\n",
-
-    "broadcast_start":     "📡 Broadcast starting to <b>{total}</b> users...",
-    "broadcast_progress":  "📡 <b>Broadcast in Progress</b>\n\n{bar} {pct}%\n\n✅ Sent: {success}  ❌ Failed: {failed}\n📊 {sent}/{total}",
-    "broadcast_done":      "📡 <b>Broadcast Complete!</b>\n\n✅ Success: <b>{success}</b>\n❌ Failed: <b>{failed}</b>\n📊 Total: <b>{total}</b>",
-    "broadcast_cancelled": "🛑 <b>Broadcast cancelled.</b>\n✅ Sent to: {sent}/{total}",
-    "broadcast_cancel_btn": "🛑 Cancel Broadcast",
-    "broadcast_no_active": "❌ No active broadcast to cancel.",
-
-    "ban_success":    "✅ User {user_id} banned.",
-    "unban_success":  "✅ User {user_id} unbanned.",
-    "user_not_found": "❌ User not found.",
-    "stats_text": (
-        "📊 <b>Statistics</b>\n\n"
-        "👥 Total Users: {total}\n"
-        "🆕 New Today: {new_today}\n"
-        "🟢 Active Today: {active_today}\n"
-        "📥 Downloads Total: {downloads_total}\n"
-        "📥 Downloads Today: {downloads_today}\n"
-        "📅 Downloads This Week: {downloads_week}\n"
-        "📅 Downloads This Month: {downloads_month}\n\n"
-        "🎬 YouTube: {youtube}  📘 Facebook: {facebook}  📌 Pinterest: {pinterest}\n"
-        "📸 Instagram: {instagram}  🐦 Twitter/X: {twitter}\n\n"
-        "⭐ Points In Circulation: {points}\n"
-        "💾 Cache Hit Rate: {cache_rate}%\n"
+    "status_text": (
+        "📊 <b>Bot Status</b>\n\n"
+        "🕒 Current Time: {current_time}\n"
+        "⏱ Uptime: {uptime}\n"
+        "📦 Active Downloads: {active_tasks}\n"
+        "👥 Active Users: {active_users}"
     ),
 
-    "admin_btn_activity":       "📡 Live Feed",
-    "activity_feed_title":      "📡 <b>Live Activity Feed</b>  (latest 50)\n\n",
-    "activity_feed_empty":      "📭 No activity recorded yet.",
-    "activity_feed_refresh":    "🔄 Refresh",
-    "activity_event_new_user":  "🆕 New User Joined",
-    "activity_event_download":  "📥 Download Completed",
-    "activity_event_referral":  "🎁 Referral Completed",
-    "activity_event_report":    "🐞 New Report Submitted",
-    "activity_event_points":    "⭐ Points Added",
-    "activity_event_broadcast": "📢 Broadcast Completed",
+    "admin_top_users_title": "🏆 <b>Top Users by Downloads</b>\n\n",
+    "admin_top_referrers_title": "🎁 <b>Top Referrers</b>\n\n",
 }

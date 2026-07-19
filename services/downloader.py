@@ -244,11 +244,19 @@ def _download_sync(url: str, fmt_id: str, out_path: str,
         "no_warnings": True,
         "noplaylist": True,
         "merge_output_format": "mp4",
-        "postprocessors": [{
-            "key": "FFmpegVideoConvertor",
-            "preferedformat": "mp4",
-        }],
-        "postprocessor_args": ["-c:a", "aac"],
+        # Speed optimizations
+        "nocheckcertificate": True,
+        "ignoreerrors": True,
+        "logtostderr": False,
+        "no_color": True,
+        "external_downloader": "aria2c", # If available, otherwise falls back
+        "external_downloader_args": ["-x", "16", "-s", "16", "-k", "1M"],
+        "buffersize": 1024 * 1024, # 1MB buffer
+        "postprocessor_args": [
+            "-c:v", "copy", # Try to copy stream instead of re-encoding
+            "-c:a", "aac",
+            "-threads", "4", # Use more threads for processing
+        ],
     }
     if FFMPEG_PATH:
         ydl_opts["ffmpeg_location"] = FFMPEG_PATH
@@ -326,7 +334,7 @@ async def download_video(url: str, format_id: str, quality_label: str,
             eta = d.get("eta") or 0
             if total and progress_callback:
                 pct = int(downloaded / total * 100)
-                if pct >= last_percent[0] + 5:
+                if pct >= last_percent[0] + 20:
                     last_percent[0] = pct
                     data = {"pct": pct, "downloaded": downloaded,
                             "total": total, "speed": speed, "eta": eta}
@@ -374,7 +382,7 @@ async def download_audio(url: str, progress_callback: Callable = None) -> str | 
             eta = d.get("eta") or 0
             if total and progress_callback:
                 pct = int(downloaded / total * 100)
-                if pct >= last_percent[0] + 5:
+                if pct >= last_percent[0] + 20:
                     last_percent[0] = pct
                     data = {"pct": pct, "downloaded": downloaded,
                             "total": total, "speed": speed, "eta": eta}
