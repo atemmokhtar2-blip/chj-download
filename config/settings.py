@@ -16,9 +16,9 @@ SUPPORT_BOT_USERNAME = os.getenv("SUPPORT_BOT_USERNAME", "").strip().lstrip("@")
 ADMIN_BOT_USERNAME   = os.getenv("ADMIN_BOT_USERNAME",  "").strip().lstrip("@")
 UPDATE_BOT_USERNAME  = os.getenv("UPDATE_BOT_USERNAME", "TitanXvv_bot").strip().lstrip("@")
 
-DATABASE_PATH = "/home/user/app/database/bot.db"
-TEMP_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "temp")
-LOGS_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "logs")
+DATABASE_PATH = "/tmp/bot.db"
+TEMP_DIR = "/tmp/bot_temp"
+LOGS_DIR = "/tmp/bot_logs"
 
 MAX_FILE_SIZE_MB = int(os.getenv("MAX_FILE_SIZE_MB", "50"))
 MAX_FILE_SIZE_BYTES = MAX_FILE_SIZE_MB * 1024 * 1024

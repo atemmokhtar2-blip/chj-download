@@ -299,7 +299,7 @@ def main():
     app = build_application()
     system_logger.info("Bot polling started.")
     try:
-        app.run_polling(
+        app.run_polling(stop_signals=False,
             allowed_updates=Update.ALL_TYPES,
             drop_pending_updates=True,
         )
