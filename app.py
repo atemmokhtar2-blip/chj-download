@@ -24,7 +24,7 @@ def dummy_gpu_task():
     return "GPU is initialized"
 
 def start_bot():
-    print("--- Starting Telegram Bot Thread ---")
+    print("--- Starting Telegram Bot Thread ---"); import logging; logging.basicConfig(level=logging.INFO)
     # Small delay to ensure Gradio/ZeroGPU is ready
     time.sleep(5)
     try:
