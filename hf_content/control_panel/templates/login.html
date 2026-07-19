@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>TitanX — تسجيل الدخول</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🎛️</text></svg>">
+<link rel="stylesheet" href="/static/css/style.css">
+<script>
+(function(){
+  const t = localStorage.getItem('titanx_theme') || 'dark';
+  document.documentElement.setAttribute('data-theme', t);
+})();
+</script>
+</head>
+<body>
+<div class="login-page">
+  <div class="login-card slide-up">
+    <div class="login-logo">🎛️</div>
+    <h1 class="login-title">TitanX</h1>
+    <p class="login-sub">لوحة التحكم الاحترافية — للمالك فقط</p>
+
+    {% if error %}
+    <div class="alert alert-error" style="text-align:right;margin-bottom:20px">
+      ⚠️ {{ error }}
+    </div>
+    {% endif %}
+
+    {% if bot_username %}
+    <div style="margin-bottom:24px">
+      <script
+        async
+        src="https://telegram.org/js/telegram-widget.js?22"
+        data-telegram-login="{{ bot_username }}"
+        data-size="large"
+        data-auth-url="{{ auth_url }}"
+        data-request-access="write"
+        data-lang="ar">
+      </script>
+    </div>
+    {% else %}
+    <div class="alert alert-warning">
+      ⚠️ لم يتم تحميل اسم البوت. تأكد من تشغيل البوت الرئيسي أولاً.
+    </div>
+    {% endif %}
+
+    <div class="security-note">
+      🔒 هذه اللوحة محمية بمصادقة Telegram<br>
+      يُسمح بالدخول للمعرف <code>{{ owner_id }}</code> فقط
+    </div>
+
+    <div style="margin-top:16px">
+      <button
+        class="btn-icon"
+        onclick="toggleTheme()"
+        style="margin:0 auto;display:flex;width:40px;height:40px"
+        title="تبديل الوضع"
+      >
+        <span id="theme-icon">☀️</span>
+      </button>
+    </div>
+  </div>
+</div>
+<script src="/static/js/app.js"></script>
+<script>
+  const t = localStorage.getItem('titanx_theme')||'dark';
+  document.getElementById('theme-icon').textContent = t==='dark'?'☀️':'🌙';
+</script>
+</body>
+</html>
