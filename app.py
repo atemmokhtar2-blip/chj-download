@@ -3,55 +3,71 @@ import threading
 import os
 import sys
 import time
+import logging
 
-# ZeroGPU mandatory import and decorator
+# Configure logging to see everything in HF logs
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[logging.StreamHandler(sys.stdout)]
+)
+logger = logging.getLogger("HF_APP")
+
+# ZeroGPU mandatory import
 try:
     import spaces
+    logger.info("Successfully imported spaces")
 except ImportError:
-    # Fallback for local testing
     class spaces:
         @staticmethod
         def GPU(func):
             return func
+    logger.info("Spaces import failed, using fallback")
 
-# Add the current directory to sys.path
+# Add current dir to path
 current_dir = os.path.dirname(os.path.abspath(__file__))
 sys.path.append(current_dir)
 
 @spaces.GPU
 def dummy_gpu_task():
-    """This function exists only to satisfy ZeroGPU requirements."""
-    return "GPU is initialized"
+    return "GPU Initialized"
 
 def start_bot():
-    print("--- Starting Telegram Bot Thread ---"); import logging; logging.basicConfig(level=logging.INFO)
-    # Small delay to ensure Gradio/ZeroGPU is ready
-    time.sleep(5)
+    logger.info("--- STARTING BOT THREAD ---")
+    time.sleep(10) # Wait for Gradio to be fully up
     try:
+        logger.info("Checking for token.txt...")
+        token_path = "/home/user/app/token.txt"
+        if os.path.exists(token_path):
+            with open(token_path, 'r') as f:
+                t = f.read().strip()
+                logger.info(f"Token found! Starts with: {t[:10]}...")
+        else:
+            logger.error("token.txt NOT FOUND at /home/user/app/token.txt")
+            
+        logger.info("Importing main from bot...")
         from bot import main
+        logger.info("Calling main()...")
         main()
     except Exception as e:
-        print(f"CRITICAL ERROR in Bot Thread: {e}")
-        import traceback
-        traceback.print_exc()
+        logger.error(f"CRITICAL ERROR IN BOT THREAD: {e}", exc_info=True)
 
-# Start the bot thread
-bot_thread = threading.Thread(target=start_bot, daemon=True)
-bot_thread.start()
+# Start bot
+threading.Thread(target=start_bot, daemon=True).start()
 
-# Minimal Gradio app
-def status_check():
-    # Call the dummy GPU task to satisfy the system
-    dummy_gpu_task()
-    return "Bot is running in background. ZeroGPU initialized."
-
+# UI
 with gr.Blocks() as demo:
-    gr.Markdown("# 🤖 Telegram Bot Host (ZeroGPU Mode)")
-    gr.Markdown("Status: **Online**")
-    status_btn = gr.Button("Initialize/Check Status")
-    output = gr.Textbox(label="Response")
-    status_btn.click(fn=status_check, outputs=output)
+    gr.Markdown("# 🤖 Bot Status Monitor")
+    gr.Markdown("If the bot is not responding, check the logs below.")
+    status_box = gr.Textbox(label="Last Action", value="Initializing...")
+    refresh_btn = gr.Button("Refresh Status")
+    
+    def get_status():
+        dummy_gpu_task()
+        return f"System Time: {time.ctime()} | Bot Thread Active: {threading.active_count()}"
+    
+    refresh_btn.click(get_status, outputs=status_box)
 
 if __name__ == "__main__":
-    # Hugging Face requires port 7860
+    logger.info("Launching Gradio app...")
     demo.launch(server_name="0.0.0.0", server_port=7860)
