@@ -1,0 +1,130 @@
+{% extends "base.html" %}
+{% block title %}التحديثات — TitanX{% endblock %}
+{% block page_title %}🚀 مركز التحديثات{% endblock %}
+
+{% block content %}
+<div class="grid-2" style="align-items:start;gap:16px">
+  <!-- Upload & Apply -->
+  <div style="display:flex;flex-direction:column;gap:16px">
+    <div class="card">
+      <div class="card-title">📦 رفع تحديث ZIP</div>
+      <div class="upload-zone" id="upload-zone" onclick="document.getElementById('zip-input').click()">
+        <input type="file" id="zip-input" accept=".zip" onchange="analyzeUpdate(this.files[0])">
+        <div class="upload-icon">📦</div>
+        <div>اسحب ملف ZIP هنا أو <b>انقر لاختياره</b></div>
+      </div>
+
+      <div id="analysis-result" class="hidden" style="margin-top:12px"></div>
+
+      <div class="form-group" style="margin-top:12px">
+        <label class="form-label">رقم الإصدار (اختياري)</label>
+        <input class="form-control" id="version-input" placeholder="مثال: 2.1.0">
+      </div>
+
+      <div style="display:flex;gap:8px;margin-top:12px">
+        <button class="btn btn-ghost btn-sm" id="analyze-btn"
+          onclick="document.getElementById('zip-input').click()">🔍 تحليل</button>
+        <button class="btn btn-primary" id="apply-btn" disabled onclick="applyUpdate()">
+          🚀 تطبيق التحديث
+        </button>
+      </div>
+
+      <!-- Update log -->
+      <div id="update-log" class="code-block" style="margin-top:16px;max-height:200px;display:none">
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-title">💾 النسخ الاحتياطية</div>
+      <div style="margin-bottom:12px">
+        <button class="btn btn-primary" id="backup-btn" onclick="createBackup()">
+          💾 إنشاء نسخة احتياطية الآن
+        </button>
+      </div>
+      {% if backups %}
+      <div class="scroll-list">
+        {% for b in backups %}
+        <div class="scroll-list-item">
+          <div style="flex:1">
+            <div style="font-weight:600;font-size:.85rem">{{ b.name }}</div>
+            <div style="color:var(--text2);font-size:.75rem">
+              {{ (b.created_at or '')[:16] }} •
+              {{ ((b.size_bytes or 0) / 1024 / 1024)|round(1) }} MB
+            </div>
+          </div>
+          <button class="btn btn-sm btn-ghost"
+            onclick="if(confirm('استعادة هذه النسخة؟')) restoreBackup({{ b.id }})">
+            ↩️ استعادة
+          </button>
+        </div>
+        {% endfor %}
+      </div>
+      {% else %}
+      <div style="color:var(--text2);text-align:center;padding:16px">لا توجد نسخ احتياطية</div>
+      {% endif %}
+    </div>
+  </div>
+
+  <!-- History -->
+  <div class="card">
+    <div class="card-title">📜 سجل التحديثات</div>
+    {% if history %}
+    <div class="scroll-list" style="max-height:500px">
+      {% for u in history %}
+      <div class="scroll-list-item">
+        <div style="flex:1">
+          <div style="display:flex;align-items:center;gap:8px">
+            <span class="badge {% if u.status=='applied' %}badge-green{% else %}badge-yellow{% endif %}">
+              {{ u.status }}
+            </span>
+            <span style="font-weight:600;font-size:.85rem">v{{ u.version }}</span>
+          </div>
+          <div style="color:var(--text2);font-size:.75rem;margin-top:2px">
+            {{ u.filename }} • {{ (u.applied_at or '')[:16] }}
+          </div>
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+    {% else %}
+    <div style="color:var(--text2);text-align:center;padding:32px">
+      لم يتم تطبيق أي تحديثات بعد
+    </div>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+async function restoreBackup(id){
+  const btn = event.target;
+  btn.disabled = true;
+  const data = await apiPost('/updates/api/restore',{id});
+  if(data.error){ showToast(data.error,'error'); btn.disabled=false; return; }
+  showToast('جارٍ الاستعادة…','info');
+  const log = document.getElementById('update-log');
+  if(log) log.style.display='block';
+  pollUpdateStatus();
+}
+// Show log div when apply starts
+const origApply = window.applyUpdate;
+window.applyUpdate = function(){
+  const log = document.getElementById('update-log');
+  if(log) log.style.display='block';
+  origApply();
+};
+
+// Drag & drop for upload zone
+const zone = document.getElementById('upload-zone');
+if(zone){
+  zone.addEventListener('dragover',e=>{e.preventDefault();zone.classList.add('drag-over')});
+  zone.addEventListener('dragleave',()=>zone.classList.remove('drag-over'));
+  zone.addEventListener('drop',e=>{
+    e.preventDefault();zone.classList.remove('drag-over');
+    const f = e.dataTransfer.files[0];
+    if(f) analyzeUpdate(f);
+  });
+}
+</script>
+{% endblock %}
