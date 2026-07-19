@@ -12,6 +12,7 @@ from telegram.ext import (
 )
 
 from config.settings import BOT_TOKEN
+print(f"DEBUG: Token starts with: {BOT_TOKEN[:10]}...")
 from database.db import init_db
 from utils.logger import system_logger
 

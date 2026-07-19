@@ -4,7 +4,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 try:
-    with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "token.txt"), "r") as f:
+    with open("/home/user/app/token.txt", "r") as f:
         BOT_TOKEN = f.read().strip()
 except:
     BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
@@ -16,7 +16,7 @@ SUPPORT_BOT_USERNAME = os.getenv("SUPPORT_BOT_USERNAME", "").strip().lstrip("@")
 ADMIN_BOT_USERNAME   = os.getenv("ADMIN_BOT_USERNAME",  "").strip().lstrip("@")
 UPDATE_BOT_USERNAME  = os.getenv("UPDATE_BOT_USERNAME", "TitanXvv_bot").strip().lstrip("@")
 
-DATABASE_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), "database", "bot.db")
+DATABASE_PATH = "/home/user/app/database/bot.db"
 TEMP_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "temp")
 LOGS_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "logs")
 
