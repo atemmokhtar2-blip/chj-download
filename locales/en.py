@@ -15,14 +15,15 @@ STRINGS = {
     ),
     "language_set": "✅ Language set to English!",
 
-    "welcome": "🎬 <b>Welcome to PrimeDownloader</b>
-
-Send any video or image link to download directly in best quality.
-
-Send the link now to start:",
-    "welcome_back": "🎬 <b>Welcome back</b>
-
-Send any video or image link to download directly in best quality:",
+    "welcome": (
+        "🎬 <b>Welcome to PrimeDownloader</b>\n\n"
+        "Send any video or image link to download directly in best quality.\n\n"
+        "Send the link now to start:"
+    ),
+    "welcome_back": (
+        "🎬 <b>Welcome back</b>\n\n"
+        "Send any video or image link to download directly in best quality:"
+    ),
 
     "menu_download":     "📥 Download",
     "menu_profile":      "👤 Profile",
