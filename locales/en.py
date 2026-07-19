@@ -15,22 +15,14 @@ STRINGS = {
     ),
     "language_set": "✅ Language set to English!",
 
-    "welcome": (
-        "🎬 <b>Welcome to PrimeDownloader</b>\n\n"
-        "Professional media downloader — video, audio & images at the highest quality.\n\n"
-        "✅ YouTube  ✅ TikTok  ✅ Instagram\n"
-        "✅ Facebook  ✅ Twitter/X  ✅ Threads\n"
-        "✅ Reddit  ✅ Pinterest  ✅ Snapchat\n"
-        "✅ Vimeo  ✅ Dailymotion  ✅ SoundCloud\n"
-        "✅ Telegram\n\n"
-        "⭐ You start with <b>10 free points</b>. Each download costs 1 point.\n"
-        "Earn more via referrals, daily reward, and the Lucky Wheel!\n\n"
-        "Choose from the menu or send a link to begin."
-    ),
-    "welcome_back": (
-        "🎬 <b>Welcome back to PrimeDownloader</b>\n\n"
-        "Choose from the menu or send a link to begin."
-    ),
+    "welcome": "🎬 <b>Welcome to PrimeDownloader</b>
+
+Send any video or image link to download directly in best quality.
+
+Send the link now to start:",
+    "welcome_back": "🎬 <b>Welcome back</b>
+
+Send any video or image link to download directly in best quality:",
 
     "menu_download":     "📥 Download",
     "menu_profile":      "👤 Profile",
@@ -44,12 +36,7 @@ STRINGS = {
     "menu_support":      "📞 Support",
     "menu_wheel":        "🎰 Lucky Wheel",
 
-    "send_url_prompt": (
-        "📎 <b>Send the link you want to download.</b>\n\n"
-        "Supported: YouTube • TikTok • Instagram • Facebook\n"
-        "Twitter/X • Threads • Reddit • Pinterest\n"
-        "Snapchat • Vimeo • Dailymotion • SoundCloud • Telegram"
-    ),
+    "send_url_prompt": "📎 <b>Please send the link you want to download in best quality:</b>",
     "profile_admin_badge": "\n👑 <b>Administrator</b>",
 
     "join_channel": (

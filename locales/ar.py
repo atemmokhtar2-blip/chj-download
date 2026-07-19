@@ -15,22 +15,14 @@ STRINGS = {
     ),
     "language_set": "✅ تم ضبط اللغة على العربية!",
 
-    "welcome": (
-        "🎬 <b>مرحباً بك في PrimeDownloader</b>\n\n"
-        "منصة احترافية لتحميل الفيديو والصوت والصور بأعلى جودة متاحة.\n\n"
-        "✅ YouTube  ✅ TikTok  ✅ Instagram\n"
-        "✅ Facebook  ✅ Twitter/X  ✅ Threads\n"
-        "✅ Reddit  ✅ Pinterest  ✅ Snapchat\n"
-        "✅ Vimeo  ✅ Dailymotion  ✅ SoundCloud\n"
-        "✅ Telegram\n\n"
-        "⭐ تبدأ بـ <b>10 نقاط مجانية</b>. كل تحميل يكلف نقطة واحدة.\n"
-        "اكسب المزيد عبر الدعوات والمكافأة اليومية وعجلة الحظ!\n\n"
-        "اختر من القائمة أو أرسل رابطاً للبدء."
-    ),
-    "welcome_back": (
-        "🎬 <b>مرحباً بعودتك إلى PrimeDownloader</b>\n\n"
-        "اختر من القائمة أو أرسل رابطاً للبدء."
-    ),
+    "welcome": "🎬 <b>مرحباً بك في PrimeDownloader</b>
+
+أرسل رابط أي فيديو أو صورة من أي منصة للتحميل مباشرة بأعلى جودة.
+
+أرسل الرابط الآن للبدء:",
+    "welcome_back": "🎬 <b>مرحباً بك مجدداً</b>
+
+أرسل رابط أي فيديو أو صورة للتحميل مباشرة بأعلى جودة:",
 
     "menu_download":     "📥 تحميل",
     "menu_profile":      "👤 حسابي",
@@ -44,12 +36,7 @@ STRINGS = {
     "menu_support":      "📞 الدعم",
     "menu_wheel":        "🎰 عجلة الحظ",
 
-    "send_url_prompt": (
-        "📎 <b>أرسل الرابط الذي تريد تحميله.</b>\n\n"
-        "يدعم: YouTube • TikTok • Instagram • Facebook\n"
-        "Twitter/X • Threads • Reddit • Pinterest\n"
-        "Snapchat • Vimeo • Dailymotion • SoundCloud • Telegram"
-    ),
+    "send_url_prompt": "📎 <b>من فضلك أرسل الرابط الذي تريد تحميله مباشرة بأعلى جودة:</b>",
     "profile_admin_badge": "\n👑 <b>مدير</b>",
 
     "join_channel": (
