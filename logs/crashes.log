@@ -1,0 +1,54 @@
+
+============================================================
+CRASH REPORT
+Time    : 2026-07-19 18:54:15 UTC
+PID     : 1828
+Python  : 3.12.3
+Error   : InvalidToken: The token `hf_EvdOjepGfcSVuksqNDPnSyShexDkOHP` was rejected by the server.
+============================================================
+Traceback (most recent call last):
+  File "/usr/local/lib/python3.12/dist-packages/telegram/_bot.py", line 777, in initialize
+    await self.get_me()
+  File "/usr/local/lib/python3.12/dist-packages/telegram/ext/_extbot.py", line 1920, in get_me
+    return await super().get_me(
+           ^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/dist-packages/telegram/_bot.py", line 909, in get_me
+    result = await self._post(
+             ^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/dist-packages/telegram/_bot.py", line 623, in _post
+    return await self._do_post(
+           ^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/dist-packages/telegram/ext/_extbot.py", line 355, in _do_post
+    return await super()._do_post(
+           ^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/dist-packages/telegram/_bot.py", line 652, in _do_post
+    result = await request.post(
+             ^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/dist-packages/telegram/request/_baserequest.py", line 201, in post
+    result = await self._request_wrapper(
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/dist-packages/telegram/request/_baserequest.py", line 380, in _request_wrapper
+    raise InvalidToken(message)
+telegram.error.InvalidToken: Not Found
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/home/ubuntu/chj-download-space/bot.py", line 302, in main
+    app.run_polling(stop_signals=False,
+  File "/usr/local/lib/python3.12/dist-packages/telegram/ext/_application.py", line 881, in run_polling
+    return self.__run(
+           ^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/dist-packages/telegram/ext/_application.py", line 1079, in __run
+    loop.run_until_complete(self.initialize())
+  File "/usr/lib/python3.12/asyncio/base_events.py", line 687, in run_until_complete
+    return future.result()
+           ^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/dist-packages/telegram/ext/_application.py", line 503, in initialize
+    await self.bot.initialize()
+  File "/usr/local/lib/python3.12/dist-packages/telegram/ext/_extbot.py", line 301, in initialize
+    await super().initialize()
+  File "/usr/local/lib/python3.12/dist-packages/telegram/_bot.py", line 779, in initialize
+    raise InvalidToken(f"The token `{self._token}` was rejected by the server.") from exc
+telegram.error.InvalidToken: The token `hf_EvdOjepGfcSVuksqNDPnSyShexDkOHP` was rejected by the server.
+============================================================

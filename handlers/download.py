@@ -220,12 +220,24 @@ async def download_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.answer(t(lang, "queue_full"), show_alert=True)
         return
 
-    await query.answer()
-
     is_audio = data == "dl_audio"
     is_image = data == "dl_image"
     is_album = data == "dl_album"
     quality_label = "audio" if is_audio else ("image" if is_image else data.replace("dl_video_", ""))
+
+    # Check High Quality Credit for video > 720p
+    if not is_audio and not is_image and not is_album:
+        try:
+            height = int(quality_label.replace("p", ""))
+            if height > 720:
+                from database.users import deduct_high_quality_credit
+                if not deduct_high_quality_credit(user.id):
+                    await query.answer("❌ رصيدك للتحميل بجودة عالية انتهى! (مسموح بـ 5 فيديوهات HD فقط لضمان الاستقرار)", show_alert=True)
+                    return
+        except ValueError:
+            pass # "best" or other labels
+
+    await query.answer()
 
     cached_id = get_cached(info["url"], quality_label, "audio" if is_audio else ("image" if is_image else "video"))
     if cached_id:

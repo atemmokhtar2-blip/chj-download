@@ -48,7 +48,8 @@ def init_db():
                 join_date   TEXT DEFAULT (datetime('now')),
                 last_seen   TEXT DEFAULT (datetime('now')),
                 last_daily  TEXT,
-                vip_until   TEXT
+                vip_until   TEXT,
+                high_quality_rem INTEGER DEFAULT 5
             );
 
             CREATE TABLE IF NOT EXISTS downloads (
@@ -196,6 +197,7 @@ def _migrate():
         "ALTER TABLE reports ADD COLUMN closed_at TEXT",
         # Lucky wheel cooldown tracking
         "ALTER TABLE users ADD COLUMN last_wheel TEXT",
+        "ALTER TABLE users ADD COLUMN high_quality_rem INTEGER DEFAULT 5",
     ]
     for sql in migrations:
         try:
