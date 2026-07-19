@@ -1,0 +1,76 @@
+{% extends "base.html" %}
+{% block title %}بحث في المشروع — TitanX{% endblock %}
+{% block page_title %}🔍 بحث في المشروع{% endblock %}
+
+{% block content %}
+<div class="card" style="margin-bottom:16px">
+  <form method="get" action="/search" id="search-form">
+    <div class="search-bar">
+      <input class="search-input" name="q" id="search-q" value="{{ q }}"
+             placeholder="ابحث في كل ملفات المشروع… مثال: referral، premium، points"
+             autofocus>
+      <button type="submit" class="btn btn-primary">🔍 بحث</button>
+      {% if q %}<a href="/search" class="btn btn-ghost">مسح</a>{% endif %}
+    </div>
+  </form>
+  {% if q %}
+  <div style="color:var(--text2);font-size:.85rem">
+    {% if total == 0 %}لا نتائج لـ "<b>{{ q }}</b>"
+    {% elif total >= 200 %}أكثر من 200 نتيجة لـ "<b>{{ q }}</b>" (تعرض أول 200)
+    {% else %}{{ total }} نتيجة في {{ by_file|length }} ملف لـ "<b>{{ q }}</b>"{% endif %}
+  </div>
+  {% endif %}
+</div>
+
+{% if by_file %}
+{% for file, matches in by_file.items() %}
+{% if file == '__error__' %}
+<div class="alert alert-error">{{ matches[0].error }}</div>
+{% else %}
+<div class="card" style="margin-bottom:12px">
+  <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
+    <div style="display:flex;align-items:center;gap:8px">
+      <span>🐍</span>
+      <code style="font-size:.85rem;color:var(--accent2)">{{ file }}</code>
+    </div>
+    <div style="display:flex;gap:6px">
+      <span class="badge badge-blue">{{ matches|length }} نتيجة</span>
+      <a href="/files?path={{ file | urlencode }}" class="btn btn-sm btn-ghost" target="_blank">📁 فتح</a>
+      <button class="btn btn-sm btn-ghost" onclick="openEditor('{{ file }}')">✏️ تعديل</button>
+    </div>
+  </div>
+  <div class="code-block" style="max-height:250px">
+    {% for m in matches %}
+    <div class="log-line" style="display:flex;gap:12px">
+      <span style="color:var(--text2);min-width:40px;text-align:left;direction:ltr">{{ m.line }}</span>
+      <span style="flex:1;white-space:pre-wrap">{{ m.content }}</span>
+    </div>
+    {% endfor %}
+  </div>
+</div>
+{% endif %}
+{% endfor %}
+
+{% elif q %}
+<div class="card" style="text-align:center;padding:48px">
+  <div style="font-size:3rem;margin-bottom:16px">🔍</div>
+  <div style="font-size:1.1rem;font-weight:700">لا نتائج لـ "{{ q }}"</div>
+  <div style="color:var(--text2);margin-top:8px">جرّب كلمات مختلفة أو تحقق من الإملاء</div>
+</div>
+
+{% else %}
+<div class="card" style="text-align:center;padding:48px">
+  <div style="font-size:3rem;margin-bottom:16px">🔍</div>
+  <div style="font-size:1.1rem;font-weight:700">ابحث في كل ملفات المشروع</div>
+  <div style="color:var(--text2);margin-top:8px">يبحث في جميع ملفات Python، JSON، YAML، Markdown، وغيرها</div>
+  <div style="display:flex;gap:8px;justify-content:center;margin-top:20px;flex-wrap:wrap">
+    {% for ex in ['referral', 'premium', 'points', 'download', 'vip', 'broadcast'] %}
+    <button class="btn btn-ghost btn-sm"
+      onclick="document.getElementById('search-q').value='{{ ex }}';document.getElementById('search-form').submit()">
+      {{ ex }}
+    </button>
+    {% endfor %}
+  </div>
+</div>
+{% endif %}
+{% endblock %}

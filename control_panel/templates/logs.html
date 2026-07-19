@@ -1,0 +1,65 @@
+{% extends "base.html" %}
+{% block title %}السجلات — TitanX{% endblock %}
+{% block page_title %}📋 عارض السجلات{% endblock %}
+
+{% block content %}
+<div class="grid-2" style="align-items:start;gap:16px">
+  <!-- Log selector -->
+  <div class="card" style="position:sticky;top:80px">
+    <div class="card-title">📂 ملفات السجلات</div>
+    <div style="display:flex;flex-direction:column;gap:4px">
+      {% for f in file_infos %}
+      <button
+        class="nav-item log-tab {% if f.key == current_log %}active{% endif %}"
+        data-log="{{ f.key }}"
+        onclick="switchLog('{{ f.key }}')"
+        style="width:100%;text-align:right"
+      >
+        <span class="nav-icon">{% if 'error' in f.key %}🔴{% elif 'system' in f.key %}🔵{% elif 'admin' in f.key %}🛡️{% elif 'support' in f.key %}🎧{% elif 'dev' in f.key %}⚙️{% elif 'security' in f.key %}🔒{% else %}📋{% endif %}</span>
+        <span class="nav-label" style="flex:1">{{ f.file }}</span>
+        <span style="font-size:.7rem;color:var(--text2)">{% if f.exists %}{{ (f.size / 1024)|round(1) }}KB{% else %}—{% endif %}</span>
+      </button>
+      {% endfor %}
+    </div>
+    <div style="margin-top:12px;display:flex;flex-direction:column;gap:6px">
+      <button class="btn btn-ghost btn-sm" onclick="loadLog('{{ current_log }}')">🔄 تحديث</button>
+      <button class="btn btn-danger btn-sm" onclick="if(confirm('مسح هذا السجل؟')) clearLog('{{ current_log }}')">🗑️ مسح السجل</button>
+    </div>
+  </div>
+
+  <!-- Log viewer -->
+  <div class="card" style="flex:1">
+    <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px">
+      <input class="search-input" id="log-search" placeholder="بحث في السجل…" style="flex:1"
+        oninput="clearTimeout(window._logST);window._logST=setTimeout(()=>loadLog('{{ current_log }}',document.getElementById('log-search').value),500)">
+      <button class="btn btn-ghost btn-sm" onclick="document.getElementById('log-search').value='';loadLog('{{ current_log }}')">✕</button>
+    </div>
+
+    <div class="code-block" id="log-view" style="max-height:600px;overflow-y:auto">
+      {% for line in lines %}
+      <div class="log-line {% if 'ERROR' in line or 'خطأ' in line %}error{% elif 'WARN' in line %}warning{% elif 'INFO' in line %}info{% endif %}">{{ line }}</div>
+      {% else %}
+      <div style="color:var(--text2)">السجل فارغ</div>
+      {% endfor %}
+    </div>
+    <div style="margin-top:8px;color:var(--text2);font-size:.8rem">{{ lines|length }} سطر • يتحدث كل 5 ثوانٍ</div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+// scroll to bottom
+const logView = document.getElementById('log-view');
+if(logView) logView.scrollTop = logView.scrollHeight;
+
+// auto refresh
+initLogAutoRefresh('{{ current_log }}');
+
+async function clearLog(key){
+  const data = await apiPost('/logs/api/clear',{log:key});
+  if(data.ok){ showToast('تم مسح السجل','success'); loadLog(key); }
+  else showToast(data.error,'error');
+}
+</script>
+{% endblock %}

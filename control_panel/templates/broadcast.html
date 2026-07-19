@@ -1,0 +1,65 @@
+{% extends "base.html" %}
+{% block title %}البث — TitanX{% endblock %}
+{% block page_title %}📢 نظام البث{% endblock %}
+
+{% block content %}
+<div class="grid-2" style="margin-bottom:24px">
+  <!-- Send Broadcast -->
+  <div class="card">
+    <div class="card-title">✍️ إرسال رسالة جماعية</div>
+    <div class="alert alert-info" style="margin-bottom:16px">
+      👥 سيتم الإرسال لـ <b>{{ user_count }}</b> مستخدم نشط
+    </div>
+
+    <div class="form-group">
+      <label class="form-label">نص الرسالة</label>
+      <textarea class="form-control" id="bc-text" rows="6" placeholder="اكتب رسالتك هنا…&#10;&#10;يمكنك استخدام HTML:&#10;&lt;b&gt;عريض&lt;/b&gt;&#10;&lt;i&gt;مائل&lt;/i&gt;&#10;&lt;code&gt;كود&lt;/code&gt;"></textarea>
+    </div>
+    <div class="form-group">
+      <label class="form-label">نمط التنسيق</label>
+      <select class="form-control" id="bc-mode">
+        <option value="HTML">HTML</option>
+        <option value="Markdown">Markdown</option>
+        <option value="">بدون تنسيق</option>
+      </select>
+    </div>
+    <button class="btn btn-primary" id="bc-btn" onclick="sendBroadcast()">
+      📢 إرسال البث
+    </button>
+  </div>
+
+  <!-- Status & Stats -->
+  <div class="card">
+    <div class="card-title">📊 حالة البث</div>
+    <div id="bc-status" style="font-size:1.1rem;font-weight:700;margin-bottom:20px;color:var(--text2)">
+      في الانتظار…
+    </div>
+
+    {% if status.done %}
+    <div class="alert {% if status.success > status.failed %}alert-success{% else %}alert-warning{% endif %}">
+      آخر بث: ✅ {{ status.success }} | ❌ {{ status.failed }} | 📤 {{ status.total }}
+    </div>
+    {% endif %}
+
+    <div class="card-title" style="margin-top:20px">📜 سجل البث الأخير</div>
+    {% if logs %}
+    <div class="scroll-list">
+      {% for log in logs %}
+      <div class="scroll-list-item">
+        <div style="flex:1">
+          <div style="font-size:.8rem;color:var(--text2)">{{ (log.created_at or '')[:16] }}</div>
+          <div style="font-size:.85rem;margin-top:2px">{{ log.message[:80] if log.message else '---' }}…</div>
+        </div>
+        <div style="text-align:left;font-size:.8rem">
+          <span class="badge badge-green">✅ {{ log.success }}</span>
+          <span class="badge badge-red" style="margin-right:4px">❌ {{ log.failed }}</span>
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+    {% else %}
+    <div style="color:var(--text2);text-align:center;padding:20px">لا يوجد سجل بعد</div>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}
