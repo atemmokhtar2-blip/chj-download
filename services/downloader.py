@@ -244,19 +244,14 @@ def _download_sync(url: str, fmt_id: str, out_path: str,
         "no_warnings": True,
         "noplaylist": True,
         "merge_output_format": "mp4",
-        # Speed optimizations
         "nocheckcertificate": True,
-        "ignoreerrors": True,
-        "logtostderr": False,
+        "ignoreerrors": False,  # Changed to False to see real errors
+        "logtostderr": True,
         "no_color": True,
-        "external_downloader": "aria2c", # If available, otherwise falls back
-        "external_downloader_args": ["-x", "16", "-s", "16", "-k", "1M"],
-        "buffersize": 1024 * 1024, # 1MB buffer
-        "postprocessor_args": [
-            "-c:v", "copy", # Try to copy stream instead of re-encoding
-            "-c:a", "aac",
-            "-threads", "4", # Use more threads for processing
-        ],
+        # Remove aria2c for better stability if it's causing issues on ZeroGPU
+        # "external_downloader": "aria2c", 
+        # "external_downloader_args": ["-x", "16", "-s", "16", "-k", "1M"],
+        "buffersize": 1024 * 1024,
     }
     if FFMPEG_PATH:
         ydl_opts["ffmpeg_location"] = FFMPEG_PATH
@@ -344,9 +339,12 @@ async def download_video(url: str, format_id: str, quality_label: str,
 
     try:
         if quality_label == "best":
-            fmt = "bestvideo+bestaudio/best"
+            # Use a more reliable format selector for 'best'
+            fmt = "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best"
         else:
-            fmt = f"{format_id}+bestaudio/best[height<={quality_label.replace('p', '')}]"
+            # If a specific height is requested, use it but fallback to best if it fails
+            h = quality_label.replace('p', '')
+            fmt = f"bestvideo[height<={h}][ext=mp4]+bestaudio[ext=m4a]/best[height<={h}][ext=mp4]/best"
             
         file_path = await asyncio.wait_for(
             loop.run_in_executor(None, _download_sync, url, fmt, out_path, hook),
