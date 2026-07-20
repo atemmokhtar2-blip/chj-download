@@ -12,9 +12,7 @@ REQUIRED_CHANNEL = os.getenv("REQUIRED_CHANNEL", "")
 ADMIN_IDS = [int(x) for x in os.getenv("ADMIN_IDS", "").split(",") if x.strip().isdigit()]
 OWNER_ID = int(os.getenv("OWNER_ID", "0")) if os.getenv("OWNER_ID", "").isdigit() else 0
 
-SUPPORT_BOT_USERNAME = os.getenv("SUPPORT_BOT_USERNAME", "").strip().lstrip("@")
-ADMIN_BOT_USERNAME   = os.getenv("ADMIN_BOT_USERNAME",  "").strip().lstrip("@")
-UPDATE_BOT_USERNAME  = os.getenv("UPDATE_BOT_USERNAME", "TitanXvv_bot").strip().lstrip("@")
+# SUPPORT_BOT_USERNAME and ADMIN_BOT_USERNAME removed — single download bot only
 
 DATABASE_PATH = "/tmp/bot.db"
 TEMP_DIR = "/tmp/bot_temp"

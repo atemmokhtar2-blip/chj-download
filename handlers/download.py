@@ -253,7 +253,7 @@ async def download_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             _post_download_sync(user.id)
             asyncio.ensure_future(_award_achievements(user.id))
             await _handle_first_download(query, context, user.id, lang)
-            await send_invite_prompt(query.message.chat_id, context, lang, user.id)
+            await _send_share_button(query.message, context, lang)
             return
         except TelegramError:
             pass
@@ -381,22 +381,8 @@ async def download_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         await _handle_first_download(query, context, user.id, lang)
 
-        bot_info = await context.bot.get_me()
-        share_url = f"https://t.me/share/url?url=https://t.me/{bot_info.username}"
-        feedback_keyboard = [[
-            InlineKeyboardButton(t(lang, "feedback_like"),    callback_data=f"fb_like_{download_id}"),
-            InlineKeyboardButton(t(lang, "feedback_dislike"), callback_data=f"fb_dislike_{download_id}"),
-        ], [
-            InlineKeyboardButton(t(lang, "feedback_report"),  callback_data=f"fb_report_{download_id}"),
-            InlineKeyboardButton(t(lang, "feedback_share"),   url=share_url),
-        ]]
-        await query.message.reply_text(
-            t(lang, "feedback_text"),
-            reply_markup=InlineKeyboardMarkup(feedback_keyboard),
-            parse_mode="HTML"
-        )
-
-        await send_invite_prompt(query.message.chat_id, context, lang, user.id)
+        # Send share button after successful download
+        await _send_share_button(query.message, context, lang)
 
     except FileTooLargeError:
         await edit_fn(t(lang, "file_too_large", max_mb=MAX_FILE_SIZE_MB))
@@ -450,23 +436,15 @@ async def _award_achievements(user_id: int):
         pass
 
 
-async def send_invite_prompt(chat_id: int, context, lang: str, user_id: int):
-    db_user = get_user(user_id)
-    if not db_user:
-        return
-    code = db_user.get("referral_code", "")
+async def _send_share_button(message, context, lang: str):
+    """Send a single share-bot button after successful download."""
     bot_info = await context.bot.get_me()
-    ref_link = f"https://t.me/{bot_info.username}?start=REF_{code}"
-
+    share_url = f"https://t.me/share/url?url=https://t.me/{bot_info.username}"
     keyboard = [[
-        InlineKeyboardButton(t(lang, "share_button"),
-                             url=f"https://t.me/share/url?url={ref_link}")
+        InlineKeyboardButton(t(lang, "share_bot"), url=share_url)
     ]]
-    await context.bot.send_message(
-        chat_id=chat_id,
-        text=t(lang, "invite_after_download",
-               link=ref_link,
-               points_per_referral=POINTS_REFERRAL),
+    await message.reply_text(
+        t(lang, "share_bot_text"),
         reply_markup=InlineKeyboardMarkup(keyboard),
         parse_mode="HTML"
     )

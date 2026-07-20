@@ -31,14 +31,11 @@ STRINGS = {
     "menu_invite":       "🎁 Invite Friends",
     "menu_settings":     "⚙️ Settings",
     "menu_help":         "ℹ️ Help",
-    "menu_admin":        "👑 Admin Panel",
     "menu_referrals":    "🎁 Referrals",
     "menu_achievements": "🏆 Achievements",
-    "menu_support":      "📞 Support",
     "menu_wheel":        "🎰 Lucky Wheel",
 
     "send_url_prompt": "📎 <b>Please send the link you want to download in best quality:</b>",
-    "profile_admin_badge": "\n👑 <b>Administrator</b>",
 
     "join_channel": (
         "📢 <b>Channel Subscription Required</b>\n\n"
@@ -186,28 +183,8 @@ STRINGS = {
     "achievements_title":   "🏆 <b>Your Achievements</b>\n\n",
     "achievement_unlocked": "🏆 Achievement unlocked: {name}!",
 
-    "feedback_text":    "❤️ <b>Did you enjoy X?</b>",
-    "feedback_like":    "👍 Like",
-    "feedback_dislike": "👎 Dislike",
-    "feedback_report":  "🐞 Report Problem",
-    "feedback_share":   "📤 Share Bot",
-    "feedback_thanks":  "✅ Thank you for your feedback!",
-    "report_started":   "🐞 Report started — describe the issue below.",
-    "report_prompt":    "📝 Please describe the problem with this download:",
-    "report_sent":      "✅ Report sent to admins. We'll look into it shortly.",
-    "report_reply_sent":  "✅ Reply sent to user and report closed.",
-    "report_closed":      "✅ Report #{report_id} closed.",
-    "report_not_found":   "❌ Report #{report_id} not found.",
-    "report_reply_header": "📋 <b>Admin Reply to your report</b>:\n\n",
-
-    "support_redirect": (
-        "📞 <b>Support</b>\n\n"
-        "Tap the button below to open our Support Bot.\n"
-        "Create a ticket and our team will reply as soon as possible."
-    ),
-    "support_prompt":       "💬 Send your message and our team will reply shortly:",
-    "support_sent":         "✅ Message sent to support. We'll get back to you soon!",
-    "support_reply_header": "💬 <b>Support Reply</b>:\n\n",
+    "share_bot":      "📤 Share This Bot",
+    "share_bot_text": "🎉 <b>Thanks for downloading!</b>\n\nShare this bot with your friends and earn points! 🎁",
 
     "settings_text": (
         "⚙️ <b>Settings</b>\n\n"
@@ -234,8 +211,7 @@ STRINGS = {
         "/wheel — Lucky wheel spin\n"
         "/favorites — Saved downloads\n"
         "/leaderboard — Top referrers\n"
-        "/achievements — My achievements\n"
-        "/support — Contact support\n\n"
+        "/achievements — My achievements\n\n"
         "<b>✅ Supported Platforms:</b>\n"
         "YouTube • TikTok • Instagram • Facebook\n"
         "Twitter/X • Threads • Reddit • Pinterest\n"
@@ -283,14 +259,7 @@ STRINGS = {
         "X is temporarily under maintenance.\n"
         "Please try again later. 🙏"
     ),
-    "maintenance_on":  "🔧 Maintenance mode <b>enabled</b>. Users will see maintenance message.",
-    "maintenance_off": "✅ Maintenance mode <b>disabled</b>. Bot is back online.",
 
-    "admin_report_reply_btn":  "📩 Reply",
-    "admin_report_close_btn":  "🗑 Close",
-    "admin_reply_prompt":      "✏️ Type your reply for report #{report_id} (user {user_id}):",
-    "admin_report_closed_ok":  "✅ Report #{report_id} closed.",
-    "admin_report_replied_ok": "✅ Reply sent to user.",
 
     "banned": "🚫 You have been banned from using this bot.",
 
@@ -303,20 +272,6 @@ STRINGS = {
         "⭐ Points Issued: <b>{points_issued}</b>  🎁 Referrals: <b>{referrals}</b>\n"
         "🟢 Bot Status: <b>Online</b>"
     ),
-    "admin_btn_dashboard":  "📊 Dashboard",
-    "admin_btn_system":     "🖥 System",
-    "admin_btn_search":     "🔍 User Search",
-    "admin_btn_points":     "⭐ Points",
-    "admin_btn_reports":    "🐞 Reports",
-    "admin_btn_broadcast":  "📢 Broadcast",
-    "admin_btn_referrals":  "📈 Referrals",
-    "admin_btn_maint_off":  "🟢 Maintenance: OFF",
-    "admin_btn_maint_on":   "🔴 Maintenance: ON",
-    "admin_btn_stats":     "📊 Statistics",
-    "admin_btn_users":     "👥 Users",
-    "admin_btn_ban":       "🚫 Ban / Unban",
-    "admin_btn_logs":      "📜 Reports",
-    "admin_no_perm":       "❌ You don't have permission to use this command.",
 
     "system_monitor": (
         "🖥 <b>System Monitor</b>\n\n"
@@ -328,7 +283,6 @@ STRINGS = {
         "🕐 Last Heartbeat: <b>{heartbeat_age}</b>"
     ),
 
-    "admin_search_prompt":  "🔍 Send a user ID or @username to search:",
     "admin_user_card": (
         "👤 <b>User Info</b>\n\n"
         "🆔 ID: <code>{user_id}</code>\n"
@@ -340,19 +294,8 @@ STRINGS = {
         "🚫 Banned: <b>{is_banned}</b>\n"
         "📅 Joined: {join_date}"
     ),
-    "admin_user_ban_btn":   "🚫 Ban",
-    "admin_user_unban_btn": "✅ Unban",
-    "admin_user_points_btn": "⭐ Edit Points",
-    "admin_user_not_found": "❌ User not found.",
 
-    "broadcast_prompt":     "📢 Send the message to broadcast (text, photo, video):",
-    "broadcast_started":    "🚀 Broadcast started to {count} users...",
-    "broadcast_done":       "✅ Broadcast completed!\n\nSuccess: {success}\nFailed: {failed}",
-    "broadcast_cancelled":  "❌ Broadcast cancelled.",
 
-    "points_add_prompt":    "➕ Send number of points to ADD to user {user_id}:",
-    "points_remove_prompt": "➖ Send number of points to REMOVE from user {user_id}:",
-    "points_updated":       "✅ Points updated. Current: {points}",
 
     "status_text": (
         "📊 <b>Bot Status</b>\n\n"
@@ -362,6 +305,4 @@ STRINGS = {
         "👥 Active Users: {active_users}"
     ),
 
-    "admin_top_users_title": "🏆 <b>Top Users by Downloads</b>\n\n",
-    "admin_top_referrers_title": "🎁 <b>Top Referrers</b>\n\n",
 }
