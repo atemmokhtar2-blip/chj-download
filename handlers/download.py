@@ -311,10 +311,14 @@ async def download_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await edit_fn(t(lang, "download_failed"))
                 return
             await edit_fn(t(lang, "uploading"), parse_mode="HTML")
+            bot_info = await context.bot.get_me()
+            share_url = f"https://t.me/share/url?url=https://t.me/{bot_info.username}"
+            keyboard = [[InlineKeyboardButton(t(lang, "share_bot"), url=share_url)]]
             with open(file_path, "rb") as f:
                 sent = await query.message.reply_photo(
                     photo=InputFile(f, filename=f"{title[:50]}.jpg"),
                     caption=t(lang, "completed"),
+                    reply_markup=InlineKeyboardMarkup(keyboard)
                 )
             file_id = sent.photo[-1].file_id
             set_cache(info["url"], quality_label, "image", file_id, title, platform)
@@ -325,11 +329,15 @@ async def download_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await edit_fn(t(lang, "download_failed"))
                 return
             await edit_fn(t(lang, "uploading"), parse_mode="HTML")
+            bot_info = await context.bot.get_me()
+            share_url = f"https://t.me/share/url?url=https://t.me/{bot_info.username}"
+            keyboard = [[InlineKeyboardButton(t(lang, "share_bot"), url=share_url)]]
             with open(file_path, "rb") as f:
                 sent = await query.message.reply_audio(
                     audio=InputFile(f, filename=f"{title[:50]}.mp3"),
                     title=title[:64],
                     performer=info.get("uploader", "")[:64],
+                    reply_markup=InlineKeyboardMarkup(keyboard)
                 )
             file_id = sent.audio.file_id
             set_cache(info["url"], quality_label, "audio", file_id, title, platform)
@@ -344,11 +352,15 @@ async def download_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await edit_fn(t(lang, "download_failed"))
                 return
             await edit_fn(t(lang, "uploading"), parse_mode="HTML")
+            bot_info = await context.bot.get_me()
+            share_url = f"https://t.me/share/url?url=https://t.me/{bot_info.username}"
+            keyboard = [[InlineKeyboardButton(t(lang, "share_bot"), url=share_url)]]
             with open(file_path, "rb") as f:
                 sent = await query.message.reply_video(
                     video=InputFile(f, filename=f"{title[:50]}.mp4"),
                     caption=t(lang, "completed"),
                     supports_streaming=True,
+                    reply_markup=InlineKeyboardMarkup(keyboard)
                 )
             file_id = sent.video.file_id
             set_cache(info["url"], quality_label, "video", file_id, title, platform)
@@ -363,13 +375,15 @@ async def download_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # Deduct 1 point per download
         _post_download_sync(user.id)
 
-        new_achievements = check_and_award(
+        # Silent achievement check (without sending messages)
+        check_and_award(
             user.id,
             get_user(user.id).get("downloads", 0),
             get_user(user.id).get("referrals", 0)
         )
-        for ach in new_achievements:
-            await query.message.reply_text(t(lang, "achievement_unlocked", name=ach))
+
+        # Silent first download reward (points only, no messages)
+        await _handle_first_download_silent(user.id)
 
         await edit_fn(
             t(lang, "completed_detail",
@@ -378,11 +392,6 @@ async def download_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
               quality=quality_label),
             parse_mode="HTML"
         )
-
-        await _handle_first_download(query, context, user.id, lang)
-
-        # Send share button after successful download
-        await _send_share_button(query.message, context, lang)
 
     except FileTooLargeError:
         await edit_fn(t(lang, "file_too_large", max_mb=MAX_FILE_SIZE_MB))
@@ -404,16 +413,13 @@ def _post_download_sync(user_id: int):
     deduct_points(user_id, POINTS_DOWNLOAD)
 
 
-async def _handle_first_download(query, context, user_id: int, lang: str):
-    """Award bonus points on user's very first download."""
+async def _handle_first_download_silent(user_id: int):
+    """Award bonus points on user's very first download silently."""
     fresh = get_user(user_id)
     if not fresh:
         return
     if fresh.get("downloads", 0) == 1:
         add_points(user_id, POINTS_FIRST_DOWNLOAD)
-        await query.message.reply_text(
-            t(lang, "first_download_reward"), parse_mode="HTML"
-        )
         # Credit referral on first download
         from database.referrals import get_referral_by_referred, complete_referral, log_audit as log_ref
         from database.users import increment_referrals
@@ -425,26 +431,3 @@ async def _handle_first_download(query, context, user_id: int, lang: str):
                 increment_referrals(referral["referrer_id"])
                 log_ref("reward_given", referral["referrer_id"], user_id,
                         f"+{POINTS_REFERRAL} pts after first download")
-
-
-async def _award_achievements(user_id: int):
-    try:
-        fresh = get_user(user_id)
-        if fresh:
-            check_and_award(user_id, fresh.get("downloads", 0), fresh.get("referrals", 0))
-    except Exception:
-        pass
-
-
-async def _send_share_button(message, context, lang: str):
-    """Send a single share-bot button after successful download."""
-    bot_info = await context.bot.get_me()
-    share_url = f"https://t.me/share/url?url=https://t.me/{bot_info.username}"
-    keyboard = [[
-        InlineKeyboardButton(t(lang, "share_bot"), url=share_url)
-    ]]
-    await message.reply_text(
-        t(lang, "share_bot_text"),
-        reply_markup=InlineKeyboardMarkup(keyboard),
-        parse_mode="HTML"
-    )
