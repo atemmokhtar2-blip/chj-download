@@ -244,16 +244,23 @@ async def download_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         try:
             edit_fn = query.edit_message_caption if query.message.caption else query.edit_message_text
             await edit_fn(t(lang, "from_cache"), parse_mode="HTML")
-            if is_audio:
-                await query.message.reply_audio(audio=cached_id)
-            elif is_image:
-                await query.message.reply_photo(photo=cached_id)
-            else:
-                await query.message.reply_video(video=cached_id)
             _post_download_sync(user.id)
-            asyncio.ensure_future(_award_achievements(user.id))
-            await _handle_first_download(query, context, user.id, lang)
-            await _send_share_button(query.message, context, lang)
+            # Silent achievement check
+            check_and_award(user.id, live_user.get("downloads", 0), live_user.get("referrals", 0))
+            # Silent first download reward
+            await _handle_first_download_silent(user.id)
+            
+            # Use the merged share button UI even for cache
+            bot_info = await context.bot.get_me()
+            share_url = f"https://t.me/share/url?url=https://t.me/{bot_info.username}"
+            keyboard = [[InlineKeyboardButton(t(lang, "share_bot"), url=share_url)]]
+            
+            if is_audio:
+                await query.message.reply_audio(audio=cached_id, reply_markup=InlineKeyboardMarkup(keyboard))
+            elif is_image:
+                await query.message.reply_photo(photo=cached_id, reply_markup=InlineKeyboardMarkup(keyboard))
+            else:
+                await query.message.reply_video(video=cached_id, reply_markup=InlineKeyboardMarkup(keyboard))
             return
         except TelegramError:
             pass
