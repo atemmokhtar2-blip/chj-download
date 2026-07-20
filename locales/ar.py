@@ -31,14 +31,11 @@ STRINGS = {
     "menu_invite":       "🎁 دعوة الأصدقاء",
     "menu_settings":     "⚙️ الإعدادات",
     "menu_help":         "ℹ️ المساعدة",
-    "menu_admin":        "👑 لوحة الإدارة",
     "menu_referrals":    "🎁 الدعوات",
     "menu_achievements": "🏆 الإنجازات",
-    "menu_support":      "📞 الدعم",
     "menu_wheel":        "🎰 عجلة الحظ",
 
     "send_url_prompt": "📎 <b>من فضلك أرسل الرابط الذي تريد تحميله مباشرة بأعلى جودة:</b>",
-    "profile_admin_badge": "\n👑 <b>مدير</b>",
 
     "join_channel": (
         "📢 <b>الاشتراك في القناة مطلوب</b>\n\n"
@@ -186,28 +183,8 @@ STRINGS = {
     "achievements_title":   "🏆 <b>إنجازاتك</b>\n\n",
     "achievement_unlocked": "🏆 تم فتح إنجاز: {name}!",
 
-    "feedback_text":    "❤️ <b>هل استمتعت بـ X؟</b>",
-    "feedback_like":    "👍 إعجاب",
-    "feedback_dislike": "👎 عدم إعجاب",
-    "feedback_report":  "🐞 الإبلاغ عن مشكلة",
-    "feedback_share":   "📤 مشاركة البوت",
-    "feedback_thanks":  "✅ شكراً على ملاحظاتك!",
-    "report_started":   "🐞 تم بدء التقرير — صف مشكلتك أدناه.",
-    "report_prompt":    "📝 يرجى وصف المشكلة في هذا التحميل:",
-    "report_sent":      "✅ تم إرسال التقرير للمشرفين. سنتابع الأمر قريباً.",
-    "report_reply_sent":  "✅ تم إرسال الرد للمستخدم وإغلاق التقرير.",
-    "report_closed":      "✅ تم إغلاق التقرير #{report_id}.",
-    "report_not_found":   "❌ التقرير #{report_id} غير موجود.",
-    "report_reply_header": "📋 <b>رد المشرف على تقريرك</b>:\n\n",
-
-    "support_redirect": (
-        "📞 <b>الدعم</b>\n\n"
-        "اضغط على الزر أدناه لفتح بوت الدعم.\n"
-        "أنشئ تذكرة وسيرد فريقنا في أقرب وقت ممكن."
-    ),
-    "support_prompt":       "💬 أرسل رسالتك وسيرد فريقنا قريباً:",
-    "support_sent":         "✅ تم إرسال الرسالة للدعم. سنرد عليك قريباً!",
-    "support_reply_header": "💬 <b>رد الدعم</b>:\n\n",
+    "share_bot":      "📤 مشاركة البوت",
+    "share_bot_text": "🎉 <b>شكراً للتحميل!</b>\n\nشارك هذا البوت مع أصدقائك واكسب نقاطاً! 🎁",
 
     "settings_text": (
         "⚙️ <b>الإعدادات</b>\n\n"
@@ -234,8 +211,7 @@ STRINGS = {
         "/wheel — عجلة الحظ\n"
         "/favorites — المفضلة\n"
         "/leaderboard — أفضل المحيلين\n"
-        "/achievements — إنجازاتي\n"
-        "/support — التواصل مع الدعم\n\n"
+        "/achievements — إنجازاتي\n\n"
         "<b>✅ المنصات المدعومة:</b>\n"
         "YouTube • TikTok • Instagram • Facebook\n"
         "Twitter/X • Threads • Reddit • Pinterest\n"
@@ -283,14 +259,7 @@ STRINGS = {
         "X تحت الصيانة مؤقتاً.\n"
         "يرجى المحاولة لاحقاً. 🙏"
     ),
-    "maintenance_on":  "🔧 وضع الصيانة <b>مفعّل</b>. سيرى المستخدمون رسالة صيانة.",
-    "maintenance_off": "✅ وضع الصيانة <b>معطّل</b>. البوت عاد للعمل.",
 
-    "admin_report_reply_btn":  "📩 رد",
-    "admin_report_close_btn":  "🗑 إغلاق",
-    "admin_reply_prompt":      "✏️ اكتب ردك على التقرير #{report_id} (المستخدم {user_id}):",
-    "admin_report_closed_ok":  "✅ تم إغلاق التقرير #{report_id}.",
-    "admin_report_replied_ok": "✅ تم إرسال الرد للمستخدم.",
 
     "banned": "🚫 لقد تم حظرك من استخدام هذا البوت.",
 
@@ -303,20 +272,6 @@ STRINGS = {
         "⭐ نقاط موزعة: <b>{points_issued}</b>  🎁 دعوات: <b>{referrals}</b>\n"
         "🟢 حالة البوت: <b>متصل</b>"
     ),
-    "admin_btn_dashboard":  "📊 الإحصائيات",
-    "admin_btn_system":     "🖥 النظام",
-    "admin_btn_search":     "🔍 بحث عن مستخدم",
-    "admin_btn_points":     "⭐ النقاط",
-    "admin_btn_reports":    "🐞 التقارير",
-    "admin_btn_broadcast":  "📢 إذاعة",
-    "admin_btn_referrals":  "📈 الدعوات",
-    "admin_btn_maint_off":  "🟢 الصيانة: OFF",
-    "admin_btn_maint_on":   "🔴 الصيانة: ON",
-    "admin_btn_stats":     "📊 إحصائيات مفصلة",
-    "admin_btn_users":     "👥 قائمة المستخدمين",
-    "admin_btn_ban":       "🚫 حظر / إلغاء حظر",
-    "admin_btn_logs":      "📜 السجلات",
-    "admin_no_perm":       "❌ ليس لديك صلاحية لاستخدام هذا الأمر.",
 
     "system_monitor": (
         "🖥 <b>مراقب النظام</b>\n\n"
@@ -328,7 +283,6 @@ STRINGS = {
         "🕐 آخر نبضة: <b>{heartbeat_age}</b>"
     ),
 
-    "admin_search_prompt":  "🔍 أرسل ID المستخدم أو @username للبحث:",
     "admin_user_card": (
         "👤 <b>معلومات المستخدم</b>\n\n"
         "🆔 ID: <code>{user_id}</code>\n"
@@ -340,19 +294,8 @@ STRINGS = {
         "🚫 محظور: <b>{is_banned}</b>\n"
         "📅 انضم: {join_date}"
     ),
-    "admin_user_ban_btn":   "🚫 حظر",
-    "admin_user_unban_btn": "✅ إلغاء الحظر",
-    "admin_user_points_btn": "⭐ تعديل النقاط",
-    "admin_user_not_found": "❌ لم يتم العثور على المستخدم.",
 
-    "broadcast_prompt":     "📢 أرسل الرسالة التي تريد إذاعتها لجميع المستخدمين (نص، صورة، فيديو):",
-    "broadcast_started":    "🚀 بدأت عملية الإذاعة لـ {count} مستخدم...",
-    "broadcast_done":       "✅ اكتملت الإذاعة!\n\nنجاح: {success}\nفشل: {failed}",
-    "broadcast_cancelled":  "❌ تم إلغاء الإذاعة.",
 
-    "points_add_prompt":    "➕ أرسل عدد النقاط لإضافتها للمستخدم {user_id}:",
-    "points_remove_prompt": "➖ أرسل عدد النقاط لخصمها من المستخدم {user_id}:",
-    "points_updated":       "✅ تم تحديث النقاط. الرصيد الحالي: {points}",
 
     "status_text": (
         "📊 <b>حالة البوت</b>\n\n"
@@ -362,6 +305,4 @@ STRINGS = {
         "👥 المستخدمين النشطين: {active_users}"
     ),
 
-    "admin_top_users_title": "🏆 <b>أكثر المستخدمين تحميلاً</b>\n\n",
-    "admin_top_referrers_title": "🎁 <b>أكثر المحيلين</b>\n\n",
 }
