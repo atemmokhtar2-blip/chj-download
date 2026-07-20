@@ -343,7 +343,11 @@ async def download_video(url: str, format_id: str, quality_label: str,
                     )
 
     try:
-        fmt = f"{format_id}+bestaudio/best[height<={quality_label.replace('p', '')}]"
+        if quality_label == "best":
+            fmt = "bestvideo+bestaudio/best"
+        else:
+            fmt = f"{format_id}+bestaudio/best[height<={quality_label.replace('p', '')}]"
+            
         file_path = await asyncio.wait_for(
             loop.run_in_executor(None, _download_sync, url, fmt, out_path, hook),
             timeout=DOWNLOAD_TIMEOUT
