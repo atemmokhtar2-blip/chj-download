@@ -76,17 +76,19 @@ def _detect_media_type(info: dict, platform: str) -> str:
     if platform == "Pinterest":
         # Check direct URL from yt-dlp info
         direct_url = info.get("url", "")
-        if direct_url and _is_pinterest_image_url(direct_url):
+        if direct_url and ("i.pinimg.com" in direct_url or _is_pinterest_image_url(direct_url)):
             return "image"
         # Check if the page is an image pin (no video codec)
-        if not has_video and not formats:
+        if not has_video:
             ext = (info.get("ext") or "").lower()
             if ext in PINTEREST_IMAGE_EXTS:
                 return "image"
             thumbnail = info.get("thumbnail", "")
-            if thumbnail and _is_pinterest_image_url(thumbnail):
+            if thumbnail and ("i.pinimg.com" in thumbnail or _is_pinterest_image_url(thumbnail)):
                 return "image"
-            return "image"  # Default Pinterest pins to image unless video is confirmed
+            # If it's Pinterest and no video is found, it's almost certainly an image
+            if not formats or len(formats) <= 1:
+                return "image"
 
     # If no formats at all, try to detect from other fields
     if not formats:
@@ -243,6 +245,9 @@ def _extract_image_url(info: dict) -> str | None:
         if any(ext.endswith(x) for x in [".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp", ".svg"]):
             return direct_url
         # Pinterest-specific: URLs from i.pinimg.com are always images
+        if "i.pinimg.com" in direct_url:
+            # Try to get original version from any pinimg URL
+            return direct_url.replace("/236x/", "/originals/").replace("/474x/", "/originals/").replace("/736x/", "/originals/").replace("/564x/", "/originals/")
         if _is_pinterest_image_url(direct_url):
             return direct_url
 
@@ -268,12 +273,17 @@ def _extract_image_url(info: dict) -> str | None:
     thumbnail = info.get("thumbnail", "")
     if thumbnail:
         # Clean up thumbnail URL - Pinterest thumbnails can be smaller, try to get original
-        # Convert thumbnail to original by replacing dimensions
         if "i.pinimg.com" in thumbnail:
-            # Try to get the original image URL by modifying the path
-            original_url = thumbnail.replace("/236x/", "/originals/").replace("/474x/", "/originals/").replace("/736x/", "/originals/")
-            return original_url
+            return thumbnail.replace("/236x/", "/originals/").replace("/474x/", "/originals/").replace("/736x/", "/originals/").replace("/564x/", "/originals/")
         return thumbnail
+
+    # Try searching in all thumbnails if available
+    thumbnails = info.get("thumbnails", [])
+    for t in reversed(thumbnails): # Usually higher quality are at the end
+        t_url = t.get("url", "")
+        if "i.pinimg.com" in t_url:
+            return t_url.replace("/236x/", "/originals/").replace("/474x/", "/originals/").replace("/736x/", "/originals/").replace("/564x/", "/originals/")
+    
 
     return info.get("url") or None
 
@@ -291,7 +301,10 @@ async def download_image(url: str, image_url: str) -> str | None:
                 break
         out_path = os.path.join(TEMP_DIR, f"{safe_name}{ext}")
 
-        async with aiohttp.ClientSession() as session:
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        }
+        async with aiohttp.ClientSession(headers=headers) as session:
             async with session.get(image_url, timeout=aiohttp.ClientTimeout(total=30)) as resp:
                 if resp.status == 200:
                     content = await resp.read()
