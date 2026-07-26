@@ -3,6 +3,7 @@ import os
 import re
 import tempfile
 import aiohttp
+import requests
 from typing import Callable, Optional
 import yt_dlp
 from config.settings import TEMP_DIR, MAX_FILE_SIZE_BYTES, DOWNLOAD_TIMEOUT
@@ -116,14 +117,81 @@ def _detect_media_type(info: dict, platform: str) -> str:
     return "video"
 
 
+def _fallback_pinterest_extract(url: str) -> dict | None:
+    """Fallback extraction for Pinterest using requests and regex when yt-dlp fails."""
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    }
+    try:
+        # Use session to handle redirects (especially pin.it)
+        session = requests.Session()
+        res = session.get(url, headers=headers, timeout=15, allow_redirects=True)
+        html = res.text
+        final_url = res.url
+
+        # Look for image URLs
+        img_patterns = [
+            r'https://i\.pinimg\.com/originals/[a-zA-Z0-9/_.-]+\.(?:jpg|jpeg|png|webp|gif)',
+            r'https://i\.pinimg\.com/[0-9x]+/[a-zA-Z0-9/_.-]+\.(?:jpg|jpeg|png|webp|gif)'
+        ]
+        
+        image_url = None
+        for pattern in img_patterns:
+            matches = re.findall(pattern, html)
+            if matches:
+                image_url = matches[0]
+                if "/originals/" not in image_url:
+                    image_url = re.sub(r'/(?:236x|474x|564x|736x)/', '/originals/', image_url)
+                break
+        
+        if not image_url:
+            return None
+
+        # Try to extract title
+        title_match = re.search(r'<title>(.*?)</title>', html)
+        title = title_match.group(1) if title_match else "Pinterest Image"
+        title = re.sub(r'\s*\|\s*Pinterest$', '', title)
+
+        return {
+            "title": title,
+            "uploader": "Pinterest User",
+            "duration": "Unknown",
+            "duration_secs": 0,
+            "thumbnail": image_url,
+            "platform": "Pinterest",
+            "media_type": "image",
+            "qualities": [],
+            "audio_formats": [],
+            "image_url": image_url,
+            "album_items": [],
+            "url": url,
+            "webpage_url": final_url,
+            "ext": image_url.split('.')[-1] if '.' in image_url else "jpg",
+        }
+    except Exception as e:
+        error_logger.error(f"Fallback Pinterest error for {url}: {e}")
+        return None
+
+
 async def analyze_url(url: str) -> dict | None:
     try:
         loop = asyncio.get_event_loop()
-        info = await asyncio.wait_for(
-            loop.run_in_executor(None, _extract_info_sync, url),
-            timeout=30
-        )
+        try:
+            info = await asyncio.wait_for(
+                loop.run_in_executor(None, _extract_info_sync, url),
+                timeout=30
+            )
+        except Exception as e:
+            # If yt-dlp fails and it's Pinterest, try fallback
+            if "pinterest.com" in url or "pin.it" in url:
+                download_logger.info(f"yt-dlp failed for Pinterest, trying fallback: {url}")
+                return await loop.run_in_executor(None, _fallback_pinterest_extract, url)
+            raise e
+
         if not info:
+            # Also try fallback if info is empty for Pinterest
+            if "pinterest.com" in url or "pin.it" in url:
+                return await loop.run_in_executor(None, _fallback_pinterest_extract, url)
             return None
 
         platform = get_platform(url)
@@ -232,6 +300,9 @@ async def analyze_url(url: str) -> dict | None:
         error_logger.error(f"Timeout analyzing: {url}")
         return None
     except Exception as e:
+        # One last check for Pinterest fallback if any other error occurred
+        if "pinterest.com" in url or "pin.it" in url:
+            return await loop.run_in_executor(None, _fallback_pinterest_extract, url)
         error_logger.error(f"Error analyzing {url}: {e}")
         return None
 
@@ -327,12 +398,9 @@ def _download_sync(url: str, fmt_id: str, out_path: str,
         "noplaylist": True,
         "merge_output_format": "mp4",
         "nocheckcertificate": True,
-        "ignoreerrors": False,  # Changed to False to see real errors
+        "ignoreerrors": False,
         "logtostderr": True,
         "no_color": True,
-        # Remove aria2c for better stability if it's causing issues on ZeroGPU
-        # "external_downloader": "aria2c", 
-        # "external_downloader_args": ["-x", "16", "-s", "16", "-k", "1M"],
         "buffersize": 1024 * 1024,
     }
     if FFMPEG_PATH:
@@ -407,47 +475,32 @@ async def download_video(url: str, format_id: str, quality_label: str,
         if d["status"] == "downloading":
             total = d.get("total_bytes") or d.get("total_bytes_estimate", 0)
             downloaded = d.get("downloaded_bytes", 0)
-            speed = d.get("speed") or 0
-            eta = d.get("eta") or 0
-            if total and progress_callback:
-                pct = int(downloaded / total * 100)
-                if pct >= last_percent[0] + 20:
+            speed = d.get("speed", 0)
+            eta = d.get("eta", 0)
+            
+            if total > 0:
+                pct = round((downloaded / total) * 100, 1)
+                if pct >= last_percent[0] + 5 or pct >= 99:
                     last_percent[0] = pct
-                    data = {"pct": pct, "downloaded": downloaded,
-                            "total": total, "speed": speed, "eta": eta}
-                    loop.call_soon_threadsafe(
-                        lambda d=data: loop.create_task(progress_callback(d))
-                    )
+                    if progress_callback:
+                        asyncio.run_coroutine_threadsafe(
+                            progress_callback({
+                                "pct": pct,
+                                "downloaded": downloaded,
+                                "total": total,
+                                "speed": speed,
+                                "eta": eta
+                            }),
+                            loop
+                        )
 
     try:
-        if quality_label == "best":
-            # Use a more reliable format selector for 'best'
-            fmt = "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best"
-        else:
-            # If a specific height is requested, use it but fallback to best if it fails
-            h = quality_label.replace('p', '')
-            fmt = f"bestvideo[height<={h}][ext=mp4]+bestaudio[ext=m4a]/best[height<={h}][ext=mp4]/best"
-            
-        file_path = await asyncio.wait_for(
-            loop.run_in_executor(None, _download_sync, url, fmt, out_path, hook),
-            timeout=DOWNLOAD_TIMEOUT
+        file_path = await loop.run_in_executor(
+            None, _download_sync, url, format_id, out_path, hook
         )
-
-        if not os.path.exists(file_path):
-            return None
-
-        size = os.path.getsize(file_path)
-        if size > MAX_FILE_SIZE_BYTES:
-            os.remove(file_path)
-            raise FileTooLargeError(size)
-
-        download_logger.info(f"Downloaded video: {url} [{quality_label}] -> {file_path}")
         return file_path
-
-    except FileTooLargeError:
-        raise
     except Exception as e:
-        error_logger.error(f"Video download error {url}: {e}")
+        error_logger.error(f"Download error {url}: {e}")
         return None
 
 
@@ -462,43 +515,33 @@ async def download_audio(url: str, progress_callback: Callable = None) -> str | 
         if d["status"] == "downloading":
             total = d.get("total_bytes") or d.get("total_bytes_estimate", 0)
             downloaded = d.get("downloaded_bytes", 0)
-            speed = d.get("speed") or 0
-            eta = d.get("eta") or 0
-            if total and progress_callback:
-                pct = int(downloaded / total * 100)
-                if pct >= last_percent[0] + 20:
+            speed = d.get("speed", 0)
+            eta = d.get("eta", 0)
+            
+            if total > 0:
+                pct = round((downloaded / total) * 100, 1)
+                if pct >= last_percent[0] + 10 or pct >= 99:
                     last_percent[0] = pct
-                    data = {"pct": pct, "downloaded": downloaded,
-                            "total": total, "speed": speed, "eta": eta}
-                    loop.call_soon_threadsafe(
-                        lambda d=data: loop.create_task(progress_callback(d))
-                    )
+                    if progress_callback:
+                        asyncio.run_coroutine_threadsafe(
+                            progress_callback({
+                                "pct": pct,
+                                "downloaded": downloaded,
+                                "total": total,
+                                "speed": speed,
+                                "eta": eta
+                            }),
+                            loop
+                        )
 
     try:
-        file_path = await asyncio.wait_for(
-            loop.run_in_executor(None, _download_audio_sync, url, out_path, hook),
-            timeout=DOWNLOAD_TIMEOUT
+        file_path = await loop.run_in_executor(
+            None, _download_audio_sync, url, out_path, hook
         )
-
-        if not os.path.exists(file_path):
-            return None
-
-        size = os.path.getsize(file_path)
-        if size > MAX_FILE_SIZE_BYTES:
-            os.remove(file_path)
-            raise FileTooLargeError(size)
-
-        download_logger.info(f"Downloaded audio: {url} -> {file_path}")
         return file_path
-
-    except FileTooLargeError:
-        raise
     except Exception as e:
         error_logger.error(f"Audio download error {url}: {e}")
         return None
 
-
 class FileTooLargeError(Exception):
-    def __init__(self, size: int):
-        self.size = size
-        super().__init__(f"File too large: {format_size(size)}")
+    pass
