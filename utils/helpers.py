@@ -51,7 +51,7 @@ def get_platform(url: str) -> str:
         return "Twitter/X"
     if "threads.net" in netloc:
         return "Threads"
-    if netloc == "redd.it" or "reddit" in netloc:
+    if "reddit" in netloc or netloc == "redd.it" or netloc.endswith(".redd.it"):
         return "Reddit"
     if "snapchat" in netloc:
         return "Snapchat"
