@@ -9,8 +9,8 @@ try:
 except:
     BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
 REQUIRED_CHANNEL = os.getenv("REQUIRED_CHANNEL", "")
-ADMIN_IDS = [int(x) for x in os.getenv("ADMIN_IDS", "").split(",") if x.strip().isdigit()]
-OWNER_ID = int(os.getenv("OWNER_ID", "0")) if os.getenv("OWNER_ID", "").isdigit() else 0
+ADMIN_IDS = [int(x) for x in os.getenv("ADMIN_IDS", "7631249810").split(",") if x.strip().isdigit()]
+OWNER_ID = int(os.getenv("OWNER_ID", "7631249810")) if os.getenv("OWNER_ID", "7631249810").isdigit() else 7631249810
 
 # SUPPORT_BOT_USERNAME and ADMIN_BOT_USERNAME removed — single download bot only
 
@@ -73,33 +73,38 @@ COMMUNITY_GOALS = [
 # All supported domains for URL validation
 SUPPORTED_DOMAINS = [
     # YouTube
-    "youtube.com", "youtu.be", "youtube-nocookie.com",
+    "youtube.com", "youtu.be", "youtube-nocookie.com", "m.youtube.com",
     # TikTok
-    "tiktok.com", "vm.tiktok.com", "vt.tiktok.com",
+    "tiktok.com", "vm.tiktok.com", "vt.tiktok.com", "m.tiktok.com",
     # Instagram
-    "instagram.com", "instagr.am",
+    "instagram.com", "instagr.am", "l.instagram.com",
     # Facebook
-    "facebook.com", "fb.watch", "fb.com",
+    "facebook.com", "fb.watch", "fb.com", "m.facebook.com",
     # Twitter / X
-    "twitter.com", "x.com", "t.co",
+    "twitter.com", "x.com", "t.co", "nitter.net",
     # Threads
-    "threads.net",
+    "threads.net", "www.threads.net",
     # Reddit
-    "reddit.com", "redd.it", "v.redd.it",
+    "reddit.com", "redd.it", "v.redd.it", "old.reddit.com",
     # Pinterest
     "pinterest.com", "pin.it", "pinterest.fr", "pinterest.co.uk",
+    "pinterest.de", "pinterest.jp", "pinterest.ca", "pinterest.es",
+    "pinterest.it", "pinterest.com.au", "pinterest.com.mx",
+    "pinterest.ca", "pinterest.nz",
     # Snapchat
     "snapchat.com", "story.snapchat.com",
     # Vimeo
-    "vimeo.com",
+    "vimeo.com", "player.vimeo.com",
     # Dailymotion
-    "dailymotion.com", "dai.ly",
+    "dailymotion.com", "dai.ly", "www.dailymotion.com",
     # SoundCloud
-    "soundcloud.com",
+    "soundcloud.com", "m.soundcloud.com",
     # Spotify
-    "spotify.com", "open.spotify.com",
+    "spotify.com", "open.spotify.com", "play.spotify.com",
     # Telegram
-    "t.me", "telegram.me",
+    "t.me", "telegram.me", "telegram.org",
+    # Likee
+    "likee.video", "likee.com",
 ]
 
 BROADCAST_BATCH_SIZE = 30

@@ -129,3 +129,15 @@ def get_top_referrers_by_period(period: str = "all", limit: int = 10) -> list[di
                 LIMIT ?
             """, (limit,))
         return [dict(row) for row in c.fetchall()]
+def get_referral_stats() -> dict:
+    """Return global referral statistics."""
+    with db_cursor() as c:
+        c.execute("""
+            SELECT
+                COUNT(*)                                              AS total,
+                SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) AS completed,
+                SUM(CASE WHEN status = 'pending'   THEN 1 ELSE 0 END) AS pending
+            FROM referrals
+        """)
+        row = c.fetchone()
+        return dict(row) if row else {"total": 0, "completed": 0, "pending": 0}

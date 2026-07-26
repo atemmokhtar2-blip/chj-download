@@ -137,9 +137,13 @@ def _build_action_keyboard(media_type: str, qualities: list, fav_btn_text: str, 
             keyboard.append([
                 InlineKeyboardButton(t(lang, "best_quality"), callback_data="dl_video_best")
             ])
-            for q in qualities[-3:]:  # show max 3 quality options
+            # Show top 3 quality options with tier labels
+            top_qualities = qualities[-3:] if len(qualities) >= 3 else qualities
+            for q in top_qualities:
+                tier = q.get("tier", "")
+                tier_label = f" ({tier})" if tier else ""
                 keyboard.append([
-                    InlineKeyboardButton(f"📹 {q['label']}", callback_data=f"dl_video_{q['label']}")
+                    InlineKeyboardButton(f"📹 {q['label']}{tier_label}", callback_data=f"dl_video_{q['label']}")
                 ])
         else:
             keyboard.append([

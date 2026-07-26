@@ -28,6 +28,9 @@ from handlers.profile import (
     goals_command, top_command
 )
 from handlers.favorites import favorites_command, unfav_callback
+from handlers.admin import (
+    admin_command, admin_callback, admin_text_handler
+)
 from workers.cleanup import cleanup_temp_files, cleanup_old_cache
 from workers.heartbeat import run_heartbeat
 from workers.crash_monitor import record_startup, record_crash
@@ -73,6 +76,10 @@ async def message_router(update: Update, context):
             await wheel_command(update, context)
 
         return
+
+    # --- Admin text handler (for conversations like search, broadcast, etc.) ---
+    from handlers.admin import admin_text_handler
+    await admin_text_handler(update, context)
 
     # --- URL detection ---
     if text.startswith(("http://", "https://")):
@@ -121,6 +128,21 @@ def build_application() -> Application:
     app.add_handler(CommandHandler("goals",        goals_command))
     app.add_handler(CommandHandler("favorites",    favorites_command))
     app.add_handler(CommandHandler("top",          top_command))
+
+    # Admin handlers
+    app.add_handler(CommandHandler("admin", admin_command))
+    app.add_handler(CommandHandler("stats", admin_command))
+    app.add_handler(CommandHandler("broadcast", admin_command))
+    app.add_handler(CommandHandler("ban", admin_command))
+    app.add_handler(CommandHandler("unban", admin_command))
+    app.add_handler(CommandHandler("users", admin_command))
+    app.add_handler(CommandHandler("search", admin_command))
+    app.add_handler(CommandHandler("system", admin_command))
+    app.add_handler(CommandHandler("maintenance", admin_command))
+    app.add_handler(CommandHandler("points", admin_command))
+    app.add_handler(CommandHandler("vip", admin_command))
+    app.add_handler(CommandHandler("refstats", admin_command))
+    app.add_handler(CallbackQueryHandler(admin_callback, pattern="^admin_"))
 
     app.add_handler(CallbackQueryHandler(verify_subscription_callback, pattern="^verify_sub$"))
     app.add_handler(CallbackQueryHandler(language_callback,            pattern="^lang_"))

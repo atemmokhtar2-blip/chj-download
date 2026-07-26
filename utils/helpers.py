@@ -51,6 +51,8 @@ def get_platform(url: str) -> str:
         return "Spotify"
     if "t.me" in netloc or "telegram.me" in netloc:
         return "Telegram"
+    if "likee" in netloc:
+        return "Likee"
     return "Unknown"
 
 
@@ -70,6 +72,7 @@ def get_platform_emoji(platform: str) -> str:
         "SoundCloud":  "🎧",
         "Spotify":     "🎶",
         "Telegram":    "✈️",
+        "Likee":       "🎤",
     }
     return emojis.get(platform, "🌐")
 
