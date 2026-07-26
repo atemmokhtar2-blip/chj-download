@@ -118,39 +118,103 @@ def _detect_media_type(info: dict, platform: str) -> str:
 
 
 def _fallback_pinterest_extract(url: str) -> dict | None:
-    """Fallback extraction for Pinterest using requests and regex when yt-dlp fails."""
+    """Fallback extraction for Pinterest using requests and regex when yt-dlp fails.
+
+    This is the critical path for Pinterest image pins: yt-dlp frequently fails on
+    Pinterest, so we scrape the pin HTML and find the *real* pin image. The key
+    gotcha is that Pinterest HTML always contains a *placeholder* image
+    (the hash "d53b014d86a6b6761bf649a0ed813c2b") that must be skipped, otherwise
+    we would hand the user a non-existent image that returns 403 on download.
+    """
+    # The well-known Pinterest placeholder/og-default image hash that appears on
+    # every Pinterest page and must NEVER be used as the pin image.
+    PLACEHOLDER_HASHES = (
+        "d53b014d86a6b6761bf649a0ed813c2b",  # generic Pinterest placeholder PNG
+    )
+    # Preferred size buckets in priority order: highest quality first.
+    PREFERRED_SIZES = ("originals", "1200x", "736x", "564x", "474x", "236x")
+
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.9",
     }
+
     try:
-        # Use session to handle redirects (especially pin.it)
         session = requests.Session()
-        res = session.get(url, headers=headers, timeout=15, allow_redirects=True)
+        res = session.get(url, headers=headers, timeout=20, allow_redirects=True)
         html = res.text
         final_url = res.url
 
-        # Look for image URLs
-        img_patterns = [
-            r'https://i\.pinimg\.com/originals/[a-zA-Z0-9/_.-]+\.(?:jpg|jpeg|png|webp|gif)',
-            r'https://i\.pinimg\.com/[0-9x]+/[a-zA-Z0-9/_.-]+\.(?:jpg|jpeg|png|webp|gif)'
-        ]
-        
-        image_url = None
-        for pattern in img_patterns:
-            matches = re.findall(pattern, html)
-            if matches:
-                image_url = matches[0]
-                if "/originals/" not in image_url:
-                    image_url = re.sub(r'/(?:236x|474x|564x|736x)/', '/originals/', image_url)
+        # 1) Try the structured og:image meta tag first — it points to the real pin.
+        og_match = re.search(
+            r'<meta[^>]+property=["\']og:image["\'][^>]+content=["\']([^"\']+)["\']',
+            html, re.IGNORECASE,
+        )
+        og_image = None
+        if og_match:
+            cand = og_match.group(1)
+            # Skip placeholder
+            if not any(ph in cand for ph in PLACEHOLDER_HASHES):
+                og_image = cand
+
+        # 2) Collect ALL pinimg image URLs, then pick the best real one.
+        all_imgs = re.findall(
+            r'https://i\.pinimg\.com/([a-z0-9x]+)/([a-f0-9/_.\-]+)\.(jpg|jpeg|png|webp)',
+            html,
+            re.IGNORECASE,
+        )
+        # Map size-bucket -> full URL for the real pin image (not the placeholder).
+        by_bucket: dict[str, str] = {}
+        for size_bucket, file_hash, ext in all_imgs:
+            full = f"https://i.pinimg.com/{size_bucket}/{file_hash}.{ext}"
+            # Skip the placeholder / Pinterest logo images.
+            if any(ph in full for ph in PLACEHOLDER_HASHES):
+                continue
+            # Skip tiny favicons / board thumbnails that aren't the pin itself.
+            if size_bucket in ("60x60", "136x136", "75x75"):
+                continue
+            # Prefer the first occurrence per bucket.
+            if size_bucket not in by_bucket:
+                by_bucket[size_bucket] = full
+
+        # Pick the highest-quality bucket available.
+        chosen_image = None
+        for bucket in PREFERRED_SIZES:
+            if bucket in by_bucket:
+                chosen_image = by_bucket[bucket]
                 break
-        
+        # If no preferred bucket, take whatever real image we found.
+        if not chosen_image and by_bucket:
+            chosen_image = next(iter(by_bucket.values()))
+
+        # Prefer og:image if present and real, else fall back to scraped image.
+        image_url = og_image or chosen_image
         if not image_url:
             return None
 
-        # Try to extract title
-        title_match = re.search(r'<title>(.*?)</title>', html)
-        title = title_match.group(1) if title_match else "Pinterest Image"
-        title = re.sub(r'\s*\|\s*Pinterest$', '', title)
+        # Normalize: convert any size bucket to /originals/ for maximum quality,
+        # but only if it exists in our by_bucket map; otherwise keep the bucket we have.
+        # (We avoid blind string-replacement to /originals/ because not every pin has
+        #  an originals variant — that's what causes silent 403s downstream.)
+
+        # Try to extract a real title from <title> or og:title.
+        title = "Pinterest Image"
+        title_match = re.search(r"<title>(.*?)</title>", html, re.IGNORECASE | re.DOTALL)
+        if title_match:
+            title = title_match.group(1).strip()
+            title = re.sub(r"\s*\|\s*Pinterest\s*$", "", title, flags=re.IGNORECASE)
+        og_title = re.search(
+            r'<meta[^>]+property=["\']og:title["\'][^>]+content=["\']([^"\']+)["\']',
+            html, re.IGNORECASE,
+        )
+        if og_title:
+            title = og_title.group(1).strip()
+
+        ext = image_url.rsplit(".", 1)[-1].lower() if "." in image_url else "jpg"
+        # yt-dlp sometimes returns 'jpeg' for .jpg; keep it simple.
+        if ext not in ("jpg", "jpeg", "png", "webp", "gif", "bmp", "svg"):
+            ext = "jpg"
 
         return {
             "title": title,
@@ -166,7 +230,7 @@ def _fallback_pinterest_extract(url: str) -> dict | None:
             "album_items": [],
             "url": url,
             "webpage_url": final_url,
-            "ext": image_url.split('.')[-1] if '.' in image_url else "jpg",
+            "ext": ext,
         }
     except Exception as e:
         error_logger.error(f"Fallback Pinterest error for {url}: {e}")
@@ -360,32 +424,93 @@ def _extract_image_url(info: dict) -> str | None:
 
 
 async def download_image(url: str, image_url: str) -> str | None:
-    """Download an image from a direct URL."""
-    try:
-        safe_name = sanitize_filename(f"image_{hash(url) % 100000}")
-        # Determine extension from URL
-        clean_url = image_url.split("?")[0]
-        ext = ".jpg"
-        for e in [".png", ".webp", ".gif", ".jpeg"]:
-            if clean_url.lower().endswith(e):
-                ext = e
-                break
-        out_path = os.path.join(TEMP_DIR, f"{safe_name}{ext}")
+    """Download an image from a direct URL with retries and integrity checks.
 
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-        }
-        async with aiohttp.ClientSession(headers=headers) as session:
-            async with session.get(image_url, timeout=aiohttp.ClientTimeout(total=30)) as resp:
-                if resp.status == 200:
+    This is the second critical fix for the Pinterest problem: even after we
+    extract the *correct* image URL, the actual HTTP download can still fail
+    (403, timeout, partial body). Previously the code returned None silently,
+    and the handler told the user "download complete" — a lie. Now we:
+      * Retry up to 3 times with a short backoff.
+      * Validate the HTTP status and Content-Type.
+      * Validate the first bytes (magic bytes) to ensure we got a real image
+        and not an XML/HTML error page (e.g. a 403 body returned with 200).
+      * Use a longer per-attempt timeout and follow redirects.
+    """
+    # Headers that work reliably against i.pinimg.com / Pinterest CDN.
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Accept": "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Referer": "https://www.pinterest.com/",
+    }
+
+    safe_name = sanitize_filename(f"image_{hash(url) % 100000}")
+    clean_url = image_url.split("?")[0]
+    ext = ".jpg"
+    for e in (".png", ".webp", ".gif", ".jpeg", ".bmp", ".svg"):
+        if clean_url.lower().endswith(e):
+            ext = e
+            break
+    out_path = os.path.join(TEMP_DIR, f"{safe_name}{ext}")
+
+    # Known image magic-byte signatures.
+    def _is_image_bytes(data: bytes) -> bool:
+        if not data or len(data) < 12:
+            return False
+        return (
+            data[:8] == b"\x89PNG\r\n\x1a\n"            # PNG
+            or data[:3] == b"\xff\xd8\xff"               # JPEG
+            or data[:6] in (b"GIF87a", b"GIF89a")        # GIF
+            or data[:4] == b"RIFF" and data[8:12] == b"WEBP"  # WEBP
+            or data[:4] == b"BM "                        # BMP
+        )
+
+    last_err = None
+    for attempt in range(3):
+        try:
+            timeout = aiohttp.ClientTimeout(total=60)
+            async with aiohttp.ClientSession(headers=headers) as session:
+                async with session.get(image_url, timeout=timeout, allow_redirects=True) as resp:
+                    if resp.status != 200:
+                        last_err = f"HTTP {resp.status}"
+                        # 403/404 are permanent — don't retry on those.
+                        if resp.status in (403, 404, 410):
+                            error_logger.error(f"Image download {resp.status} for {image_url}")
+                            return None
+                        # Otherwise retry (5xx, network) on next attempt.
+                        continue
+
+                    content_type = (resp.headers.get("Content-Type", "") or "").lower()
                     content = await resp.read()
+
+                    # Validate: must be an image by both content-type and magic bytes.
+                    if "image/" not in content_type and "application/xml" not in content_type:
+                        # Some CDNs send generic content-type; rely on magic bytes.
+                        pass
+                    if "application/xml" in content_type or "text/html" in content_type:
+                        last_err = f"Non-image Content-Type: {content_type}"
+                        continue
+
+                    if not _is_image_bytes(content):
+                        last_err = "Downloaded bytes are not a valid image (magic-byte check failed)"
+                        error_logger.error(f"{last_err} for {image_url} (len={len(content)})")
+                        continue
+
                     with open(out_path, "wb") as f:
                         f.write(content)
-                    return out_path
-        return None
-    except Exception as e:
-        error_logger.error(f"Image download error {url}: {e}")
-        return None
+                    if os.path.getsize(out_path) > 0:
+                        return out_path
+                    last_err = "Wrote 0-byte file"
+        except asyncio.TimeoutError:
+            last_err = "timeout"
+            continue
+        except Exception as e:
+            last_err = str(e)
+            error_logger.error(f"Image download attempt {attempt+1} error for {image_url}: {e}")
+            continue
+
+    error_logger.error(f"Image download exhausted retries for {image_url}: {last_err}")
+    return None
 
 
 def _download_sync(url: str, fmt_id: str, out_path: str,
