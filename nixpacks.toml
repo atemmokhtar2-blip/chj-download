@@ -5,4 +5,4 @@ nixPkgs = ["python311", "ffmpeg"]
 cmds = ["pip install -r requirements.txt"]
 
 [start]
-cmd = "python3 app.py"
+cmd = "mkdir -p database temp logs && python3 app.py"

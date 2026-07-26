@@ -14,9 +14,9 @@ OWNER_ID = int(os.getenv("OWNER_ID", "7631249810")) if os.getenv("OWNER_ID", "76
 
 # SUPPORT_BOT_USERNAME and ADMIN_BOT_USERNAME removed — single download bot only
 
-DATABASE_PATH = "/tmp/bot.db"
-TEMP_DIR = "/tmp/bot_temp"
-LOGS_DIR = "/tmp/bot_logs"
+DATABASE_PATH = os.path.join(os.getcwd(), "database", "bot.db")
+TEMP_DIR = os.path.join(os.getcwd(), "temp")
+LOGS_DIR = os.path.join(os.getcwd(), "logs")
 
 MAX_FILE_SIZE_MB = int(os.getenv("MAX_FILE_SIZE_MB", "50"))
 MAX_FILE_SIZE_BYTES = MAX_FILE_SIZE_MB * 1024 * 1024
@@ -34,6 +34,7 @@ POINTS_DOWNLOAD       = 1    # deducted per download
 
 POINTS_FIRST_DOWNLOAD = 10   # bonus on very first download
 POINTS_DAILY          = 5
+POINTS_REFERRAL       = 5    # points given to referrer per new user
 
 LUCKY_WHEEL_PRIZES    = [1, 2, 3, 5, 10]
 LUCKY_WHEEL_COOLDOWN  = 86400  # 24 hours in seconds
