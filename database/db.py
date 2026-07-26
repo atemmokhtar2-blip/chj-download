@@ -42,9 +42,7 @@ def init_db():
                 role        TEXT DEFAULT 'user',
                 points      INTEGER DEFAULT 0,
                 downloads   INTEGER DEFAULT 0,
-                referrals   INTEGER DEFAULT 0,
-                referral_code TEXT UNIQUE,
-                referred_by INTEGER,
+
                 join_date   TEXT DEFAULT (datetime('now')),
                 last_seen   TEXT DEFAULT (datetime('now')),
                 last_daily  TEXT,
@@ -149,27 +147,7 @@ def init_db():
                 FOREIGN KEY (user_id) REFERENCES users(user_id)
             );
 
-            CREATE TABLE IF NOT EXISTS referrals (
-                id              INTEGER PRIMARY KEY AUTOINCREMENT,
-                referrer_id     INTEGER NOT NULL,
-                referred_id     INTEGER NOT NULL,
-                status          TEXT    NOT NULL DEFAULT 'pending',
-                reward_given    INTEGER NOT NULL DEFAULT 0,
-                created_at      TEXT    NOT NULL DEFAULT (datetime('now')),
-                completed_at    TEXT,
-                UNIQUE(referred_id),
-                FOREIGN KEY (referrer_id) REFERENCES users(user_id),
-                FOREIGN KEY (referred_id) REFERENCES users(user_id)
-            );
 
-            CREATE TABLE IF NOT EXISTS referral_audit_log (
-                id          INTEGER PRIMARY KEY AUTOINCREMENT,
-                event       TEXT    NOT NULL,
-                referrer_id INTEGER,
-                referred_id INTEGER NOT NULL,
-                detail      TEXT    DEFAULT '',
-                created_at  TEXT    NOT NULL DEFAULT (datetime('now'))
-            );
 
             CREATE TABLE IF NOT EXISTS bot_settings (
                 key   TEXT PRIMARY KEY,
@@ -179,10 +157,7 @@ def init_db():
             CREATE INDEX IF NOT EXISTS idx_downloads_user    ON downloads(user_id);
             CREATE INDEX IF NOT EXISTS idx_downloads_date    ON downloads(created_at);
             CREATE INDEX IF NOT EXISTS idx_cache_hash        ON file_cache(url_hash);
-            CREATE INDEX IF NOT EXISTS idx_users_referral    ON users(referral_code);
-            CREATE INDEX IF NOT EXISTS idx_referrals_referrer ON referrals(referrer_id);
-            CREATE INDEX IF NOT EXISTS idx_referrals_referred ON referrals(referred_id);
-            CREATE INDEX IF NOT EXISTS idx_referral_audit    ON referral_audit_log(referrer_id);
+
         """)
     # Idempotent migrations — add columns that may not exist in older installs
     _migrate()

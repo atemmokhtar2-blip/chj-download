@@ -31,7 +31,7 @@ CACHE_MAX_SIZE = int(os.getenv("CACHE_MAX_SIZE", "1000"))
 # Points system: users START with 10, each download COSTS 1 point
 POINTS_REGISTRATION   = 10
 POINTS_DOWNLOAD       = 1    # deducted per download
-POINTS_REFERRAL       = 2    # NOT 50
+
 POINTS_FIRST_DOWNLOAD = 10   # bonus on very first download
 POINTS_DAILY          = 5
 
@@ -51,9 +51,7 @@ ACHIEVEMENTS = [
     {"id": "ten_downloads",    "name_en": "🏆 10 Downloads",     "name_ar": "🏆 10 تحميلات",       "condition": "downloads",  "threshold": 10},
     {"id": "fifty_downloads",  "name_en": "🏆 50 Downloads",     "name_ar": "🏆 50 تحميلاً",       "condition": "downloads",  "threshold": 50},
     {"id": "hundred_downloads","name_en": "🏆 100 Downloads",    "name_ar": "🏆 100 تحميل",        "condition": "downloads",  "threshold": 100},
-    {"id": "first_referral",   "name_en": "🌟 First Referral",   "name_ar": "🌟 أول دعوة",         "condition": "referrals",  "threshold": 1},
-    {"id": "five_referrals",   "name_en": "🌟 5 Referrals",      "name_ar": "🌟 5 دعوات",          "condition": "referrals",  "threshold": 5},
-    {"id": "fifty_referrals",  "name_en": "🌟 50 Referrals",     "name_ar": "🌟 50 دعوة",          "condition": "referrals",  "threshold": 50},
+
     {"id": "daily_streak_7",   "name_en": "📅 7-Day Streak",     "name_ar": "📅 7 أيام متواصلة",   "condition": "daily",      "threshold": 7},
     {"id": "wheel_winner",     "name_en": "🎰 Lucky Winner",     "name_ar": "🎰 الفائز المحظوظ",   "condition": "wheel",      "threshold": 1},
 ]

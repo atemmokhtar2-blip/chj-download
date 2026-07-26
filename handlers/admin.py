@@ -17,15 +17,14 @@ from database.users import (
     get_user, get_total_users, get_new_users_today, get_active_today,
     get_users_page, search_users, get_all_user_ids, ban_user, unban_user,
     set_vip, adjust_points_admin, get_total_points_issued,
-    get_top_referrers, update_user,
+    update_user,
 )
 from database.downloads import (
     get_downloads_today, get_downloads_week, get_downloads_month,
     get_downloads_by_platform, get_total_downloads, get_user_download_stats,
 )
 from database.cache import get_cache_count, get_cache_hits
-from database.referrals import get_referral_stats
-from config.settings import POINTS_REFERRAL
+
 from utils.helpers import format_size
 
 logger = logging.getLogger(__name__)
@@ -59,7 +58,6 @@ async def admin_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             InlineKeyboardButton(t(lang, "admin_maintenance_btn"), callback_data="admin_maintenance"),
         ],
         [
-            InlineKeyboardButton(t(lang, "admin_refstats_btn"), callback_data="admin_refstats"),
             InlineKeyboardButton(t(lang, "admin_vip_btn"), callback_data="admin_vip"),
         ],
         [
@@ -104,8 +102,7 @@ async def admin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text(t(lang, "admin_search_prompt"))
     elif data == "admin_maintenance":
         await _show_maintenance_toggle(query, lang)
-    elif data == "admin_refstats":
-        await _show_referral_stats(query, lang)
+
     elif data == "admin_vip":
         ADMIN_CONVERSATION_STATES[user.id] = "vip"
         await query.edit_message_text(t(lang, "admin_vip_prompt"))
@@ -168,8 +165,6 @@ async def _show_admin_panel(query, lang: str):
     cache_hits = get_cache_hits()
     total_points = get_total_points_issued()
     total_downloads = get_total_downloads()
-    ref_stats = get_referral_stats() if hasattr(get_referral_stats, "__call__") else {"total": 0, "completed": 0, "pending": 0}
-
     keyboard = [
         [
             InlineKeyboardButton(t(lang, "admin_users_btn"), callback_data="admin_users"),
@@ -181,7 +176,6 @@ async def _show_admin_panel(query, lang: str):
         ],
         [
             InlineKeyboardButton(t(lang, "admin_maintenance_btn"), callback_data="admin_maintenance"),
-            InlineKeyboardButton(t(lang, "admin_refstats_btn"), callback_data="admin_refstats"),
         ],
     ]
 
@@ -197,7 +191,7 @@ async def _show_admin_panel(query, lang: str):
              cache_hits=cache_hits,
              queue=0,
              points_issued=total_points,
-             referrals=ref_stats.get("completed", 0) if isinstance(ref_stats, dict) else 0,
+             referrals=0,
              )
     await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML")
 
@@ -257,7 +251,7 @@ async def _show_user_detail(query, lang: str, target_id: int):
              username="@" + (user.get("username") or "-"),
              points=user.get("points", 0),
              downloads=user.get("downloads", 0),
-             referrals=user.get("referrals", 0),
+             referrals=0,
              is_banned=is_banned_str,
              join_date=user.get("join_date", "?"),
              )
@@ -388,30 +382,7 @@ async def _show_maintenance_toggle(query, lang: str):
     )
 
 
-async def _show_referral_stats(query, lang: str):
-    total = get_referral_stats()["total"] if callable(get_referral_stats) else 0
-    completed = get_referral_stats()["completed"] if callable(get_referral_stats) else 0
-    pending = get_referral_stats()["pending"] if callable(get_referral_stats) else 0
-    total_referrals = get_top_referrers(limit=100)
-    total_ref_count = sum(u.get("referrals", 0) for u in total_referrals)
 
-    top_referrers = get_top_referrers(limit=5)
-    top_lines = ""
-    for i, u in enumerate(top_referrers, 1):
-        name = u.get("first_name", "?") or u.get("username", "?")
-        refs = u.get("referrals", 0)
-        top_lines += f"{i}. 👤 {name} — {refs} {t(lang, 'admin_referral_invites')}\n"
-
-    text = (
-        t(lang, "admin_refstats_title") + "\n\n"
-        f"📊 {t(lang, 'admin_refstats_total')}: <b>{total}</b>\n"
-        f"✅ {t(lang, 'admin_refstats_completed')}: <b>{completed}</b>\n"
-        f"⏳ {t(lang, 'admin_refstats_pending')}: <b>{pending}</b>\n\n"
-        f"🏆 <b>{t(lang, 'admin_top_referrers')}:</b>\n{top_lines}"
-    )
-
-    keyboard = [[InlineKeyboardButton("🔙", callback_data="admin_panel")]]
-    await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML")
 
 
 # ─── Text message handlers for admin conversations ───

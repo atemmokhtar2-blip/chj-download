@@ -5,9 +5,7 @@ from .db import db_cursor
 from config.settings import POINTS_DAILY
 
 
-def generate_referral_code(user_id: int) -> str:
-    raw = f"{user_id}-{secrets.token_hex(4)}"
-    return hashlib.md5(raw.encode()).hexdigest()[:8].upper()
+
 
 
 def get_user(user_id: int) -> dict | None:
@@ -18,14 +16,13 @@ def get_user(user_id: int) -> dict | None:
 
 
 def create_user(user_id: int, username: str, first_name: str, last_name: str,
-                language: str = "en", referred_by: int = None) -> dict:
-    code = generate_referral_code(user_id)
+                language: str = "en") -> dict:
     with db_cursor() as c:
         c.execute("""
             INSERT OR IGNORE INTO users
-            (user_id, username, first_name, last_name, language, referral_code, referred_by, points)
-            VALUES (?, ?, ?, ?, ?, ?, ?, 10)
-        """, (user_id, username, first_name, last_name, language, code, referred_by))
+            (user_id, username, first_name, last_name, language, points)
+            VALUES (?, ?, ?, ?, ?, 10)
+        """, (user_id, username, first_name, last_name, language))
     return get_user(user_id)
 
 
@@ -44,10 +41,7 @@ def update_last_seen(user_id: int):
 
 
 def get_user_by_referral(code: str) -> dict | None:
-    with db_cursor() as c:
-        c.execute("SELECT * FROM users WHERE referral_code = ?", (code,))
-        row = c.fetchone()
-        return dict(row) if row else None
+    return None
 
 
 def add_points(user_id: int, points: int):
@@ -70,9 +64,7 @@ def increment_downloads(user_id: int):
         c.execute("UPDATE users SET downloads = downloads + 1 WHERE user_id = ?", (user_id,))
 
 
-def increment_referrals(user_id: int):
-    with db_cursor() as c:
-        c.execute("UPDATE users SET referrals = referrals + 1 WHERE user_id = ?", (user_id,))
+
 
 
 def get_all_user_ids() -> list[int]:
@@ -94,36 +86,7 @@ def get_new_users_today() -> int:
 
 
 def get_top_referrers(period: str = "all", limit: int = 10) -> list[dict]:
-    # Uses the referrals table for accurate period filtering by completed_at.
-    with db_cursor() as c:
-        if period == "weekly":
-            interval = "-7 days"
-        elif period == "monthly":
-            interval = "-30 days"
-        else:
-            interval = None
-
-        if interval:
-            c.execute("""
-                SELECT u.user_id, u.first_name, u.username,
-                       COUNT(r.id) AS referrals
-                FROM referrals r
-                INNER JOIN users u ON u.user_id = r.referrer_id
-                WHERE r.status = 'completed'
-                  AND r.completed_at >= datetime('now', ?)
-                GROUP BY r.referrer_id
-                ORDER BY referrals DESC
-                LIMIT ?
-            """, (interval, limit))
-        else:
-            c.execute("""
-                SELECT user_id, first_name, username, referrals
-                FROM users
-                WHERE referrals > 0
-                ORDER BY referrals DESC
-                LIMIT ?
-            """, (limit,))
-        return [dict(row) for row in c.fetchall()]
+    return []
 
 
 def get_total_points_issued() -> int:
@@ -175,7 +138,7 @@ def claim_daily(user_id: int) -> tuple[bool, int, int]:
 def get_users_page(offset: int = 0, limit: int = 20) -> list[dict]:
     with db_cursor() as c:
         c.execute("""
-            SELECT user_id, username, first_name, downloads, referrals, points, is_banned
+            SELECT user_id, username, first_name, downloads, points, is_banned
             FROM users ORDER BY join_date DESC LIMIT ? OFFSET ?
         """, (limit, offset))
         return [dict(row) for row in c.fetchall()]

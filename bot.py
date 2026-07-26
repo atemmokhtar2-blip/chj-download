@@ -39,7 +39,7 @@ from workers.crash_monitor import record_startup, record_crash
 MENU_BUTTONS = {
     "📥 Download",    "📥 تحميل",
     "👤 Profile",     "👤 حسابي",
-    "🎁 Referrals",   "🎁 الدعوات",
+
     "🏆 Achievements","🏆 الإنجازات",
     "⭐ Favorites",   "⭐ المفضلة",
     "🎰 Lucky Wheel", "🎰 عجلة الحظ",
@@ -63,8 +63,7 @@ async def message_router(update: Update, context):
         elif text in (t("en", "menu_profile"), t("ar", "menu_profile")):
             await profile_command(update, context)
 
-        elif text in (t("en", "menu_referrals"), t("ar", "menu_referrals")):
-            await referral_command(update, context)
+
 
         elif text in (t("en", "menu_achievements"), t("ar", "menu_achievements")):
             await achievements_command(update, context)
@@ -119,7 +118,7 @@ def build_application() -> Application:
 
     app.add_handler(CommandHandler("profile",      profile_command))
     app.add_handler(CommandHandler("history",      history_command))
-    app.add_handler(CommandHandler("referral",     referral_command))
+
     app.add_handler(CommandHandler("points",       points_command))
     app.add_handler(CommandHandler("daily",        daily_command))
     app.add_handler(CommandHandler("wheel",        wheel_command))
@@ -141,7 +140,7 @@ def build_application() -> Application:
     app.add_handler(CommandHandler("maintenance", admin_command))
     app.add_handler(CommandHandler("points", admin_command))
     app.add_handler(CommandHandler("vip", admin_command))
-    app.add_handler(CommandHandler("refstats", admin_command))
+
     app.add_handler(CallbackQueryHandler(admin_callback, pattern="^admin_"))
 
     app.add_handler(CallbackQueryHandler(verify_subscription_callback, pattern="^verify_sub$"))

@@ -390,7 +390,7 @@ async def download_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         check_and_award(
             user.id,
             get_user(user.id).get("downloads", 0),
-            get_user(user.id).get("referrals", 0)
+            0
         )
 
         # Silent first download reward (points only, no messages)
@@ -431,14 +431,3 @@ async def _handle_first_download_silent(user_id: int):
         return
     if fresh.get("downloads", 0) == 1:
         add_points(user_id, POINTS_FIRST_DOWNLOAD)
-        # Credit referral on first download
-        from database.referrals import get_referral_by_referred, complete_referral, log_audit as log_ref
-        from database.users import increment_referrals
-        referral = get_referral_by_referred(user_id)
-        if referral and referral["status"] == "pending" and not referral["reward_given"]:
-            credited = complete_referral(user_id)
-            if credited:
-                add_points(referral["referrer_id"], POINTS_REFERRAL)
-                increment_referrals(referral["referrer_id"])
-                log_ref("reward_given", referral["referrer_id"], user_id,
-                        f"+{POINTS_REFERRAL} pts after first download")
