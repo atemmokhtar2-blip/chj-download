@@ -28,10 +28,10 @@ STRINGS = {
     "menu_download":     "📥 Download",
     "menu_profile":      "👤 Profile",
     "menu_favorites":    "⭐ Favorites",
-    "menu_invite":       "🎁 Invite Friends",
+
     "menu_settings":     "⚙️ Settings",
     "menu_help":         "ℹ️ Help",
-    "menu_referrals":    "🎁 Referrals",
+
     "menu_achievements": "🏆 Achievements",
     "menu_wheel":        "🎰 Lucky Wheel",
 
@@ -86,7 +86,7 @@ STRINGS = {
         "Earn points via:\n"
         "• 🎁 Daily Reward (/daily)\n"
         "• 🎰 Lucky Wheel (/wheel)\n"
-        "• 👥 Referrals (/referral)"
+
     ),
     "not_enough_points_short": "❌ Not enough points. Use /daily or /wheel to earn more.",
 
@@ -115,7 +115,7 @@ STRINGS = {
         "🏅 <b>Level:</b> {level}\n"
         "📥 <b>Downloads:</b> {downloads}\n"
         "   📹 Video: <b>{video_downloads}</b>  🎵 Audio: <b>{audio_downloads}</b>\n"
-        "👥 <b>Referrals:</b> {referrals}\n"
+
         "🏆 <b>Achievements:</b> {achievements}\n"
         "📅 <b>Joined:</b> {join_date}"
     ),
@@ -128,34 +128,12 @@ STRINGS = {
     "history_empty": "📭 You haven't downloaded anything yet.",
     "history_item":  "• <b>{title}</b>\n  📺 {platform} | 🎬 {quality} | 📅 {date}\n",
 
-    "referral_text": (
-        "🎁 <b>Rewards Program</b>\n\n"
-        "Invite your friends and earn points!\n\n"
-        "<b>Requirements:</b>\n"
-        "✅ Friend starts the bot\n"
-        "✅ Friend subscribes to the channel\n"
-        "✅ Friend completes first download\n\n"
-        "<b>Reward:</b> ⭐ {points_per_referral} points per referral\n\n"
-        "🔗 <b>Your link:</b>\n<code>{link}</code>\n\n"
-        "✅ Confirmed referrals: <b>{count}</b>"
-    ),
-    "referral_stats": (
-        "📊 <b>Referral Stats</b>\n"
-        "• Total invited: {total}\n"
-        "• Completed (rewarded): {completed}\n"
-        "• Pending (not downloaded yet): {pending}"
-    ),
-    "referral_history_title":   "🕓 <b>Recent Referrals</b>\n",
-    "referral_history_done":    "  ✅ {name} — reward given\n",
-    "referral_history_pending": "  ⏳ {name} — pending first download\n",
-    "referral_history_empty":   "📭 No referrals yet. Share your link to earn points!",
-    "referral_earned":          "🎉 <b>Referral reward!</b> Your friend completed their first download. +{points} points added!",
-    "share_button":             "📤 Share Link",
+
 
     "points_text": (
         "⭐ <b>Your Points: {points}</b>\n\n"
         "💡 Each download costs 1 point.\n"
-        "Earn more via /daily, /wheel, and /referral.\n\n"
+        "Earn more via /daily and /wheel.\n\n"
         "🎁 <b>Available Rewards:</b>\n"
         "{rewards}"
     ),
@@ -174,9 +152,7 @@ STRINGS = {
     "wheel_cooldown":    "⏳ You already spun today! Come back in {hours}h {minutes}m.",
     "wheel_jackpot":     "🎊 <b>JACKPOT!</b> You won 10 points!\n\n⭐ Total: {total} pts 🔥",
 
-    "leaderboard_title": "🏆 <b>Top Referrers</b>\n\n",
-    "leaderboard_item":  "{rank}. {name} — {count} referrals\n",
-    "leaderboard_empty": "No referrers yet. Be the first!",
+
     "weekly_tab":        "📅 Weekly",
     "monthly_tab":       "🗓 Monthly",
 
@@ -202,15 +178,15 @@ STRINGS = {
         "<b>💡 Points System:</b>\n"
         "• Start with 10 free points\n"
         "• Each download costs 1 point\n"
-        "• Earn via /daily, /wheel, /referral\n\n"
+        "• Earn via /daily and /wheel\n\n"
         "<b>📋 Commands:</b>\n"
         "/profile — My profile & level\n"
-        "/referral — Invite friends (+2 pts each)\n"
+
         "/points — Points & rewards\n"
         "/daily — Daily reward (+5 pts)\n"
         "/wheel — Lucky wheel spin\n"
         "/favorites — Saved downloads\n"
-        "/leaderboard — Top referrers\n"
+
         "/achievements — My achievements\n\n"
         "<b>✅ Supported Platforms:</b>\n"
         "YouTube • TikTok • Instagram • Facebook\n"
@@ -234,11 +210,7 @@ STRINGS = {
     "goal_item_next":   "🔜 {threshold} users — {reward} ({remaining} to go)\n",
     "goal_item_future": "🔒 {threshold} users — {reward}\n",
 
-    "invite_after_download": (
-        "🎁 <b>Invite friends and earn points!</b>\n"
-        "Get {points_per_referral} points per referral.\n\n"
-        "🔗 {link}"
-    ),
+
 
     "session_no_url":   "❌ No URL found in session.",
     "session_expired":  "⏳ Session expired. Please resend the URL.",
@@ -271,7 +243,7 @@ STRINGS = {
     "admin_system_btn": "🖥 System",
     "admin_search_btn": "🔍 Search",
     "admin_maintenance_btn": "🚧 Maintenance",
-    "admin_refstats_btn": "📊 Referrals",
+
     "admin_vip_btn": "⭐ VIP",
     "admin_points_btn": "💰 Points",
     "admin_ban_btn": "🚫 Ban",
@@ -309,12 +281,7 @@ STRINGS = {
     "maintenance_off": "🟢 Maintenance mode disabled!",
     "maintenance_on_status": "🔴 Active",
     "maintenance_off_status": "🟢 Inactive",
-    "admin_refstats_title": "📊 <b>Referral Stats</b>",
-    "admin_refstats_total": "Total Referrals",
-    "admin_refstats_completed": "Completed",
-    "admin_refstats_pending": "Pending",
-    "admin_top_referrers": "Top Referrers",
-    "admin_referral_invites": "referrals",
+
     "yes": "Yes",
     "no": "No",
     "profile_admin_badge": "\n👑 <b>Admin</b>",
@@ -327,7 +294,7 @@ STRINGS = {
         "📥 Today: <b>{downloads_today}</b>  📅 Week: <b>{downloads_week}</b>  📅 Month: <b>{downloads_month}</b>\n\n"
         "🎬 YouTube: <b>{youtube}</b>  📘 Facebook: <b>{facebook}</b>  📌 Pinterest: <b>{pinterest}</b>\n\n"
         "💾 Cache Hits: <b>{cache_hits}</b>  📦 Queue: <b>{queue}</b>\n"
-        "⭐ Points Issued: <b>{points_issued}</b>  🎁 Referrals: <b>{referrals}</b>\n"
+        "⭐ Points Issued: <b>{points_issued}</b>\n"
         "🟢 Bot Status: <b>Online</b>"
     ),
 

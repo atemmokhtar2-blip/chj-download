@@ -28,10 +28,10 @@ STRINGS = {
     "menu_download":     "📥 تحميل",
     "menu_profile":      "👤 حسابي",
     "menu_favorites":    "⭐ المفضلة",
-    "menu_invite":       "🎁 دعوة الأصدقاء",
+
     "menu_settings":     "⚙️ الإعدادات",
     "menu_help":         "ℹ️ المساعدة",
-    "menu_referrals":    "🎁 الدعوات",
+
     "menu_achievements": "🏆 الإنجازات",
     "menu_wheel":        "🎰 عجلة الحظ",
 
@@ -86,7 +86,7 @@ STRINGS = {
         "اكسب نقاطاً عبر:\n"
         "• 🎁 المكافأة اليومية (/daily)\n"
         "• 🎰 عجلة الحظ (/wheel)\n"
-        "• 👥 الدعوات (/referral)"
+
     ),
     "not_enough_points_short": "❌ نقاط غير كافية. استخدم /daily أو /wheel لكسب المزيد.",
 
@@ -115,7 +115,7 @@ STRINGS = {
         "🏅 <b>المستوى:</b> {level}\n"
         "📥 <b>عدد التحميلات:</b> {downloads}\n"
         "   📹 فيديو: <b>{video_downloads}</b>  🎵 صوت: <b>{audio_downloads}</b>\n"
-        "👥 <b>عدد الدعوات:</b> {referrals}\n"
+
         "🏆 <b>الإنجازات:</b> {achievements}\n"
         "📅 <b>تاريخ الانضمام:</b> {join_date}"
     ),
@@ -128,34 +128,12 @@ STRINGS = {
     "history_empty": "📭 لم تقم بأي تحميل بعد.",
     "history_item":  "• <b>{title}</b>\n  📺 {platform} | 🎬 {quality} | 📅 {date}\n",
 
-    "referral_text": (
-        "🎁 <b>برنامج المكافآت</b>\n\n"
-        "قم بدعوة أصدقائك واحصل على نقاط!\n\n"
-        "<b>الشروط:</b>\n"
-        "✅ يبدأ البوت\n"
-        "✅ يشترك في القناة\n"
-        "✅ يحمل أول ملف\n\n"
-        "<b>المكافأة:</b> ⭐ {points_per_referral} نقطة لكل دعوة\n\n"
-        "🔗 <b>رابطك:</b>\n<code>{link}</code>\n\n"
-        "✅ الدعوات المؤكدة: <b>{count}</b>"
-    ),
-    "referral_stats": (
-        "📊 <b>إحصائيات الدعوات</b>\n"
-        "• إجمالي المدعوين: {total}\n"
-        "• مكتملة (تم المكافأة): {completed}\n"
-        "• معلقة (لم يحملوا بعد): {pending}"
-    ),
-    "referral_history_title":   "🕓 <b>آخر الدعوات</b>\n",
-    "referral_history_done":    "  ✅ {name} — تمت المكافأة\n",
-    "referral_history_pending": "  ⏳ {name} — بانتظار أول تحميل\n",
-    "referral_history_empty":   "📭 لا توجد دعوات بعد. شارك رابطك لكسب النقاط!",
-    "referral_earned":          "🎉 <b>مكافأة دعوة!</b> أكمل صديقك أول تحميل. +{points} نقطة أضيفت!",
-    "share_button":             "📤 مشاركة الرابط",
+
 
     "points_text": (
         "⭐ <b>نقاطك: {points}</b>\n\n"
         "💡 كل تحميل يكلف نقطة واحدة.\n"
-        "اكسب المزيد عبر /daily و/wheel و/referral.\n\n"
+        "اكسب المزيد عبر /daily و/wheel.\n\n"
         "🎁 <b>المكافآت المتاحة:</b>\n"
         "{rewards}"
     ),
@@ -174,9 +152,7 @@ STRINGS = {
     "wheel_cooldown":  "⏳ لقد أدرت العجلة اليوم! عد بعد {hours}س {minutes}د.",
     "wheel_jackpot":   "🎊 <b>جاكبوت!</b> ربحت 10 نقاط!\n\n⭐ المجموع: {total} نقطة 🔥",
 
-    "leaderboard_title": "🏆 <b>أفضل المحيلين</b>\n\n",
-    "leaderboard_item":  "{rank}. {name} — {count} دعوة\n",
-    "leaderboard_empty": "لا يوجد محيلون بعد. كن الأول!",
+
     "weekly_tab":        "📅 أسبوعي",
     "monthly_tab":       "🗓 شهري",
 
@@ -202,15 +178,15 @@ STRINGS = {
         "<b>💡 نظام النقاط:</b>\n"
         "• تبدأ بـ 10 نقاط مجانية\n"
         "• كل تحميل يكلف نقطة واحدة\n"
-        "• اكسب عبر /daily و/wheel و/referral\n\n"
+        "• اكسب عبر /daily و/wheel\n\n"
         "<b>📋 الأوامر:</b>\n"
         "/profile — ملفك الشخصي ومستواك\n"
-        "/referral — دعوة الأصدقاء (+2 نقطة لكل دعوة)\n"
+
         "/points — النقاط والمكافآت\n"
         "/daily — المكافأة اليومية (+5 نقاط)\n"
         "/wheel — عجلة الحظ\n"
         "/favorites — المفضلة\n"
-        "/leaderboard — أفضل المحيلين\n"
+
         "/achievements — إنجازاتي\n\n"
         "<b>✅ المنصات المدعومة:</b>\n"
         "YouTube • TikTok • Instagram • Facebook\n"
@@ -234,11 +210,7 @@ STRINGS = {
     "goal_item_next":   "🔜 {threshold} مستخدم — {reward} (يتبقى {remaining})\n",
     "goal_item_future": "🔒 {threshold} مستخدم — {reward}\n",
 
-    "invite_after_download": (
-        "🎁 <b>ادعُ أصدقاءك واكسب نقاطاً!</b>\n"
-        "احصل على {points_per_referral} نقطة لكل دعوة.\n\n"
-        "🔗 {link}"
-    ),
+
 
     "session_no_url":   "❌ لم يُعثر على رابط في الجلسة.",
     "session_expired":  "⏳ انتهت الجلسة. يرجى إرسال الرابط مجدداً.",
@@ -271,7 +243,7 @@ STRINGS = {
     "admin_system_btn": "🖥 النظام",
     "admin_search_btn": "🔍 بحث",
     "admin_maintenance_btn": "🚧 الصيانة",
-    "admin_refstats_btn": "📊 الدعوات",
+
     "admin_vip_btn": "⭐ VIP",
     "admin_points_btn": "💰 نقاط",
     "admin_ban_btn": "🚫 حظر",
@@ -327,7 +299,7 @@ STRINGS = {
         "📥 اليوم: <b>{downloads_today}</b>  📅 الأسبوع: <b>{downloads_week}</b>  📅 الشهر: <b>{downloads_month}</b>\n\n"
         "🎬 YouTube: <b>{youtube}</b>  📘 Facebook: <b>{facebook}</b>  📌 Pinterest: <b>{pinterest}</b>\n\n"
         "💾 نجاح الكاش: <b>{cache_hits}</b>  📦 الانتظار: <b>{queue}</b>\n"
-        "⭐ نقاط موزعة: <b>{points_issued}</b>  🎁 دعوات: <b>{referrals}</b>\n"
+        "⭐ نقاط موزعة: <b>{points_issued}</b>\n"
         "🟢 حالة البوت: <b>متصل</b>"
     ),
 

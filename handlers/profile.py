@@ -60,7 +60,7 @@ async def profile_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
              downloads=db_user.get("downloads", 0),
              video_downloads=dl_stats["video"],
              audio_downloads=dl_stats["audio"],
-             referrals=db_user.get("referrals", 0),
+
              points=points,
              level=level,
              achievements=len(earned_ids),
@@ -158,7 +158,7 @@ async def _handle_wheel_spin(query, lang: str, user_id: int):
     # Award wheel achievement if first time
     check_and_award(user_id,
                     fresh.get("downloads", 0) if fresh else 0,
-                    fresh.get("referrals", 0) if fresh else 0)
+                    0)
 
 
 @require_subscription
@@ -188,50 +188,9 @@ async def history_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 @require_subscription
 async def referral_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = update.effective_user
-    db_user = get_user(user.id)
+    db_user = get_user(update.effective_user.id)
     lang = db_user.get("language", "en")
-
-    code = db_user.get("referral_code", "")
-    bot_info = await context.bot.get_me()
-    ref_link = f"https://t.me/{bot_info.username}?start=REF_{code}"
-
-    from database.referrals import get_referrer_stats, get_referral_history
-    from config.settings import POINTS_REFERRAL
-    stats = get_referrer_stats(user.id)
-    history = get_referral_history(user.id, 5)
-
-    history_text = ""
-    if history:
-        history_text = "\n\n" + t(lang, "referral_history_title")
-        for entry in history:
-            name = entry.get("first_name") or entry.get("username") or f"#{entry['referred_id']}"
-            if entry["status"] == "completed":
-                history_text += t(lang, "referral_history_done", name=name[:20])
-            else:
-                history_text += t(lang, "referral_history_pending", name=name[:20])
-    else:
-        history_text = "\n\n" + t(lang, "referral_history_empty")
-
-    main_text = t(lang, "referral_text",
-                  link=ref_link,
-                  count=stats["completed"],
-                  points_per_referral=POINTS_REFERRAL)
-    stats_text = t(lang, "referral_stats",
-                   total=stats["total"],
-                   completed=stats["completed"],
-                   pending=stats["pending"])
-
-    share_url = f"https://t.me/share/url?url={ref_link}&text=Join PrimeDownloader!"
-    keyboard = [[
-        InlineKeyboardButton(t(lang, "share_button"), url=share_url)
-    ]]
-
-    await update.message.reply_text(
-        main_text + "\n\n" + stats_text + history_text,
-        reply_markup=InlineKeyboardMarkup(keyboard),
-        parse_mode="HTML"
-    )
+    await update.message.reply_text("نظام الإحالات غير متاح حالياً.")
 
 
 @require_subscription
@@ -399,15 +358,7 @@ async def leaderboard_command(update: Update, context: ContextTypes.DEFAULT_TYPE
         InlineKeyboardButton(t(lang, "monthly_tab"), callback_data="lb_monthly"),
     ]]
 
-    from database.users import get_top_referrers
-    users = get_top_referrers(period="all", limit=10)
-    text = t(lang, "leaderboard_title")
-    if not users:
-        text += t(lang, "leaderboard_empty")
-    else:
-        for i, u in enumerate(users, 1):
-            name = u.get("first_name") or u.get("username") or f"User{u['user_id']}"
-            text += t(lang, "leaderboard_item", rank=i, name=name, count=u["referrals"])
+    text = "لوحة الصدارة غير متاحة حالياً."
 
     await update.message.reply_text(
         text,

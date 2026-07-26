@@ -6,9 +6,7 @@ from database.users import (
     get_user, create_user, get_user_by_referral,
     update_user
 )
-from database.referrals import (
-    create_pending_referral, get_referral_by_referred, log_audit
-)
+
 from services.subscription import check_subscription, build_subscription_keyboard
 from middlewares.auth import is_admin
 from locales import t
@@ -27,40 +25,15 @@ def get_main_keyboard(lang: str, user_id: int = None) -> ReplyKeyboardMarkup:
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
-    args = context.args or []
-
-    ref_code = args[0].replace("REF_", "") if args and args[0].startswith("REF_") else None
-
     db_user = get_user(user.id)
 
     if not db_user:
-        # Resolve referrer — reject self-referral at lookup time
-        referred_by = None
-        if ref_code:
-            referrer = get_user_by_referral(ref_code)
-            if referrer and referrer["user_id"] != user.id:
-                referred_by = referrer["user_id"]
-            elif referrer and referrer["user_id"] == user.id:
-                log_audit("rejected_self", user.id, user.id, "Self-referral attempt")
-
         create_user(
             user_id=user.id,
             username=user.username or "",
             first_name=user.first_name or "",
-            last_name=user.last_name or "",
-            referred_by=referred_by
+            last_name=user.last_name or ""
         )
-
-        # Create the pending referral row immediately — UNIQUE(referred_id)
-        # guarantees this can only ever succeed once per new user.
-        if referred_by:
-            created = create_pending_referral(referred_by, user.id)
-            if created:
-                log_audit("registered", referred_by, user.id,
-                          f"New user registered via referral code {ref_code}")
-            else:
-                log_audit("rejected_duplicate", referred_by, user.id,
-                          "Referral row already existed")
 
         keyboard = [[
             InlineKeyboardButton("🇺🇸 English", callback_data="lang_en"),
@@ -115,12 +88,7 @@ async def language_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await send_subscription_prompt_message(query.message.chat_id, context, lang)
         return ConversationHandler.END
 
-    # User is already subscribed at language-pick time — log the event
-    # but do NOT credit the referral yet: that only happens after first download.
-    referral = get_referral_by_referred(user.id)
-    if referral and referral["status"] == "pending":
-        log_audit("subscribed", referral["referrer_id"], user.id,
-                  "Subscribed before first download (reward pending)")
+
 
     await context.bot.send_message(
         chat_id=query.message.chat_id,
@@ -164,11 +132,7 @@ async def verify_subscription_callback(update: Update, context: ContextTypes.DEF
 
     await query.answer()
 
-    # Log subscription event — referral reward still not given yet (first download required)
-    referral = get_referral_by_referred(user.id)
-    if referral and referral["status"] == "pending":
-        log_audit("subscribed", referral["referrer_id"], user.id,
-                  "Verified channel subscription (reward pending first download)")
+
 
     await query.edit_message_text(t(lang, "subscribed_ok"))
     await context.bot.send_message(
