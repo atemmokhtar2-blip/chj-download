@@ -12,3 +12,5 @@ __pycache__/
 # Environment
 .env
 *.env
+logs/
+temp/
