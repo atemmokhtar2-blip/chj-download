@@ -22,23 +22,37 @@ def is_supported_url(url: str) -> bool:
 
 
 def get_platform(url: str) -> str:
-    netloc = urlparse(url).netloc.lower()
-    if "youtube" in netloc or "youtu.be" in netloc:
+    # Strip the leading "www." and trailing TLD-agnostic part for robust matching.
+    # We must compare full hostnames because naive substring checks are fragile:
+    #   "t.co" is a substring of "pinterest.com" (in the ".com" suffix),
+    #   "fb.com" could clash with other domains, etc.
+    netloc = urlparse(url).netloc.lower().lstrip("www.")
+
+    # Most-specific / multi-TLD platforms first
+    if netloc in ("pinterest.com", "pin.it") or netloc.endswith(
+        (".pinterest.com", "pinterest.fr", "pinterest.co.uk", "pinterest.de",
+         "pinterest.jp", "pinterest.ca", "pinterest.es", "pinterest.it",
+         "pinterest.com.au", "pinterest.com.mx", "pinterest.nz",
+         ".pinterest.fr", ".pinterest.co.uk", ".pinterest.de",
+         ".pinterest.jp", ".pinterest.ca", ".pinterest.es", ".pinterest.it",
+         ".pinterest.com.au", ".pinterest.com.mx", ".pinterest.nz")
+    ) or "pinterest." in netloc:
+        return "Pinterest"
+    if netloc == "youtu.be" or "youtube" in netloc or netloc.endswith(".youtube.com"):
         return "YouTube"
     if "tiktok" in netloc:
         return "TikTok"
-    if "instagram" in netloc or "instagr.am" in netloc:
+    if netloc == "instagr.am" or "instagram" in netloc:
         return "Instagram"
-    if "facebook" in netloc or "fb.watch" in netloc or "fb.com" in netloc:
+    if netloc in ("fb.watch", "fb.com") or "facebook" in netloc:
         return "Facebook"
-    if "twitter" in netloc or "x.com" in netloc or "t.co" in netloc:
+    # Twitter / X: match exact short domains only, not substrings
+    if netloc in ("x.com", "t.co") or "twitter" in netloc:
         return "Twitter/X"
     if "threads.net" in netloc:
         return "Threads"
-    if "reddit" in netloc or "redd.it" in netloc:
+    if netloc == "redd.it" or "reddit" in netloc:
         return "Reddit"
-    if "pinterest" in netloc or "pin.it" in netloc:
-        return "Pinterest"
     if "snapchat" in netloc:
         return "Snapchat"
     if "vimeo" in netloc:
