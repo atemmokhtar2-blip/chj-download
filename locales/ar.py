@@ -260,6 +260,64 @@ STRINGS = {
         "يرجى المحاولة لاحقاً. 🙏"
     ),
 
+    # ─── Admin ───
+    "admin_welcome": (
+        "👑 <b>لوحة تحكم الأدمن</b>\n\n"
+        "أهلاً بك في لوحة التحكم. اختر عملية:\n"
+    ),
+    "admin_panel_btn": "📊 الإحصائيات",
+    "admin_users_btn": "👥 المستخدمون",
+    "admin_broadcast_btn": "📢 بث",
+    "admin_system_btn": "🖥 النظام",
+    "admin_search_btn": "🔍 بحث",
+    "admin_maintenance_btn": "🚧 الصيانة",
+    "admin_refstats_btn": "📊 الدعوات",
+    "admin_vip_btn": "⭐ VIP",
+    "admin_points_btn": "💰 نقاط",
+    "admin_ban_btn": "🚫 حظر",
+    "admin_no_users": "📭 لا يوجد مستخدمون.",
+    "admin_users_title": "👥 <b>المستخدمون</b>",
+    "admin_user_not_found": "❌ لم يتم العثور على المستخدم.",
+    "admin_search_prompt": "🔍 <b>ابحث عن مستخدم:</b>\n\nأرسل ID أو اسم المستخدم:",
+    "admin_search_results": "🔍 <b>نتائج البحث:</b>",
+    "admin_vip_prompt": "⭐ <b>تعيين VIP:</b>\n\nأرسل: <code>user_id days</code>\nمثال: 123456 30",
+    "admin_vip_usage": "❌ الاستخدام: <code>user_id days</code>\nمثال: 123456 30",
+    "admin_vip_set": "✅ تم تعيين VIP للمستخدم <code>{user_id}</code> لمدة <b>{days}</b> يوم.",
+    "admin_points_prompt": "💰 <b>تعديل نقاط:</b>\n\nأرسل: <code>user_id amount</code>\n(قيمة موجبة للإضافة، سالبة للحذف)\nمثال: 123456 10",
+    "admin_points_usage": "❌ الاستخدام: <code>user_id amount</code>\nمثال: 123456 10",
+    "admin_points_set": "✅ تم تعديل نقاط المستخدم <code>{user_id}</code>. النقاط الجديدة: <b>{new_total}</b>",
+    "admin_points_negative_error": "❌ لا يمكن جعل النقاط سالبة.",
+    "admin_ban_prompt": "🚫 <b>حظر/فك حظر:</b>\n\nأرسل ID أو @username:",
+    "admin_banned": "🚫 تم حظر المستخدم!",
+    "admin_unbanned": "✅ تم فك حظر المستخدم!",
+    "admin_broadcast_intro": (
+        "📢 <b>إرسال بث</b>\n\n"
+        "اضغط الزر أدناه ثم أرسل الرسالة التي تريد إرسالها لجميع المستخدمين."
+    ),
+    "admin_broadcast_send": "📤 إرسال رسالة بث",
+    "admin_broadcast_message_prompt": "📢 <b>أرسل الرسالة التي تريد بثها:</b>",
+    "admin_broadcast_progress": "📢 <b>جاري إرسال البث...</b>\n\n📤 تم: {done} / {total}",
+    "admin_broadcast_done": "✅ <b>اكتمل البث!</b>\n\n📤 إجمالي: {total}\n✅ نجح: {success}\n❌ فشل: {failed}",
+    "admin_broadcast_cancel": "❌ تم إلغاء البث.",
+    "admin_maintenance_text": (
+        "🚧 <b>وضع الصيانة</b>\n\n"
+        "الحالة الحالية: <b>{status}</b>"
+    ),
+    "admin_maintenance_on": "تشغيل",
+    "admin_maintenance_off": "إيقاف",
+    "maintenance_on": "🔴 تم تفعيل وضع الصيانة!",
+    "maintenance_off": "🟢 تم إيقاف وضع الصيانة!",
+    "maintenance_on_status": "🔴 مفعّل",
+    "maintenance_off_status": "🟢 متوقف",
+    "admin_refstats_title": "📊 <b>إحصائيات الدعوات</b>",
+    "admin_refstats_total": "إجمالي الدعوات",
+    "admin_refstats_completed": "مكتملة",
+    "admin_refstats_pending": "معلقة",
+    "admin_top_referrers": "أفضل المحيلين",
+    "admin_referral_invites": "دعوة",
+    "yes": "نعم",
+    "no": "لا",
+    "profile_admin_badge": "\n👑 <b>مسؤول</b>",
 
     "banned": "🚫 لقد تم حظرك من استخدام هذا البوت.",
 

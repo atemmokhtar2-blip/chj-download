@@ -14,6 +14,15 @@ from utils.ffmpeg_check import FFMPEG_AVAILABLE, FFMPEG_PATH
 IMAGE_PLATFORMS = {"Pinterest", "Instagram"}
 # Platforms that serve audio
 AUDIO_PLATFORMS = {"SoundCloud", "Spotify"}
+# Pinterest-specific image URL patterns
+PINTEREST_IMAGE_PATTERNS = [
+    "i.pinimg.com",
+    "s.pinimg.com",
+    "pinimg.com",
+    "pinterest.com/pin/",
+    "pin.it/",
+]
+PINTEREST_IMAGE_EXTS = {"jpg", "jpeg", "png", "webp", "gif", "svg", "bmp"}
 
 
 def _extract_info_sync(url: str) -> dict:
@@ -28,6 +37,15 @@ def _extract_info_sync(url: str) -> dict:
     # For Pinterest and Instagram, allow images
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
         return ydl.extract_info(url, download=False)
+
+
+def _is_pinterest_image_url(url_str: str) -> bool:
+    """Check if a URL is a Pinterest image source."""
+    url_lower = url_str.lower()
+    if any(pattern in url_lower for pattern in PINTEREST_IMAGE_PATTERNS):
+        clean = url_str.split("?")[0].lower()
+        return any(clean.endswith(f".{ext}") for ext in PINTEREST_IMAGE_EXTS)
+    return False
 
 
 def _detect_media_type(info: dict, platform: str) -> str:
@@ -54,9 +72,25 @@ def _detect_media_type(info: dict, platform: str) -> str:
         for f in formats
     )
 
+    # Pinterest-specific image detection (before format checks)
+    if platform == "Pinterest":
+        # Check direct URL from yt-dlp info
+        direct_url = info.get("url", "")
+        if direct_url and _is_pinterest_image_url(direct_url):
+            return "image"
+        # Check if the page is an image pin (no video codec)
+        if not has_video and not formats:
+            ext = (info.get("ext") or "").lower()
+            if ext in PINTEREST_IMAGE_EXTS:
+                return "image"
+            thumbnail = info.get("thumbnail", "")
+            if thumbnail and _is_pinterest_image_url(thumbnail):
+                return "image"
+            return "image"  # Default Pinterest pins to image unless video is confirmed
+
     # If no formats at all, try to detect from other fields
     if not formats:
-        # Pinterest/Instagram images come with a direct URL
+        # Instagram/Pinterest images come with a direct URL
         ext = (info.get("ext") or "").lower()
         if ext in ("jpg", "jpeg", "png", "webp", "gif"):
             return "image"
@@ -136,7 +170,24 @@ async def analyze_url(url: str) -> dict | None:
                         "has_audio": acodec not in ("none", None),
                     }
 
+        # Sort qualities by height (ascending) and add smart labels
         qualities = sorted(quality_map.values(), key=lambda x: x["height"])
+        # Add quality tier labels
+        for q in qualities:
+            h = q["height"]
+            if h >= 2160:
+                q["tier"] = "4K"
+            elif h >= 1440:
+                q["tier"] = "1440p"
+            elif h >= 1080:
+                q["tier"] = "Full HD"
+            elif h >= 720:
+                q["tier"] = "HD"
+            elif h >= 480:
+                q["tier"] = "SD"
+            else:
+                q["tier"] = "Low"
+
         thumbnail = info.get("thumbnail", "")
         duration_secs = info.get("duration", 0)
 
@@ -189,21 +240,39 @@ def _extract_image_url(info: dict) -> str | None:
     direct_url = info.get("url", "")
     if direct_url:
         ext = direct_url.split("?")[0].lower()
-        if any(ext.endswith(x) for x in [".jpg", ".jpeg", ".png", ".webp", ".gif"]):
+        if any(ext.endswith(x) for x in [".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp", ".svg"]):
+            return direct_url
+        # Pinterest-specific: URLs from i.pinimg.com are always images
+        if _is_pinterest_image_url(direct_url):
             return direct_url
 
-    # Try formats
+    # Try formats - look for image formats
     formats = info.get("formats", [])
     for f in formats:
         furl = f.get("url", "")
         if furl:
             ext = furl.split("?")[0].lower()
-            if any(ext.endswith(x) for x in [".jpg", ".jpeg", ".png", ".webp"]):
+            if any(ext.endswith(x) for x in [".jpg", ".jpeg", ".png", ".webp", ".gif"]):
                 return furl
+            # Pinterest image URL in formats
+            if _is_pinterest_image_url(furl):
+                return furl
+
+    # Pinterest: try to extract from original image metadata
+    # yt-dlp sometimes stores the original image in the 'original_url' or similar fields
+    original = info.get("original_url") or info.get("image")
+    if original and _is_pinterest_image_url(original):
+        return original
 
     # Try thumbnail as fallback (Pinterest often puts image in thumbnail)
     thumbnail = info.get("thumbnail", "")
     if thumbnail:
+        # Clean up thumbnail URL - Pinterest thumbnails can be smaller, try to get original
+        # Convert thumbnail to original by replacing dimensions
+        if "i.pinimg.com" in thumbnail:
+            # Try to get the original image URL by modifying the path
+            original_url = thumbnail.replace("/236x/", "/originals/").replace("/474x/", "/originals/").replace("/736x/", "/originals/")
+            return original_url
         return thumbnail
 
     return info.get("url") or None

@@ -260,6 +260,64 @@ STRINGS = {
         "Please try again later. 🙏"
     ),
 
+    # ─── Admin ───
+    "admin_welcome": (
+        "👑 <b>Admin Panel</b>\n\n"
+        "Welcome to the admin panel. Choose an action:\n"
+    ),
+    "admin_panel_btn": "📊 Statistics",
+    "admin_users_btn": "👥 Users",
+    "admin_broadcast_btn": "📢 Broadcast",
+    "admin_system_btn": "🖥 System",
+    "admin_search_btn": "🔍 Search",
+    "admin_maintenance_btn": "🚧 Maintenance",
+    "admin_refstats_btn": "📊 Referrals",
+    "admin_vip_btn": "⭐ VIP",
+    "admin_points_btn": "💰 Points",
+    "admin_ban_btn": "🚫 Ban",
+    "admin_no_users": "📭 No users found.",
+    "admin_users_title": "👥 <b>Users</b>",
+    "admin_user_not_found": "❌ User not found.",
+    "admin_search_prompt": "🔍 <b>Search for a user:</b>\n\nSend ID or username:",
+    "admin_search_results": "🔍 <b>Search Results:</b>",
+    "admin_vip_prompt": "⭐ <b>Set VIP:</b>\n\nSend: <code>user_id days</code>\nExample: 123456 30",
+    "admin_vip_usage": "❌ Usage: <code>user_id days</code>\nExample: 123456 30",
+    "admin_vip_set": "✅ VIP set for user <code>{user_id}</code> for <b>{days}</b> days.",
+    "admin_points_prompt": "💰 <b>Adjust Points:</b>\n\nSend: <code>user_id amount</code>\n(Positive to add, negative to remove)\nExample: 123456 10",
+    "admin_points_usage": "❌ Usage: <code>user_id amount</code>\nExample: 123456 10",
+    "admin_points_set": "✅ Points adjusted for user <code>{user_id}</code>. New total: <b>{new_total}</b>",
+    "admin_points_negative_error": "❌ Cannot set negative points.",
+    "admin_ban_prompt": "🚫 <b>Ban/Unban:</b>\n\nSend ID or @username:",
+    "admin_banned": "🚫 User has been banned!",
+    "admin_unbanned": "✅ User has been unbanned!",
+    "admin_broadcast_intro": (
+        "📢 <b>Send Broadcast</b>\n\n"
+        "Click the button below then send the message you want to broadcast."
+    ),
+    "admin_broadcast_send": "📤 Send Broadcast",
+    "admin_broadcast_message_prompt": "📢 <b>Send the message you want to broadcast:</b>",
+    "admin_broadcast_progress": "📢 <b>Broadcasting...</b>\n\n📤 Sent: {done} / {total}",
+    "admin_broadcast_done": "✅ <b>Broadcast complete!</b>\n\n📤 Total: {total}\n✅ Success: {success}\n❌ Failed: {failed}",
+    "admin_broadcast_cancel": "❌ Broadcast cancelled.",
+    "admin_maintenance_text": (
+        "🚧 <b>Maintenance Mode</b>\n\n"
+        "Current status: <b>{status}</b>"
+    ),
+    "admin_maintenance_on": "Enable",
+    "admin_maintenance_off": "Disable",
+    "maintenance_on": "🔴 Maintenance mode enabled!",
+    "maintenance_off": "🟢 Maintenance mode disabled!",
+    "maintenance_on_status": "🔴 Active",
+    "maintenance_off_status": "🟢 Inactive",
+    "admin_refstats_title": "📊 <b>Referral Stats</b>",
+    "admin_refstats_total": "Total Referrals",
+    "admin_refstats_completed": "Completed",
+    "admin_refstats_pending": "Pending",
+    "admin_top_referrers": "Top Referrers",
+    "admin_referral_invites": "referrals",
+    "yes": "Yes",
+    "no": "No",
+    "profile_admin_badge": "\n👑 <b>Admin</b>",
 
     "banned": "🚫 You have been banned from using this bot.",
 
