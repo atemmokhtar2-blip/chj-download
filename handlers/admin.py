@@ -46,23 +46,23 @@ async def admin_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     keyboard = [
         [
-            InlineKeyboardButton(t(lang, "admin_panel_btn"), callback_data="admin_panel"),
-            InlineKeyboardButton(t(lang, "admin_users_btn"), callback_data="admin_users"),
+            InlineKeyboardButton("📊 " + t(lang, "admin_panel_btn"), callback_data="admin_panel"),
+            InlineKeyboardButton("👥 " + t(lang, "admin_users_btn"), callback_data="admin_users"),
         ],
         [
-            InlineKeyboardButton(t(lang, "admin_broadcast_btn"), callback_data="admin_broadcast"),
-            InlineKeyboardButton(t(lang, "admin_system_btn"), callback_data="admin_system"),
+            InlineKeyboardButton("📢 " + t(lang, "admin_broadcast_btn"), callback_data="admin_broadcast"),
+            InlineKeyboardButton("🖥 " + t(lang, "admin_system_btn"), callback_data="admin_system"),
         ],
         [
-            InlineKeyboardButton(t(lang, "admin_search_btn"), callback_data="admin_search"),
-            InlineKeyboardButton(t(lang, "admin_maintenance_btn"), callback_data="admin_maintenance"),
+            InlineKeyboardButton("🔍 " + t(lang, "admin_search_btn"), callback_data="admin_search"),
+            InlineKeyboardButton("🚧 " + t(lang, "admin_maintenance_btn"), callback_data="admin_maintenance"),
         ],
         [
-            InlineKeyboardButton(t(lang, "admin_vip_btn"), callback_data="admin_vip"),
+            InlineKeyboardButton("⭐ VIP", callback_data="admin_vip"),
+            InlineKeyboardButton("💰 " + t(lang, "admin_points_btn"), callback_data="admin_points"),
         ],
         [
-            InlineKeyboardButton(t(lang, "admin_points_btn"), callback_data="admin_points"),
-            InlineKeyboardButton(t(lang, "admin_ban_btn"), callback_data="admin_ban"),
+            InlineKeyboardButton("🚫 " + t(lang, "admin_ban_btn"), callback_data="admin_ban"),
         ],
     ]
 
@@ -99,19 +99,27 @@ async def admin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await _show_system_monitor(query, lang)
     elif data == "admin_search":
         ADMIN_CONVERSATION_STATES[user.id] = "search"
-        await query.edit_message_text(t(lang, "admin_search_prompt"))
+        keyboard = [[InlineKeyboardButton("🔙 رجوع", callback_data="admin_panel")]]
+        await query.edit_message_text(t(lang, "admin_search_prompt"), reply_markup=InlineKeyboardMarkup(keyboard))
     elif data == "admin_maintenance":
         await _show_maintenance_toggle(query, lang)
 
     elif data == "admin_vip":
         ADMIN_CONVERSATION_STATES[user.id] = "vip"
-        await query.edit_message_text(t(lang, "admin_vip_prompt"))
+        keyboard = [[InlineKeyboardButton("🔙 رجوع", callback_data="admin_panel")]]
+        await query.edit_message_text(t(lang, "admin_vip_prompt"), reply_markup=InlineKeyboardMarkup(keyboard))
     elif data == "admin_points":
         ADMIN_CONVERSATION_STATES[user.id] = "points"
-        await query.edit_message_text(t(lang, "admin_points_prompt"))
+        keyboard = [[InlineKeyboardButton("🔙 رجوع", callback_data="admin_panel")]]
+        await query.edit_message_text(t(lang, "admin_points_prompt"), reply_markup=InlineKeyboardMarkup(keyboard))
     elif data == "admin_ban":
         ADMIN_CONVERSATION_STATES[user.id] = "ban"
-        await query.edit_message_text(t(lang, "admin_ban_prompt"))
+        keyboard = [[InlineKeyboardButton("🔙 رجوع", callback_data="admin_panel")]]
+        await query.edit_message_text(t(lang, "admin_ban_prompt"), reply_markup=InlineKeyboardMarkup(keyboard))
+    elif data == "admin_ban_confirm":
+        ADMIN_CONVERSATION_STATES[user.id] = "ban"
+        keyboard = [[InlineKeyboardButton("🔙 رجوع", callback_data="admin_panel")]]
+        await query.edit_message_text(t(lang, "admin_ban_prompt"), reply_markup=InlineKeyboardMarkup(keyboard))
     elif data.startswith("admin_users_page_"):
         page = int(data.split("_")[-1])
         await _show_users_page(query, lang, page=page)
@@ -136,7 +144,8 @@ async def admin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text(t(lang, "admin_banned"))
     elif data == "admin_send_broadcast":
         ADMIN_CONVERSATION_STATES[user.id] = "broadcast"
-        await query.edit_message_text(t(lang, "admin_broadcast_message_prompt"))
+        keyboard = [[InlineKeyboardButton("🔙 رجوع", callback_data="admin_panel")]]
+        await query.edit_message_text(t(lang, "admin_broadcast_message_prompt"), reply_markup=InlineKeyboardMarkup(keyboard))
     elif data == "admin_broadcast_cancel":
         if user.id in ADMIN_CONVERSATION_STATES:
             del ADMIN_CONVERSATION_STATES[user.id]
@@ -147,10 +156,10 @@ async def admin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif data == "admin_set_points":
         ADMIN_CONVERSATION_STATES[user.id] = "points"
         await query.edit_message_text(t(lang, "admin_points_prompt"))
-    elif data == "admin_ban_user":
+    elif data == "admin_ban":
         ADMIN_CONVERSATION_STATES[user.id] = "ban"
         await query.edit_message_text(t(lang, "admin_ban_prompt"))
-    elif data == "admin_search_user":
+    elif data == "admin_search":
         ADMIN_CONVERSATION_STATES[user.id] = "search"
         await query.edit_message_text(t(lang, "admin_search_prompt"))
 
