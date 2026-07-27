@@ -356,7 +356,7 @@ async def download_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             fmt_id = next(
                 (q["format_id"] for q in info.get("qualities", []) if q["label"] == quality_label),
-                "bestvideo"
+                "bestvideo+bestaudio/best"
             )
             file_path = await download_video(info["url"], fmt_id, quality_label, update_progress)
             if not file_path:

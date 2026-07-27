@@ -285,23 +285,29 @@ async def analyze_url(url: str) -> dict | None:
                 continue
 
             label = f"{height}p"
+            has_audio = acodec not in ("none", None)
+            
+            # If this format doesn't have audio, we'll need to merge it with best audio
+            final_fmt_id = fmt_id if has_audio else f"{fmt_id}+bestaudio/best"
+
             if label not in quality_map:
                 quality_map[label] = {
                     "label": label,
                     "height": height,
-                    "format_id": fmt_id,
+                    "format_id": final_fmt_id,
                     "filesize": filesize,
-                    "has_audio": acodec not in ("none", None),
+                    "has_audio": has_audio,
                 }
             else:
                 existing = quality_map[label]
-                if filesize > existing["filesize"]:
+                # Prefer formats that already have audio, or larger filesizes
+                if (has_audio and not existing["has_audio"]) or (filesize > existing["filesize"]):
                     quality_map[label] = {
                         "label": label,
                         "height": height,
-                        "format_id": fmt_id,
+                        "format_id": final_fmt_id,
                         "filesize": filesize,
-                        "has_audio": acodec not in ("none", None),
+                        "has_audio": has_audio,
                     }
 
         # Sort qualities by height (ascending) and add smart labels
@@ -527,6 +533,10 @@ def _download_sync(url: str, fmt_id: str, out_path: str,
         "logtostderr": True,
         "no_color": True,
         "buffersize": 1024 * 1024,
+        "postprocessors": [{
+            "key": "FFmpegVideoConvertor",
+            "preferedformat": "mp4",
+        }],
     }
     if FFMPEG_PATH:
         ydl_opts["ffmpeg_location"] = FFMPEG_PATH
