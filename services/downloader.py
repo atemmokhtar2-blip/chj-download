@@ -288,7 +288,12 @@ async def analyze_url(url: str) -> dict | None:
             has_audio = acodec not in ("none", None)
             
             # If this format doesn't have audio, we'll need to merge it with best audio
+            # Use /best to fallback if bestaudio is not available
             final_fmt_id = fmt_id if has_audio else f"{fmt_id}+bestaudio/best"
+            
+            # Special case for platforms that might fail with complex format strings
+            if platform in ["Instagram", "TikTok"]:
+                final_fmt_id = "best"
 
             if label not in quality_map:
                 quality_map[label] = {
@@ -529,14 +534,10 @@ def _download_sync(url: str, fmt_id: str, out_path: str,
         "noplaylist": True,
         "merge_output_format": "mp4",
         "nocheckcertificate": True,
-        "ignoreerrors": False,
+        "ignoreerrors": True,  # More robust
         "logtostderr": True,
         "no_color": True,
         "buffersize": 1024 * 1024,
-        "postprocessors": [{
-            "key": "FFmpegVideoConvertor",
-            "preferedformat": "mp4",
-        }],
     }
     if FFMPEG_PATH:
         ydl_opts["ffmpeg_location"] = FFMPEG_PATH
