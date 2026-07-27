@@ -8,7 +8,7 @@ try:
         BOT_TOKEN = f.read().strip()
 except:
     BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
-REQUIRED_CHANNEL = os.getenv("REQUIRED_CHANNEL", "")
+REQUIRED_CHANNEL = os.getenv("REQUIRED_CHANNEL", "@h7h7h7Updates")
 ADMIN_IDS = [int(x) for x in os.getenv("ADMIN_IDS", "7631249810").split(",") if x.strip().isdigit()]
 OWNER_ID = int(os.getenv("OWNER_ID", "7631249810")) if os.getenv("OWNER_ID", "7631249810").isdigit() else 7631249810
 

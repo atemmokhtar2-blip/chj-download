@@ -294,11 +294,14 @@ STRINGS = {
     "banned": "🚫 لقد تم حظرك من استخدام هذا البوت.",
 
     "admin_panel": (
-        "👑 <b>لوحة تحكم X</b>\n\n"
-        "👥 إجمالي المستخدمين: <b>{total_users}</b>  🟢 نشط اليوم: <b>{active_today}</b>\n"
-        "📥 اليوم: <b>{downloads_today}</b>  📅 الأسبوع: <b>{downloads_week}</b>  📅 الشهر: <b>{downloads_month}</b>\n\n"
-        "🎬 YouTube: <b>{youtube}</b>  📘 Facebook: <b>{facebook}</b>  📌 Pinterest: <b>{pinterest}</b>\n\n"
-        "💾 نجاح الكاش: <b>{cache_hits}</b>  📦 الانتظار: <b>{queue}</b>\n"
+        "👑 <b>لوحة تحكم الأدمن</b>\n\n"
+        "👥 إجمالي المستخدمين: <b>{total_users}</b>\n"
+        "🟢 نشط اليوم: <b>{active_today}</b>\n\n"
+        "📥 تحميلات اليوم: <b>{downloads_today}</b>\n"
+        "📅 تحميلات الأسبوع: <b>{downloads_week}</b>\n"
+        "🗓 تحميلات الشهر: <b>{downloads_month}</b>\n\n"
+        "🎬 يوتيوب: <b>{youtube}</b> | 📘 فيسبوك: <b>{facebook}</b> | 📌 بنترست: <b>{pinterest}</b>\n\n"
+        "💾 نجاح الذاكرة: <b>{cache_hits}</b>\n"
         "⭐ نقاط موزعة: <b>{points_issued}</b>\n"
         "🟢 حالة البوت: <b>متصل</b>"
     ),
