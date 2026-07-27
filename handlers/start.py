@@ -52,6 +52,11 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(t(lang, "banned"))
         return ConversationHandler.END
 
+    if is_admin(user.id):
+        from handlers.admin import admin_command
+        await admin_command(update, context)
+        return ConversationHandler.END
+
     subscribed = await check_subscription(context.bot, user.id)
     if not subscribed:
         await send_subscription_prompt(update, lang)
