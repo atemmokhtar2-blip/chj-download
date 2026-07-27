@@ -339,6 +339,12 @@ async def download_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if not file_path:
                 await edit_fn(t(lang, "download_failed"))
                 return
+            
+            # Real size check before upload
+            file_size_mb = os.path.getsize(file_path) / (1024 * 1024)
+            if file_size_mb > MAX_FILE_SIZE_MB:
+                raise FileTooLargeError()
+
             await edit_fn(t(lang, "uploading"), parse_mode="HTML")
             bot_info = await context.bot.get_me()
             share_url = f"https://t.me/share/url?url=https://t.me/{bot_info.username}"
@@ -362,6 +368,12 @@ async def download_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if not file_path:
                 await edit_fn(t(lang, "download_failed"))
                 return
+
+            # Real size check before upload
+            file_size_mb = os.path.getsize(file_path) / (1024 * 1024)
+            if file_size_mb > MAX_FILE_SIZE_MB:
+                raise FileTooLargeError()
+
             await edit_fn(t(lang, "uploading"), parse_mode="HTML")
             bot_info = await context.bot.get_me()
             share_url = f"https://t.me/share/url?url=https://t.me/{bot_info.username}"
