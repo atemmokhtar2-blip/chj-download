@@ -408,7 +408,21 @@ async def download_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await edit_fn(t(lang, "file_too_large", max_mb=MAX_FILE_SIZE_MB))
     except Exception as e:
         logger.error(f"Download failed for user {user.id}: {e}", exc_info=True)
-        await edit_fn(t(lang, "download_failed"))
+        error_text = t(lang, "download_failed")
+        if "requested format not available" in str(e).lower():
+            error_text += f"\n\n<i>Note: Requested quality not available for this video, trying best available...</i>"
+            # Attempt fallback to best
+            try:
+                file_path = await download_video(info["url"], "best", "best", update_progress)
+                if file_path:
+                    # If successful, continue to upload logic (simplified for this fix)
+                    await edit_fn(t(lang, "uploading"), parse_mode="HTML")
+                    with open(file_path, "rb") as f:
+                        await query.message.reply_video(video=InputFile(f), caption=t(lang, "completed"))
+                    return
+            except:
+                pass
+        await edit_fn(error_text, parse_mode="HTML")
     finally:
         active_downloads.pop(user.id, None)
         if file_path and os.path.exists(file_path):
