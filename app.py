@@ -35,9 +35,9 @@ def dummy_gpu_task():
 
 def start_bot():
     logger.info("--- STARTING BOT THREAD ---")
-    time.sleep(5)
+    time.sleep(2)
     
-    # Create and set a new event loop for this thread
+    # Use a persistent loop for the thread
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
     
@@ -45,10 +45,12 @@ def start_bot():
         logger.info("Importing main from bot...")
         from bot import main
         logger.info("Calling main()...")
-        # main() in bot.py calls app.run_polling() which is synchronous but uses the loop
+        # Ensure the loop is kept alive and polling is handled correctly
         main()
     except Exception as e:
         logger.error(f"CRITICAL ERROR IN BOT THREAD: {e}", exc_info=True)
+    finally:
+        loop.close()
 
 # Start bot thread
 threading.Thread(target=start_bot, daemon=True).start()

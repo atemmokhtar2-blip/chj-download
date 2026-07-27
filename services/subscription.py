@@ -14,10 +14,7 @@ async def check_subscription(bot: Bot, user_id: int) -> bool:
     Returns True only if the user is a confirmed member of REQUIRED_CHANNEL.
     Returns False on any error (fail-closed) — never grants access on uncertainty.
     """
-    # Force the new channel if not set correctly in env
-    target_channel = "@h7h7h7Updates"
-    
-    channel = target_channel.strip()
+    channel = REQUIRED_CHANNEL.strip()
     if not channel.startswith("@"):
         channel = f"@{channel}"
 
@@ -48,7 +45,7 @@ async def check_subscription(bot: Bot, user_id: int) -> bool:
 
 async def build_subscription_keyboard(lang: str) -> InlineKeyboardMarkup:
     from locales import t
-    channel = "@h7h7h7Updates"
+    channel = REQUIRED_CHANNEL
 
     return InlineKeyboardMarkup([
         [InlineKeyboardButton(t(lang, "join_button"), url=f"https://t.me/{channel.lstrip('@')}")],
