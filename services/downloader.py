@@ -534,7 +534,7 @@ def _download_sync(url: str, fmt_id: str, out_path: str,
         "noplaylist": True,
         "merge_output_format": "mp4",
         "nocheckcertificate": True,
-        "ignoreerrors": True,  # More robust
+        "ignoreerrors": False,  # Raise errors so we can handle them properly
         "logtostderr": True,
         "no_color": True,
         "buffersize": 1024 * 1024,
