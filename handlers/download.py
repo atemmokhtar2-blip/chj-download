@@ -3,7 +3,7 @@ import os
 import logging
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, InputFile
 from telegram.ext import ContextTypes
-from telegram.error import TelegramError
+from telegram.error import TelegramError, NetworkError
 
 from database.users import get_user, add_points, deduct_points, increment_downloads
 from database.downloads import log_download
@@ -23,6 +23,23 @@ from utils.helpers import is_valid_url, is_supported_url, truncate_title, make_p
 logger = logging.getLogger(__name__)
 
 active_downloads: dict[int, bool] = {}
+
+UPLOAD_RETRIES = 3
+UPLOAD_RETRY_DELAY = 2  # seconds
+
+
+async def _upload_with_retry(coro):
+    """Retry Telegram upload up to UPLOAD_RETRIES times on network errors."""
+    for attempt in range(UPLOAD_RETRIES):
+        try:
+            return await coro
+        except (NetworkError, asyncio.TimeoutError) as e:
+            if attempt < UPLOAD_RETRIES - 1:
+                await asyncio.sleep(UPLOAD_RETRY_DELAY * (attempt + 1))
+                continue
+            raise e
+        except TelegramError:
+            raise
 
 
 async def handle_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -230,13 +247,18 @@ async def download_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     quality_label = "audio" if is_audio else ("image" if is_image else data.replace("dl_video_", ""))
 
     # Check High Quality Credit for video > 720p
+    is_hd = False
     if not is_audio and not is_image and not is_album:
         try:
             height = int(quality_label.replace("p", ""))
             if height > 720:
-                from database.users import deduct_high_quality_credit
-                if not deduct_high_quality_credit(user.id):
+                is_hd = True
+                # Validate credit is available, but DON'T deduct yet — deduct after success
+                from database.users import get_user as _get_user
+                _u = _get_user(user.id)
+                if not _u or _u.get("high_quality_rem", 0) <= 0:
                     await query.answer("❌ رصيدك للتحميل بجودة عالية انتهى! (مسموح بـ 5 فيديوهات HD فقط لضمان الاستقرار)", show_alert=True)
+                    active_downloads.pop(user.id, None)
                     return
         except ValueError:
             pass # "best" or other labels
@@ -270,7 +292,8 @@ async def download_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             pass
 
     active_downloads[user.id] = True
-    mark_download(user.id)
+    hd_credit_deducted = False
+    # Defer mark_download() and HD credit deduction until after success
 
     progress_msg = query.message
     file_path = None
@@ -326,11 +349,11 @@ async def download_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             share_url = f"https://t.me/share/url?url=https://t.me/{bot_info.username}"
             keyboard = [[InlineKeyboardButton(t(lang, "share_bot"), url=share_url)]]
             with open(file_path, "rb") as f:
-                sent = await query.message.reply_photo(
+                sent = await _upload_with_retry(query.message.reply_photo(
                     photo=InputFile(f, filename=f"{title[:50]}.jpg"),
                     caption=t(lang, "completed"),
                     reply_markup=InlineKeyboardMarkup(keyboard)
-                )
+                ))
             file_id = sent.photo[-1].file_id
             set_cache(info["url"], quality_label, "image", file_id, title, platform)
 
@@ -350,12 +373,12 @@ async def download_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             share_url = f"https://t.me/share/url?url=https://t.me/{bot_info.username}"
             keyboard = [[InlineKeyboardButton(t(lang, "share_bot"), url=share_url)]]
             with open(file_path, "rb") as f:
-                sent = await query.message.reply_audio(
+                sent = await _upload_with_retry(query.message.reply_audio(
                     audio=InputFile(f, filename=f"{title[:50]}.mp3"),
                     title=title[:64],
                     performer=info.get("uploader", "")[:64],
                     reply_markup=InlineKeyboardMarkup(keyboard)
-                )
+                ))
             file_id = sent.audio.file_id
             set_cache(info["url"], quality_label, "audio", file_id, title, platform)
 
@@ -379,12 +402,12 @@ async def download_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             share_url = f"https://t.me/share/url?url=https://t.me/{bot_info.username}"
             keyboard = [[InlineKeyboardButton(t(lang, "share_bot"), url=share_url)]]
             with open(file_path, "rb") as f:
-                sent = await query.message.reply_video(
+                sent = await _upload_with_retry(query.message.reply_video(
                     video=InputFile(f, filename=f"{title[:50]}.mp4"),
                     caption=t(lang, "completed"),
                     supports_streaming=True,
                     reply_markup=InlineKeyboardMarkup(keyboard)
-                )
+                ))
             file_id = sent.video.file_id
             set_cache(info["url"], quality_label, "video", file_id, title, platform)
 
@@ -394,6 +417,14 @@ async def download_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             quality_label, "audio" if is_audio else ("image" if is_image else "video"),
             file_size
         )
+
+        # NOW — after successful download & upload — mark rate limit and deduct credits
+        mark_download(user.id)
+
+        # Deduct HD credit only if this was an HD video download
+        if is_hd:
+            from database.users import deduct_high_quality_credit
+            deduct_high_quality_credit(user.id)
 
         # Deduct 1 point per download
         _post_download_sync(user.id)
@@ -419,6 +450,17 @@ async def download_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except FileTooLargeError:
         await edit_fn(t(lang, "file_too_large", max_mb=MAX_FILE_SIZE_MB))
     except Exception as e:
+        # Refund HD credit if it was deducted
+        if hd_credit_deducted:
+            from database.db import db_cursor
+            try:
+                with db_cursor() as c:
+                    c.execute("UPDATE users SET high_quality_rem = high_quality_rem + 1 WHERE user_id = ?", (user.id,))
+            except Exception:
+                pass
+        # Reset rate limit on failure so user can retry immediately
+        from middlewares.rate_limiter import reset_rate_limit
+        reset_rate_limit(user.id)
         logger.error(f"Download failed for user {user.id}: {e}", exc_info=True)
         error_text = t(lang, "download_failed")
         if "requested format not available" in str(e).lower():
