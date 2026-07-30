@@ -37,6 +37,7 @@ def _extract_info_sync(url: str) -> dict:
         "nocheckcertificate": True,
         "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
         "impersonate": "chrome",
+        "http_chunk_size": 10485760, # 10MB chunks for better stability
     }
     if os.path.exists("cookies.txt"):
         ydl_opts["cookiefile"] = "cookies.txt"
@@ -573,6 +574,7 @@ def _download_sync(url: str, fmt_id: str, out_path: str,
         "buffersize": 1024 * 1024,
         "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
         "impersonate": "chrome",
+        "http_chunk_size": 10485760,
     }
     if os.path.exists("cookies.txt"):
         ydl_opts["cookiefile"] = "cookies.txt"
