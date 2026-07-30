@@ -9,3 +9,4 @@ flask
 httpx
 gradio
 beautifulsoup4
+curl-cffi
