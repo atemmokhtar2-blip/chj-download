@@ -34,7 +34,11 @@ def _extract_info_sync(url: str) -> dict:
         "noplaylist": True,
         "ignoreerrors": False,
         "extract_flat": False,
+        "nocheckcertificate": True,
+        "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
     }
+    if os.path.exists("cookies.txt"):
+        ydl_opts["cookiefile"] = "cookies.txt"
     # For Pinterest and Instagram, allow images
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
         return ydl.extract_info(url, download=False)
@@ -135,9 +139,10 @@ def _fallback_pinterest_extract(url: str) -> dict | None:
     PREFERRED_SIZES = ("originals", "1200x", "736x", "564x", "474x", "236x")
 
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
         "Accept-Language": "en-US,en;q=0.9",
+        "Referer": "https://www.pinterest.com/",
     }
 
     try:
@@ -146,21 +151,26 @@ def _fallback_pinterest_extract(url: str) -> dict | None:
         html = res.text
         final_url = res.url
 
+
         # 1) Try the structured og:image meta tag first — it points to the real pin.
-        og_match = re.search(
-            r'<meta[^>]+property=["\']og:image["\'][^>]+content=["\']([^"\']+)["\']',
-            html, re.IGNORECASE,
-        )
+        # Robust regex for og:image (property and content can be in any order)
         og_image = None
-        if og_match:
-            cand = og_match.group(1)
-            # Skip placeholder
-            if not any(ph in cand for ph in PLACEHOLDER_HASHES):
-                og_image = cand
+        og_patterns = [
+            r'<meta[^>]+property=["\']og:image["\'][^>]+content=["\']([^"\']+)["\']',
+            r'<meta[^>]+content=["\']([^"\']+)["\'][^>]+property=["\']og:image["\']',
+        ]
+        for pattern in og_patterns:
+            og_match = re.search(pattern, html, re.IGNORECASE)
+            if og_match:
+                cand = og_match.group(1)
+                if not any(ph in cand for ph in PLACEHOLDER_HASHES):
+                    og_image = cand
+                    break
 
         # 2) Collect ALL pinimg image URLs, then pick the best real one.
+        # More flexible regex for pinimg URLs
         all_imgs = re.findall(
-            r'https://i\.pinimg\.com/([a-z0-9x]+)/([a-f0-9/_.\-]+)\.(jpg|jpeg|png|webp)',
+            r'https://i\.pinimg\.com/([a-zA-Z0-9x_-]+)/([a-zA-Z0-9/_.\-]+)\.(jpg|jpeg|png|webp)',
             html,
             re.IGNORECASE,
         )
@@ -188,8 +198,25 @@ def _fallback_pinterest_extract(url: str) -> dict | None:
         if not chosen_image and by_bucket:
             chosen_image = next(iter(by_bucket.values()))
 
-        # Prefer og:image if present and real, else fall back to scraped image.
-        image_url = og_image or chosen_image
+        # 3) Try to find image in JSON blobs (e.g. __PWS_DATA__)
+        json_image = None
+        json_blobs = re.findall(r'<script[^>]+type=["\']application/json["\'][^>]*>(.*?)</script>', html, re.DOTALL)
+        for blob in json_blobs:
+            # Look for "originals":{"url":"..."}
+            m = re.search(r'["\']originals["\']\s*:\s*\{\s*["\']url["\']\s*:\s*["\'](https?://i\.pinimg\.com/[^"\']+)["\']', blob)
+            if m:
+                json_image = m.group(1).replace("\\/", "/")
+                break
+            # Fallback for any pinimg URL in JSON
+            m = re.search(r'["\'](https?://i\.pinimg\.com/[^"\']+)["\']', blob)
+            if m:
+                cand = m.group(1).replace("\\/", "/")
+                if not any(ph in cand for ph in PLACEHOLDER_HASHES):
+                    json_image = cand
+                    break
+
+        # Prefer og:image, then JSON image, then scraped image.
+        image_url = og_image or json_image or chosen_image
         if not image_url:
             return None
 
@@ -449,7 +476,7 @@ async def download_image(url: str, image_url: str) -> str | None:
     """
     # Headers that work reliably against i.pinimg.com / Pinterest CDN.
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
         "Accept": "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
         "Accept-Language": "en-US,en;q=0.9",
         "Referer": "https://www.pinterest.com/",
@@ -534,11 +561,14 @@ def _download_sync(url: str, fmt_id: str, out_path: str,
         "noplaylist": True,
         "merge_output_format": "mp4",
         "nocheckcertificate": True,
-        "ignoreerrors": False,  # Raise errors so we can handle them properly
+        "ignoreerrors": False,
         "logtostderr": True,
         "no_color": True,
         "buffersize": 1024 * 1024,
+        "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
     }
+    if os.path.exists("cookies.txt"):
+        ydl_opts["cookiefile"] = "cookies.txt"
     if FFMPEG_PATH:
         ydl_opts["ffmpeg_location"] = FFMPEG_PATH
     if progress_hook:
@@ -579,7 +609,11 @@ def _download_audio_sync(url: str, out_path: str,
         }],
         "writethumbnail": False,
         "embedthumbnail": False,
+        "nocheckcertificate": True,
+        "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
     }
+    if os.path.exists("cookies.txt"):
+        ydl_opts["cookiefile"] = "cookies.txt"
     if FFMPEG_PATH:
         ydl_opts["ffmpeg_location"] = FFMPEG_PATH
     if progress_hook:
