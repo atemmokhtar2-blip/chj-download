@@ -1,8 +1,0 @@
-[phases.setup]
-nixPkgs = ["python311", "ffmpeg"]
-
-[phases.install]
-cmds = ["pip install -r requirements.txt"]
-
-[start]
-cmd = "mkdir -p database temp logs && python3 app.py"
