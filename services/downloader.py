@@ -36,7 +36,7 @@ def _extract_info_sync(url: str) -> dict:
         "extract_flat": False,
         "nocheckcertificate": True,
         "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-        "impersonate": "chrome",
+        "impersonate": yt_dlp.networking.impersonate.ImpersonateTarget("chrome"),
         "http_chunk_size": 10485760, # 10MB chunks for better stability
     }
     if os.path.exists("cookies.txt"):
@@ -157,6 +157,11 @@ def _fallback_pinterest_extract(url: str) -> dict | None:
         res = session.get(url, headers=headers, timeout=20, allow_redirects=True)
         html = res.text
         final_url = res.url
+        
+        # If we got redirected to login, the HTML is useless
+        if "login" in final_url.lower():
+             download_logger.error(f"Pinterest Scraper: Redirected to login for {url}")
+             return None
 
 
         # 1) Try the structured og:image meta tag first — it points to the real pin.
@@ -207,15 +212,25 @@ def _fallback_pinterest_extract(url: str) -> dict | None:
 
         # 3) Try to find image in JSON blobs (e.g. __PWS_DATA__)
         json_image = None
-        json_blobs = re.findall(r'<script[^>]+type=["\']application/json["\'][^>]*>(.*?)</script>', html, re.DOTALL)
+        # Pinterest sometimes uses different script types or IDs for data
+        json_blobs = re.findall(r'<script[^>]*>(.*?)</script>', html, re.DOTALL)
         for blob in json_blobs:
+            if "i.pinimg.com" not in blob:
+                continue
             # Look for "originals":{"url":"..."}
             m = re.search(r'["\']originals["\']\s*:\s*\{\s*["\']url["\']\s*:\s*["\'](https?://i\.pinimg\.com/[^"\']+)["\']', blob)
             if m:
                 json_image = m.group(1).replace("\\/", "/")
                 break
-            # Fallback for any pinimg URL in JSON
-            m = re.search(r'["\'](https?://i\.pinimg\.com/[^"\']+)["\']', blob)
+            # Look for any large image bucket
+            m = re.search(r'["\'](https?://i\.pinimg\.com/(?:originals|736x|564x|736x|474x)/[^"\']+)["\']', blob)
+            if m:
+                cand = m.group(1).replace("\\/", "/")
+                if not any(ph in cand for ph in PLACEHOLDER_HASHES):
+                    json_image = cand
+                    break
+            # Very broad fallback for any pinimg URL
+            m = re.search(r'(https?://i\.pinimg\.com/[^"\']+\.(?:jpg|png|webp))', blob)
             if m:
                 cand = m.group(1).replace("\\/", "/")
                 if not any(ph in cand for ph in PLACEHOLDER_HASHES):
@@ -225,7 +240,9 @@ def _fallback_pinterest_extract(url: str) -> dict | None:
         # Prefer og:image, then JSON image, then scraped image.
         image_url = og_image or json_image or chosen_image
         if not image_url:
+            download_logger.error(f"Pinterest Scraper: No image URL found in HTML for {url}")
             return None
+        download_logger.info(f"Pinterest Scraper: Found image {image_url}")
 
         # Normalize: convert any size bucket to /originals/ for maximum quality,
         # but only if it exists in our by_bucket map; otherwise keep the bucket we have.
@@ -573,7 +590,7 @@ def _download_sync(url: str, fmt_id: str, out_path: str,
         "no_color": True,
         "buffersize": 1024 * 1024,
         "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-        "impersonate": "chrome",
+        "impersonate": yt_dlp.networking.impersonate.ImpersonateTarget("chrome"),
         "http_chunk_size": 10485760,
     }
     if os.path.exists("cookies.txt"):
@@ -620,7 +637,7 @@ def _download_audio_sync(url: str, out_path: str,
         "embedthumbnail": False,
         "nocheckcertificate": True,
         "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-        "impersonate": "chrome",
+        "impersonate": yt_dlp.networking.impersonate.ImpersonateTarget("chrome"),
     }
     if os.path.exists("cookies.txt"):
         ydl_opts["cookiefile"] = "cookies.txt"

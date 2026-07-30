@@ -92,6 +92,9 @@ async def handle_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     info = await analyze_url(url)
     if not info:
+        # Check if it's a known error we can explain to the user
+        # But for now, let's just log it more clearly
+        error_logger.error(f"Analysis failed for URL: {url} by user {user.id}")
         await status_msg.edit_text(t(lang, "analysis_failed"))
         return
 
