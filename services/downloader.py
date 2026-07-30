@@ -35,16 +35,21 @@ def _extract_info_sync(url: str) -> dict:
         "ignoreerrors": False,
         "extract_flat": False,
         "nocheckcertificate": True,
-        "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+        "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
         "impersonate": yt_dlp.networking.impersonate.ImpersonateTarget("chrome"),
-        "http_chunk_size": 10485760, # 10MB chunks for better stability
+        "http_chunk_size": 10485760,
     }
     if os.path.exists("cookies.txt"):
         ydl_opts["cookiefile"] = "cookies.txt"
     
-    # TikTok specific headers to avoid IP blocks
+    # Advanced TikTok/Platform bypass
     if "tiktok.com" in url:
         ydl_opts["referer"] = "https://www.tiktok.com/"
+        ydl_opts["headers"] = {
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+            "Accept-Language": "en-US,en;q=0.9",
+            "Sec-Fetch-Mode": "navigate",
+        }
 
     # For Pinterest and Instagram, allow images
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -291,6 +296,15 @@ def _fallback_pinterest_extract(url: str) -> dict | None:
 async def analyze_url(url: str) -> dict | None:
     try:
         loop = asyncio.get_event_loop()
+        
+        # TikTok Pre-processing: Expand short URLs and bypass initial blocks
+        if "tiktok.com" in url or "vt.tiktok.com" in url:
+            from .tiktok_scraper import scrape_tiktok
+            tk_info = await loop.run_in_executor(None, scrape_tiktok, url)
+            if tk_info and tk_info.get("webpage_url"):
+                url = tk_info["webpage_url"] # Use expanded URL
+                # If yt-dlp still fails, we at least have metadata from scrape_tiktok
+        
         try:
             info = await asyncio.wait_for(
                 loop.run_in_executor(None, _extract_info_sync, url),
@@ -301,6 +315,13 @@ async def analyze_url(url: str) -> dict | None:
             if "pinterest.com" in url or "pin.it" in url:
                 download_logger.info(f"yt-dlp failed for Pinterest, trying fallback: {url}")
                 return await loop.run_in_executor(None, _fallback_pinterest_extract, url)
+            
+            # If yt-dlp fails for TikTok but we have scraper info, use it
+            if "tiktok.com" in url:
+                from .tiktok_scraper import scrape_tiktok
+                tk_info = await loop.run_in_executor(None, scrape_tiktok, url)
+                if tk_info:
+                    return tk_info
             raise e
 
         if not info:
@@ -578,7 +599,7 @@ async def download_image(url: str, image_url: str) -> str | None:
 def _download_sync(url: str, fmt_id: str, out_path: str,
                    progress_hook: Callable = None) -> str:
     ydl_opts = {
-        "format": fmt_id,
+        "format": fmt_id if fmt_id != "Best" else "best",
         "outtmpl": out_path,
         "quiet": True,
         "no_warnings": True,
@@ -589,10 +610,17 @@ def _download_sync(url: str, fmt_id: str, out_path: str,
         "logtostderr": True,
         "no_color": True,
         "buffersize": 1024 * 1024,
-        "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+        "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
         "impersonate": yt_dlp.networking.impersonate.ImpersonateTarget("chrome"),
         "http_chunk_size": 10485760,
     }
+    
+    if "tiktok.com" in url:
+        ydl_opts["referer"] = "https://www.tiktok.com/"
+        ydl_opts["headers"] = {
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+            "Accept-Language": "en-US,en;q=0.9",
+        }
     if os.path.exists("cookies.txt"):
         ydl_opts["cookiefile"] = "cookies.txt"
     if FFMPEG_PATH:
@@ -636,9 +664,16 @@ def _download_audio_sync(url: str, out_path: str,
         "writethumbnail": False,
         "embedthumbnail": False,
         "nocheckcertificate": True,
-        "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+        "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
         "impersonate": yt_dlp.networking.impersonate.ImpersonateTarget("chrome"),
     }
+    
+    if "tiktok.com" in url:
+        ydl_opts["referer"] = "https://www.tiktok.com/"
+        ydl_opts["headers"] = {
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+            "Accept-Language": "en-US,en;q=0.9",
+        }
     if os.path.exists("cookies.txt"):
         ydl_opts["cookiefile"] = "cookies.txt"
     if FFMPEG_PATH:
