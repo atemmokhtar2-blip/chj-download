@@ -1,8 +1,8 @@
 from . import en, ar
 
 LOCALES = {
-    "en": en.STRINGS,
-    "ar": ar.STRINGS,
+    "en": en.translations,
+    "ar": ar.translations,
 }
 
 def t(lang: str, key: str, **kwargs) -> str:

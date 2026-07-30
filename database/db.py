@@ -5,14 +5,12 @@ from config.settings import DATABASE_PATH
 
 logger = logging.getLogger(__name__)
 
-
 def get_connection():
     conn = sqlite3.connect(DATABASE_PATH, check_same_thread=False, timeout=10)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA foreign_keys=ON")
     return conn
-
 
 @contextmanager
 def db_cursor():
@@ -27,7 +25,6 @@ def db_cursor():
     finally:
         conn.close()
 
-
 def init_db():
     with db_cursor() as c:
         c.executescript("""
@@ -40,14 +37,9 @@ def init_db():
                 is_banned   INTEGER DEFAULT 0,
                 is_admin    INTEGER DEFAULT 0,
                 role        TEXT DEFAULT 'user',
-                points      INTEGER DEFAULT 0,
                 downloads   INTEGER DEFAULT 0,
-
                 join_date   TEXT DEFAULT (datetime('now')),
-                last_seen   TEXT DEFAULT (datetime('now')),
-                last_daily  TEXT,
-                vip_until   TEXT,
-                high_quality_rem INTEGER DEFAULT 5
+                last_seen   TEXT DEFAULT (datetime('now'))
             );
 
             CREATE TABLE IF NOT EXISTS downloads (
@@ -76,49 +68,6 @@ def init_db():
                 UNIQUE(url_hash, quality, media_type)
             );
 
-            CREATE TABLE IF NOT EXISTS favorites (
-                id          INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id     INTEGER NOT NULL,
-                url         TEXT NOT NULL,
-                title       TEXT,
-                platform    TEXT,
-                thumbnail   TEXT,
-                added_at    TEXT DEFAULT (datetime('now')),
-                UNIQUE(user_id, url),
-                FOREIGN KEY (user_id) REFERENCES users(user_id)
-            );
-
-            CREATE TABLE IF NOT EXISTS achievements (
-                id          INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id     INTEGER NOT NULL,
-                achievement_id TEXT NOT NULL,
-                earned_at   TEXT DEFAULT (datetime('now')),
-                UNIQUE(user_id, achievement_id),
-                FOREIGN KEY (user_id) REFERENCES users(user_id)
-            );
-
-            CREATE TABLE IF NOT EXISTS reports (
-                id          INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id     INTEGER NOT NULL,
-                username    TEXT,
-                platform    TEXT,
-                url         TEXT,
-                message     TEXT,
-                status      TEXT DEFAULT 'open',
-                created_at  TEXT DEFAULT (datetime('now')),
-                FOREIGN KEY (user_id) REFERENCES users(user_id)
-            );
-
-            CREATE TABLE IF NOT EXISTS support_tickets (
-                id          INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id     INTEGER NOT NULL,
-                message     TEXT,
-                reply       TEXT,
-                status      TEXT DEFAULT 'open',
-                created_at  TEXT DEFAULT (datetime('now')),
-                FOREIGN KEY (user_id) REFERENCES users(user_id)
-            );
-
             CREATE TABLE IF NOT EXISTS broadcast_log (
                 id          INTEGER PRIMARY KEY AUTOINCREMENT,
                 admin_id    INTEGER,
@@ -129,26 +78,6 @@ def init_db():
                 created_at  TEXT DEFAULT (datetime('now'))
             );
 
-            CREATE TABLE IF NOT EXISTS rewards_log (
-                id          INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id     INTEGER NOT NULL,
-                reward_cost INTEGER,
-                reward_name TEXT,
-                created_at  TEXT DEFAULT (datetime('now')),
-                FOREIGN KEY (user_id) REFERENCES users(user_id)
-            );
-
-            CREATE TABLE IF NOT EXISTS feedback (
-                id          INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id     INTEGER NOT NULL,
-                download_id INTEGER,
-                rating      TEXT,
-                created_at  TEXT DEFAULT (datetime('now')),
-                FOREIGN KEY (user_id) REFERENCES users(user_id)
-            );
-
-
-
             CREATE TABLE IF NOT EXISTS bot_settings (
                 key   TEXT PRIMARY KEY,
                 value TEXT NOT NULL DEFAULT ''
@@ -157,26 +86,5 @@ def init_db():
             CREATE INDEX IF NOT EXISTS idx_downloads_user    ON downloads(user_id);
             CREATE INDEX IF NOT EXISTS idx_downloads_date    ON downloads(created_at);
             CREATE INDEX IF NOT EXISTS idx_cache_hash        ON file_cache(url_hash);
-
         """)
-    # Idempotent migrations — add columns that may not exist in older installs
-    _migrate()
     logger.info("Database initialized.")
-
-
-def _migrate():
-    """Run ALTER TABLE migrations safely — ignores errors if column already exists."""
-    migrations = [
-        "ALTER TABLE reports ADD COLUMN reply TEXT",
-        "ALTER TABLE reports ADD COLUMN closed_by INTEGER",
-        "ALTER TABLE reports ADD COLUMN closed_at TEXT",
-        # Lucky wheel cooldown tracking
-        "ALTER TABLE users ADD COLUMN last_wheel TEXT",
-        "ALTER TABLE users ADD COLUMN high_quality_rem INTEGER DEFAULT 5",
-    ]
-    for sql in migrations:
-        try:
-            with db_cursor() as c:
-                c.execute(sql)
-        except Exception:
-            pass
