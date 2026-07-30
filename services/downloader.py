@@ -36,9 +36,15 @@ def _extract_info_sync(url: str) -> dict:
         "extract_flat": False,
         "nocheckcertificate": True,
         "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+        "impersonate": "chrome",
     }
     if os.path.exists("cookies.txt"):
         ydl_opts["cookiefile"] = "cookies.txt"
+    
+    # TikTok specific headers to avoid IP blocks
+    if "tiktok.com" in url:
+        ydl_opts["referer"] = "https://www.tiktok.com/"
+
     # For Pinterest and Instagram, allow images
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
         return ydl.extract_info(url, download=False)
@@ -566,6 +572,7 @@ def _download_sync(url: str, fmt_id: str, out_path: str,
         "no_color": True,
         "buffersize": 1024 * 1024,
         "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+        "impersonate": "chrome",
     }
     if os.path.exists("cookies.txt"):
         ydl_opts["cookiefile"] = "cookies.txt"
@@ -611,6 +618,7 @@ def _download_audio_sync(url: str, out_path: str,
         "embedthumbnail": False,
         "nocheckcertificate": True,
         "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+        "impersonate": "chrome",
     }
     if os.path.exists("cookies.txt"):
         ydl_opts["cookiefile"] = "cookies.txt"
