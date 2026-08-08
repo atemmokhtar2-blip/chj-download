@@ -185,12 +185,34 @@ async def download_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             set_cache(info["url"], quality_label, "audio", sent.audio.file_id, title, platform)
 
         else:
-            file_path = await download_video(info["url"], quality_label, update_progress)
-            if not file_path: raise Exception("Download failed")
+            # Resolve real yt-dlp format_id from the analyzed qualities list.
+            # quality_label is UI text like "best" / "1080p" — not a format id.
+            format_id = "best"
+            for q in info.get("qualities") or []:
+                if str(q.get("label", "")).lower() == str(quality_label).lower():
+                    format_id = q.get("format_id") or "best"
+                    break
+            if str(quality_label).lower() in ("best", "best_quality"):
+                format_id = "best"
+
+            file_path = await download_video(
+                info["url"], format_id, quality_label, update_progress
+            )
+            if not file_path:
+                raise Exception("Download failed")
             await edit_fn(t(lang, "uploading"), parse_mode="HTML")
             with open(file_path, "rb") as f:
-                sent = await _upload_with_retry(query.message.reply_video(video=InputFile(f, filename=f"{title[:50]}.mp4"), caption=t(lang, "completed"), supports_streaming=True))
-            set_cache(info["url"], quality_label, "video", sent.video.file_id, title, platform)
+                sent = await _upload_with_retry(
+                    query.message.reply_video(
+                        video=InputFile(f, filename=f"{title[:50]}.mp4"),
+                        caption=t(lang, "completed"),
+                        supports_streaming=True,
+                    )
+                )
+            set_cache(
+                info["url"], quality_label, "video",
+                sent.video.file_id, title, platform,
+            )
 
         increment_downloads(user.id)
         log_download(user.id, info["url"], title, platform, quality_label, "audio" if is_audio else ("image" if is_image else "video"))
