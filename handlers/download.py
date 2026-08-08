@@ -168,7 +168,43 @@ async def download_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         title = info.get("title", "Unknown")
         platform = info.get("platform", "")
 
-        if is_image:
+        if is_album:
+            # Album/carousel: download first item as a practical fallback
+            items = info.get("album_items") or []
+            if not items:
+                raise Exception("Album has no items")
+            first = items[0]
+            item_url = first.get("url") or info["url"]
+            item_type = first.get("type", "video")
+            if item_type == "image":
+                file_path = await download_image(item_url, first.get("thumbnail") or info.get("image_url"))
+                if not file_path:
+                    raise Exception("Download failed")
+                await edit_fn(t(lang, "uploading"), parse_mode="HTML")
+                with open(file_path, "rb") as f:
+                    sent = await _upload_with_retry(
+                        query.message.reply_photo(
+                            photo=InputFile(f, filename=f"{title[:50]}.jpg"),
+                            caption=t(lang, "completed"),
+                        )
+                    )
+                set_cache(info["url"], quality_label, "image", sent.photo[-1].file_id, title, platform)
+            else:
+                file_path = await download_video(item_url, "best", "best", update_progress)
+                if not file_path:
+                    raise Exception("Download failed")
+                await edit_fn(t(lang, "uploading"), parse_mode="HTML")
+                with open(file_path, "rb") as f:
+                    sent = await _upload_with_retry(
+                        query.message.reply_video(
+                            video=InputFile(f, filename=f"{title[:50]}.mp4"),
+                            caption=t(lang, "completed"),
+                            supports_streaming=True,
+                        )
+                    )
+                set_cache(info["url"], quality_label, "video", sent.video.file_id, title, platform)
+
+        elif is_image:
             file_path = await download_image(info["url"], info.get("image_url"))
             if not file_path: raise Exception("Download failed")
             await edit_fn(t(lang, "uploading"), parse_mode="HTML")
