@@ -381,14 +381,56 @@ async def analyze_url(url: str) -> dict | None:
         quality_map = {}
         audio_formats = []
 
+        # Platforms where numeric format_ids are fragile / expire quickly.
+        # Always use height-based selectors with audio merge + progressive fallbacks.
+        SOCIAL_PLATFORMS = {
+            "Instagram", "TikTok", "Facebook", "Twitter", "X",
+            "Threads", "Reddit", "Snapchat", "Pinterest",
+        }
+
+        def _robust_fmt(height: int, fmt_id: str, has_audio: bool) -> str:
+            """Build a format string that almost always succeeds with audio."""
+            h = int(height)
+            # Height-capped chain: merged A/V → progressive → any best ≤ H → absolute best
+            height_chain = (
+                f"bestvideo[height<={h}][ext=mp4]+bestaudio[ext=m4a]/"
+                f"bestvideo[height<={h}]+bestaudio/"
+                f"best[height<={h}][ext=mp4]/"
+                f"best[height<={h}]/"
+                f"bestvideo[height<={h}]+bestaudio/best/"
+                f"best"
+            )
+            if platform in SOCIAL_PLATFORMS:
+                return height_chain
+            # YouTube / Vimeo etc: keep specific id when it already has audio,
+            # but still append safe fallbacks so the button never hard-fails.
+            if has_audio and fmt_id:
+                return f"{fmt_id}/{height_chain}"
+            if fmt_id:
+                return f"{fmt_id}+bestaudio/best/{height_chain}"
+            return height_chain
+
         for f in formats:
-            height = f.get("height")
+            # Prefer the smaller dimension as "height" so vertical videos
+            # (1080x1920) show as 1080p not 1920p.
+            h_raw = f.get("height") or 0
+            w_raw = f.get("width") or 0
+            try:
+                h_raw, w_raw = int(h_raw or 0), int(w_raw or 0)
+            except Exception:
+                h_raw, w_raw = 0, 0
+            if h_raw and w_raw:
+                height = min(h_raw, w_raw)
+            else:
+                height = h_raw or w_raw
+            if not height or height < 144:
+                continue
+
             vcodec = f.get("vcodec", "none")
             acodec = f.get("acodec", "none")
-            fmt_id = f.get("format_id", "")
+            fmt_id = str(f.get("format_id") or "")
             filesize = f.get("filesize") or f.get("filesize_approx") or 0
 
-            # Collect audio-only formats
             if vcodec in ("none", None) and acodec not in ("none", None):
                 audio_formats.append({
                     "format_id": fmt_id,
@@ -397,50 +439,53 @@ async def analyze_url(url: str) -> dict | None:
                 })
                 continue
 
-            if vcodec in ("none", None) or not height:
+            if vcodec in ("none", None):
                 continue
 
-            label = f"{height}p"
-            has_audio = acodec not in ("none", None)
-
-            # Always ensure audio is present: merge with bestaudio when needed
-            if has_audio:
-                final_fmt_id = fmt_id
+            # Snap to common quality buckets to avoid 854p / 960p / 1280p noise
+            if height >= 2000:
+                bucket = 2160
+            elif height >= 1400:
+                bucket = 1440
+            elif height >= 1000:
+                bucket = 1080
+            elif height >= 700:
+                bucket = 720
+            elif height >= 450:
+                bucket = 480
+            elif height >= 340:
+                bucket = 360
             else:
-                final_fmt_id = f"{fmt_id}+bestaudio/best"
+                bucket = 240
 
-            # Instagram / TikTok: prefer height-capped merge so each quality button differs
-            # but still always includes audio (avoid bare video-only streams)
-            if platform in ["Instagram", "TikTok"]:
-                final_fmt_id = (
-                    f"bestvideo[height<={height}]+bestaudio/"
-                    f"best[height<={height}]/"
-                    f"best"
-                )
+            label = f"{bucket}p"
+            has_audio = acodec not in ("none", None)
+            final_fmt_id = _robust_fmt(bucket, fmt_id, has_audio)
 
             if label not in quality_map:
                 quality_map[label] = {
                     "label": label,
-                    "height": height,
+                    "height": bucket,
                     "format_id": final_fmt_id,
                     "filesize": filesize,
                     "has_audio": has_audio,
                 }
             else:
                 existing = quality_map[label]
-                # Prefer formats that already have audio, or larger filesizes
                 if (has_audio and not existing["has_audio"]) or (filesize > existing["filesize"]):
                     quality_map[label] = {
                         "label": label,
-                        "height": height,
+                        "height": bucket,
                         "format_id": final_fmt_id,
                         "filesize": filesize,
                         "has_audio": has_audio,
                     }
 
-        # Sort qualities by height (ascending) and add smart labels
+        # Sort ascending; keep only meaningful steps (max 5)
         qualities = sorted(quality_map.values(), key=lambda x: x["height"])
-        # Add quality tier labels
+        if len(qualities) > 5:
+            # keep lowest, some mids, and highest
+            qualities = [qualities[0]] + qualities[1:-1][-3:] + [qualities[-1]]
         for q in qualities:
             h = q["height"]
             if h >= 2160:
@@ -679,6 +724,18 @@ async def download_image(url: str, image_url: str) -> str | None:
     return None
 
 
+def _height_format_chain(h: int) -> str:
+    """Universal height-capped format chain with audio + progressive fallbacks."""
+    return (
+        f"bestvideo[height<={h}][ext=mp4]+bestaudio[ext=m4a]/"
+        f"bestvideo[height<={h}]+bestaudio/"
+        f"best[height<={h}][ext=mp4]/"
+        f"best[height<={h}]/"
+        f"bestvideo[height<={h}]+bestaudio/best/"
+        f"best"
+    )
+
+
 def _resolve_format(fmt_id: str) -> str:
     """Map UI labels / empty values to a format that always includes audio."""
     if fmt_id is None:
@@ -686,62 +743,88 @@ def _resolve_format(fmt_id: str) -> str:
     fmt_id = str(fmt_id).strip()
     if not fmt_id or fmt_id.lower() in ("best", "best_quality"):
         return BEST_FORMAT_WITH_AUDIO
-    # Height labels like "1080p" / "720p" → constrained best with audio
+    # Pure height label like "1080p"
     if fmt_id.endswith("p") and fmt_id[:-1].isdigit():
-        h = int(fmt_id[:-1])
-        return (
-            f"bestvideo[height<={h}][ext=mp4]+bestaudio[ext=m4a]/"
-            f"bestvideo[height<={h}]+bestaudio/"
-            f"best[height<={h}][ext=mp4]/"
-            f"best[height<={h}]/"
-            f"best"
-        )
-    return fmt_id
+        return _height_format_chain(int(fmt_id[:-1]))
+    # Already a chain — ensure ultimate fallback to best
+    if "/" in fmt_id or "+" in fmt_id:
+        if not fmt_id.rstrip("/").endswith("best"):
+            return f"{fmt_id}/best"
+        return fmt_id
+    # Bare numeric format id → append safe fallbacks
+    return f"{fmt_id}+bestaudio/best/{BEST_FORMAT_WITH_AUDIO}"
 
 
-def _download_sync(url: str, fmt_id: str, out_path: str,
-                   progress_hook: Callable = None) -> str:
-    resolved = _resolve_format(fmt_id)
-    ydl_opts = _base_ydl_opts({
-        "format": resolved,
-        "outtmpl": out_path,
-        "merge_output_format": "mp4",
-        "logtostderr": True,
-        "no_color": True,
-        "buffersize": 1024 * 1024,
-        # Prefer ffmpeg for merging video+audio so the final file has sound
-        "prefer_ffmpeg": True,
-    })
-
-    if "tiktok.com" in url:
-        ydl_opts["referer"] = "https://www.tiktok.com/"
-        ydl_opts["headers"] = {
-            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
-            "Accept-Language": "en-US,en;q=0.9",
-        }
-        ydl_opts["extractor_args"] = {
-            "tiktok": {"api_hostname": "api16-normal-c-useast1a.tiktokv.com"}
-        }
-    if progress_hook:
-        ydl_opts["progress_hooks"] = [progress_hook]
-
-    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-        ydl.download([url])
-
+def _find_downloaded_file(out_path: str) -> str | None:
     candidates = [
         out_path + ".mp4",
         out_path,
         out_path.replace(".%(ext)s", ".mp4"),
     ]
     for c in candidates:
-        if os.path.exists(c):
+        if os.path.exists(c) and os.path.getsize(c) > 0:
             return c
-
     base = out_path.replace(".%(ext)s", "")
-    for ext in [".mp4", ".mkv", ".webm", ".avi"]:
-        if os.path.exists(base + ext):
-            return base + ext
+    for ext in [".mp4", ".mkv", ".webm", ".avi", ".mov"]:
+        p = base + ext
+        if os.path.exists(p) and os.path.getsize(p) > 0:
+            return p
+    return None
 
+
+def _download_sync(url: str, fmt_id: str, out_path: str,
+                   progress_hook: Callable = None) -> str:
+    resolved = _resolve_format(fmt_id)
+    # Primary format, then safer fallbacks so quality buttons rarely hard-fail
+    format_attempts = []
+    for a in (resolved, BEST_FORMAT_WITH_AUDIO, "best"):
+        if a not in format_attempts:
+            format_attempts.append(a)
+
+    last_err = None
+    for attempt_fmt in format_attempts:
+        ydl_opts = _base_ydl_opts({
+            "format": attempt_fmt,
+            "outtmpl": out_path,
+            "merge_output_format": "mp4",
+            "logtostderr": True,
+            "no_color": True,
+            "buffersize": 1024 * 1024,
+            "prefer_ffmpeg": True,
+        })
+        if "tiktok.com" in url:
+            ydl_opts["referer"] = "https://www.tiktok.com/"
+            ydl_opts["headers"] = {
+                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                "Accept-Language": "en-US,en;q=0.9",
+            }
+            ydl_opts["extractor_args"] = {
+                "tiktok": {"api_hostname": "api16-normal-c-useast1a.tiktokv.com"}
+            }
+        if any(x in url for x in ("facebook.com", "fb.watch", "fb.com", "instagram.com")):
+            ydl_opts["headers"] = {
+                "User-Agent": (
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                    "AppleWebKit/537.36 (KHTML, like Gecko) "
+                    "Chrome/124.0.0.0 Safari/537.36"
+                ),
+                "Accept-Language": "en-US,en;q=0.9",
+            }
+        if progress_hook:
+            ydl_opts["progress_hooks"] = [progress_hook]
+        try:
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                ydl.download([url])
+            found = _find_downloaded_file(out_path)
+            if found:
+                return found
+        except Exception as e:
+            last_err = e
+            error_logger.error(f"format attempt failed ({str(attempt_fmt)[:50]}): {e}")
+            continue
+
+    if last_err:
+        raise last_err
     raise FileNotFoundError(f"Downloaded file not found for {url}")
 
 
