@@ -10,6 +10,7 @@ from database.downloads import log_download
 from database.cache import get_cached, set_cache
 from services.downloader import analyze_url, download_video, download_audio, download_image, FileTooLargeError
 from middlewares.rate_limiter import check_rate_limit, mark_download
+from middlewares.concurrency import download_slot, active_global_slots
 from middlewares.auth import is_banned
 from locales import t
 from utils.helpers import is_valid_url, is_supported_url, truncate_title, make_progress_bar, format_size, get_platform_emoji
@@ -153,6 +154,14 @@ async def download_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     file_path = None
     edit_fn = query.edit_message_caption if progress_msg.caption else progress_msg.edit_text
 
+    # Global concurrency gate — wait for a free slot (do not overwhelm server)
+    try:
+        in_use, max_slots = active_global_slots()
+        if in_use >= max_slots:
+            await edit_fn(t(lang, "queue_wait", current=in_use, maximum=max_slots), parse_mode="HTML")
+    except Exception:
+        pass
+
     async def update_progress(prog):
         try:
             if isinstance(prog, dict):
@@ -164,6 +173,27 @@ async def download_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             else: await progress_msg.edit_text(txt, parse_mode="HTML")
         except Exception: pass
 
+    try:
+        async with download_slot(timeout=180):
+            await _run_download(query, context, info, user, lang, quality_label,
+                                is_audio, is_image, is_album, edit_fn, update_progress)
+    except asyncio.TimeoutError:
+        await edit_fn(t(lang, "server_busy"))
+    except FileTooLargeError:
+        await edit_fn(t(lang, "file_too_large", max_size="50MB"))
+    except Exception as e:
+        logger.error(f"Download error: {e}")
+        await edit_fn(t(lang, "download_failed"))
+    finally:
+        active_downloads.pop(user.id, None)
+        if file_path and os.path.exists(file_path):
+            try: os.remove(file_path)
+            except: pass
+
+
+async def _run_download(query, context, info, user, lang, quality_label,
+                        is_audio, is_image, is_album, edit_fn, update_progress):
+    file_path = None
     try:
         title = info.get("title", "Unknown")
         platform = info.get("platform", "")
@@ -254,14 +284,7 @@ async def download_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         increment_downloads(user.id)
         log_download(user.id, info["url"], title, platform, quality_label, "audio" if is_audio else ("image" if is_image else "video"))
         mark_download(user.id)
-
-    except FileTooLargeError:
-        await edit_fn(t(lang, "file_too_large", max_size="50MB"))
-    except Exception as e:
-        logger.error(f"Download error: {e}")
-        await edit_fn(t(lang, "download_failed"))
     finally:
-        active_downloads.pop(user.id, None)
         if file_path and os.path.exists(file_path):
             try: os.remove(file_path)
             except: pass
