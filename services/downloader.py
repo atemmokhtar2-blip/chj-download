@@ -25,23 +25,62 @@ PINTEREST_IMAGE_PATTERNS = [
 ]
 PINTEREST_IMAGE_EXTS = {"jpg", "jpeg", "png", "webp", "gif", "svg", "bmp"}
 
+# Always prefer a stream that contains both video and audio (merge with ffmpeg)
+BEST_FORMAT_WITH_AUDIO = (
+    "bestvideo[ext=mp4]+bestaudio[ext=m4a]/"
+    "bestvideo+bestaudio/"
+    "best[ext=mp4]/"
+    "best"
+)
 
-def _extract_info_sync(url: str) -> dict:
-    ydl_opts = {
+
+def _safe_impersonate():
+    """Return ImpersonateTarget only when curl_cffi version is supported by yt-dlp."""
+    try:
+        import curl_cffi
+        parts = [int(x) for x in curl_cffi.__version__.split(".")[:3] if x.isdigit()]
+        ver = tuple(parts + [0] * (3 - len(parts)))
+        # yt-dlp 2026.07.x marks curl_cffi >= 0.16 as unsupported
+        if ver >= (0, 16, 0):
+            return None
+        return yt_dlp.networking.impersonate.ImpersonateTarget("chrome")
+    except Exception:
+        return None
+
+
+def _base_ydl_opts(extra: dict | None = None) -> dict:
+    """Build base yt-dlp options. Impersonate is added only when supported."""
+    opts = {
         "quiet": True,
         "no_warnings": True,
-        "skip_download": True,
         "noplaylist": True,
-        "ignoreerrors": False,
-        "extract_flat": False,
         "nocheckcertificate": True,
-        "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-        "impersonate": yt_dlp.networking.impersonate.ImpersonateTarget("chrome"),
+        "ignoreerrors": False,
+        "user_agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/124.0.0.0 Safari/537.36"
+        ),
         "http_chunk_size": 10485760,
     }
+    impersonate = _safe_impersonate()
+    if impersonate is not None:
+        opts["impersonate"] = impersonate
     if os.path.exists("cookies.txt"):
-        ydl_opts["cookiefile"] = "cookies.txt"
-    
+        opts["cookiefile"] = "cookies.txt"
+    if FFMPEG_PATH:
+        opts["ffmpeg_location"] = FFMPEG_PATH
+    if extra:
+        opts.update(extra)
+    return opts
+
+
+def _extract_info_sync(url: str) -> dict:
+    ydl_opts = _base_ydl_opts({
+        "skip_download": True,
+        "extract_flat": False,
+    })
+
     # Advanced TikTok/Platform bypass
     if "tiktok.com" in url:
         ydl_opts["referer"] = "https://www.tiktok.com/"
@@ -51,7 +90,6 @@ def _extract_info_sync(url: str) -> dict:
             "Sec-Fetch-Mode": "navigate",
         }
 
-    # For Pinterest and Instagram, allow images
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
         return ydl.extract_info(url, download=False)
 
@@ -358,14 +396,16 @@ async def analyze_url(url: str) -> dict | None:
 
             label = f"{height}p"
             has_audio = acodec not in ("none", None)
-            
-            # If this format doesn't have audio, we'll need to merge it with best audio
-            # Use /best to fallback if bestaudio is not available
-            final_fmt_id = fmt_id if has_audio else f"{fmt_id}+bestaudio/best"
-            
-            # Special case for platforms that might fail with complex format strings
+
+            # Always ensure audio is present: merge with bestaudio when needed
+            if has_audio:
+                final_fmt_id = fmt_id
+            else:
+                final_fmt_id = f"{fmt_id}+bestaudio/best"
+
+            # Instagram / TikTok often work better with a simpler selector that still merges audio
             if platform in ["Instagram", "TikTok"]:
-                final_fmt_id = "best"
+                final_fmt_id = BEST_FORMAT_WITH_AUDIO
 
             if label not in quality_map:
                 quality_map[label] = {
@@ -596,35 +636,43 @@ async def download_image(url: str, image_url: str) -> str | None:
     return None
 
 
+def _resolve_format(fmt_id: str) -> str:
+    """Map UI labels / empty values to a format that always includes audio."""
+    if not fmt_id or fmt_id.lower() in ("best", "best_quality"):
+        return BEST_FORMAT_WITH_AUDIO
+    # Height labels like "1080p" / "720p" → constrained best with audio
+    if fmt_id.endswith("p") and fmt_id[:-1].isdigit():
+        h = int(fmt_id[:-1])
+        return (
+            f"bestvideo[height<={h}][ext=mp4]+bestaudio[ext=m4a]/"
+            f"bestvideo[height<={h}]+bestaudio/"
+            f"best[height<={h}][ext=mp4]/"
+            f"best[height<={h}]/"
+            f"best"
+        )
+    return fmt_id
+
+
 def _download_sync(url: str, fmt_id: str, out_path: str,
                    progress_hook: Callable = None) -> str:
-    ydl_opts = {
-        "format": fmt_id if fmt_id != "Best" else "best",
+    resolved = _resolve_format(fmt_id)
+    ydl_opts = _base_ydl_opts({
+        "format": resolved,
         "outtmpl": out_path,
-        "quiet": True,
-        "no_warnings": True,
-        "noplaylist": True,
         "merge_output_format": "mp4",
-        "nocheckcertificate": True,
-        "ignoreerrors": False,
         "logtostderr": True,
         "no_color": True,
         "buffersize": 1024 * 1024,
-        "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-        "impersonate": yt_dlp.networking.impersonate.ImpersonateTarget("chrome"),
-        "http_chunk_size": 10485760,
-    }
-    
+        # Prefer ffmpeg for merging video+audio so the final file has sound
+        "prefer_ffmpeg": True,
+    })
+
     if "tiktok.com" in url:
         ydl_opts["referer"] = "https://www.tiktok.com/"
         ydl_opts["headers"] = {
             "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
             "Accept-Language": "en-US,en;q=0.9",
         }
-    if os.path.exists("cookies.txt"):
-        ydl_opts["cookiefile"] = "cookies.txt"
-    if FFMPEG_PATH:
-        ydl_opts["ffmpeg_location"] = FFMPEG_PATH
     if progress_hook:
         ydl_opts["progress_hooks"] = [progress_hook]
 
@@ -650,12 +698,9 @@ def _download_sync(url: str, fmt_id: str, out_path: str,
 
 def _download_audio_sync(url: str, out_path: str,
                          progress_hook: Callable = None) -> str:
-    ydl_opts = {
+    ydl_opts = _base_ydl_opts({
         "format": "bestaudio/best",
         "outtmpl": out_path,
-        "quiet": True,
-        "no_warnings": True,
-        "noplaylist": True,
         "postprocessors": [{
             "key": "FFmpegExtractAudio",
             "preferredcodec": "mp3",
@@ -663,21 +708,14 @@ def _download_audio_sync(url: str, out_path: str,
         }],
         "writethumbnail": False,
         "embedthumbnail": False,
-        "nocheckcertificate": True,
-        "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-        "impersonate": yt_dlp.networking.impersonate.ImpersonateTarget("chrome"),
-    }
-    
+    })
+
     if "tiktok.com" in url:
         ydl_opts["referer"] = "https://www.tiktok.com/"
         ydl_opts["headers"] = {
             "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
             "Accept-Language": "en-US,en;q=0.9",
         }
-    if os.path.exists("cookies.txt"):
-        ydl_opts["cookiefile"] = "cookies.txt"
-    if FFMPEG_PATH:
-        ydl_opts["ffmpeg_location"] = FFMPEG_PATH
     if progress_hook:
         ydl_opts["progress_hooks"] = [progress_hook]
 
