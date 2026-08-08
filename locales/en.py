@@ -47,4 +47,6 @@ translations = {
         "YouTube, TikTok, Instagram, Facebook, Pinterest, Twitter/X, and more."
     ),
     "error_occurred": "An error occurred. Please try again.",
+    "queue_wait": '⏳ Server is busy ({current}/{maximum}). You are in the queue...',
+    "server_busy": '⏳ Server is busy right now. Please try again in a minute.',
 }

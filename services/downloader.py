@@ -10,6 +10,7 @@ from config.settings import TEMP_DIR, MAX_FILE_SIZE_BYTES, DOWNLOAD_TIMEOUT
 from utils.helpers import sanitize_filename, format_duration, format_size, get_platform
 from utils.logger import download_logger, error_logger
 from utils.ffmpeg_check import FFMPEG_AVAILABLE, FFMPEG_PATH
+from middlewares.concurrency import get_executor
 
 # Platforms that primarily serve images/carousels
 IMAGE_PLATFORMS = {"Pinterest", "Instagram"}
@@ -342,19 +343,19 @@ async def analyze_url(url: str) -> dict | None:
         # TikTok: expand short links + multi-strategy scrape BEFORE yt-dlp
         if any(x in url for x in ("tiktok.com", "vt.tiktok.com", "vm.tiktok.com")):
             from .tiktok_scraper import scrape_tiktok
-            tk_info = await loop.run_in_executor(None, scrape_tiktok, url)
+            tk_info = await loop.run_in_executor(get_executor(), scrape_tiktok, url)
             if tk_info and tk_info.get("webpage_url"):
                 url = tk_info["webpage_url"]
 
         try:
             info = await asyncio.wait_for(
-                loop.run_in_executor(None, _extract_info_sync, url),
+                loop.run_in_executor(get_executor(), _extract_info_sync, url),
                 timeout=30
             )
         except Exception as e:
             if "pinterest.com" in url or "pin.it" in url:
                 download_logger.info(f"yt-dlp failed for Pinterest, trying fallback: {url}")
-                return await loop.run_in_executor(None, _fallback_pinterest_extract, url)
+                return await loop.run_in_executor(get_executor(), _fallback_pinterest_extract, url)
 
             # TikTok blocked / yt-dlp failed → use scraper result (may include direct play_url)
             if tk_info:
@@ -362,14 +363,14 @@ async def analyze_url(url: str) -> dict | None:
                 return _normalize_tiktok_info(tk_info, url)
             if any(x in url for x in ("tiktok.com", "vt.tiktok.com", "vm.tiktok.com")):
                 from .tiktok_scraper import scrape_tiktok
-                tk_info = await loop.run_in_executor(None, scrape_tiktok, url)
+                tk_info = await loop.run_in_executor(get_executor(), scrape_tiktok, url)
                 if tk_info:
                     return _normalize_tiktok_info(tk_info, url)
             raise e
 
         if not info:
             if "pinterest.com" in url or "pin.it" in url:
-                return await loop.run_in_executor(None, _fallback_pinterest_extract, url)
+                return await loop.run_in_executor(get_executor(), _fallback_pinterest_extract, url)
             if tk_info:
                 return _normalize_tiktok_info(tk_info, url)
             return None
@@ -548,7 +549,7 @@ async def analyze_url(url: str) -> dict | None:
         return None
     except Exception as e:
         if "pinterest.com" in url or "pin.it" in url:
-            return await loop.run_in_executor(None, _fallback_pinterest_extract, url)
+            return await loop.run_in_executor(get_executor(), _fallback_pinterest_extract, url)
         error_logger.error(f"Error analyzing {url}: {e}")
         return None
 
@@ -916,14 +917,14 @@ async def download_video(url: str, format_id: str, quality_label: str,
             candidates.append(preferred)
 
         try:
-            resolved = await loop.run_in_executor(None, resolve_tiktok, url)
+            resolved = await loop.run_in_executor(get_executor(), resolve_tiktok, url)
             if resolved and resolved.get("play_url"):
                 candidates.append(resolved["play_url"])
         except Exception as e:
             error_logger.error(f"TikTok resolve_tiktok error: {e}")
 
         try:
-            tk = await loop.run_in_executor(None, scrape_tiktok, url)
+            tk = await loop.run_in_executor(get_executor(), scrape_tiktok, url)
             if tk and tk.get("play_url"):
                 candidates.append(tk["play_url"])
         except Exception as e:
@@ -939,7 +940,7 @@ async def download_video(url: str, format_id: str, quality_label: str,
         for i, direct in enumerate(unique):
             try:
                 path = await loop.run_in_executor(
-                    None, download_tiktok_direct, direct, f"{direct_path}.{i}"
+                    get_executor(), download_tiktok_direct, direct, f"{direct_path}.{i}"
                 )
                 if path and os.path.exists(path) and os.path.getsize(path) > 1000:
                     download_logger.info(f"TikTok direct OK via candidate #{i}")
@@ -957,7 +958,7 @@ async def download_video(url: str, format_id: str, quality_label: str,
     # 2) yt-dlp
     try:
         file_path = await loop.run_in_executor(
-            None, _download_sync, url, format_id, out_path, hook
+            get_executor(), _download_sync, url, format_id, out_path, hook
         )
         if file_path:
             return file_path
@@ -1005,7 +1006,7 @@ async def download_audio(url: str, progress_callback: Callable = None) -> str | 
 
     try:
         file_path = await loop.run_in_executor(
-            None, _download_audio_sync, url, out_path, hook
+            get_executor(), _download_audio_sync, url, out_path, hook
         )
         return file_path
     except Exception as e:

@@ -47,4 +47,6 @@ translations = {
         "YouTube, TikTok, Instagram, Facebook, Pinterest, Twitter/X, والمزيد."
     ),
     "error_occurred": "حدث خطأ ما. يرجى المحاولة مرة أخرى.",
+    "queue_wait": '⏳ السيرفر مشغول ({current}/{maximum}). أنت في الطابور...',
+    "server_busy": '⏳ السيرفر مشغول حالياً. حاول مرة أخرى بعد دقيقة.',
 }
