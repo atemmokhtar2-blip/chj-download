@@ -91,21 +91,21 @@ async def handle_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await status_msg.edit_text(caption, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard))
 
 def _build_action_keyboard(media_type: str, qualities: list, lang: str) -> list:
+    """Video: best + quality buttons only (audio is always included in the video file)."""
     keyboard = []
     if media_type == "video":
         keyboard.append([InlineKeyboardButton(t(lang, "best_quality"), callback_data="dl_video_best")])
         if qualities:
             for q in qualities[-3:]:
-                keyboard.append([InlineKeyboardButton(f"📹 {q['label']}", callback_data=f"dl_video_{q['label']}")])
-        keyboard.append([InlineKeyboardButton(t(lang, "download_audio"), callback_data="dl_audio")])
+                keyboard.append([
+                    InlineKeyboardButton(f"📹 {q['label']}", callback_data=f"dl_video_{q['label']}")
+                ])
     elif media_type == "audio":
         keyboard.append([InlineKeyboardButton(t(lang, "download_audio"), callback_data="dl_audio")])
     elif media_type == "image":
         keyboard.append([InlineKeyboardButton(t(lang, "download_image"), callback_data="dl_image")])
     elif media_type == "album":
         keyboard.append([InlineKeyboardButton(t(lang, "download_album"), callback_data="dl_album")])
-    
-    keyboard.append([InlineKeyboardButton(t(lang, "cancel_button"), callback_data="dl_cancel")])
     return keyboard
 
 async def download_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -232,7 +232,8 @@ async def download_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 format_id = "best"
 
             file_path = await download_video(
-                info["url"], format_id, quality_label, update_progress
+                info["url"], format_id, quality_label, update_progress,
+                play_url=info.get("play_url"),
             )
             if not file_path:
                 raise Exception("Download failed")
