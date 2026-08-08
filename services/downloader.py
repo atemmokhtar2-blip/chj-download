@@ -403,9 +403,14 @@ async def analyze_url(url: str) -> dict | None:
             else:
                 final_fmt_id = f"{fmt_id}+bestaudio/best"
 
-            # Instagram / TikTok often work better with a simpler selector that still merges audio
+            # Instagram / TikTok: prefer height-capped merge so each quality button differs
+            # but still always includes audio (avoid bare video-only streams)
             if platform in ["Instagram", "TikTok"]:
-                final_fmt_id = BEST_FORMAT_WITH_AUDIO
+                final_fmt_id = (
+                    f"bestvideo[height<={height}]+bestaudio/"
+                    f"best[height<={height}]/"
+                    f"best"
+                )
 
             if label not in quality_map:
                 quality_map[label] = {
