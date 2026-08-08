@@ -815,51 +815,79 @@ async def download_video(url: str, format_id: str, quality_label: str,
                             loop
                         )
 
-    is_tiktok = any(x in (url or "") for x in ("tiktok.com", "vt.tiktok.com", "vm.tiktok.com"))
+    is_tiktok = any(
+        x in (url or "")
+        for x in ("tiktok.com", "vt.tiktok.com", "vm.tiktok.com")
+    )
 
-    # TikTok: try direct CDN URL first (survives IP blocks that kill yt-dlp)
-    if is_tiktok:
-        from .tiktok_scraper import scrape_tiktok, download_tiktok_direct
-        direct = play_url
-        if not direct:
-            try:
-                tk = await loop.run_in_executor(None, scrape_tiktok, url)
-                direct = (tk or {}).get("play_url")
-            except Exception:
-                direct = None
-        if direct:
+    async def _tiktok_direct_attempts(preferred: str | None = None) -> str | None:
+        """Resolve + download via multi-provider scraper. Never raises."""
+        try:
+            from .tiktok_scraper import scrape_tiktok, download_tiktok_direct, resolve_tiktok
+        except Exception as e:
+            error_logger.error(f"TikTok module import failed: {e}")
+            return None
+
+        candidates: list[str] = []
+        if preferred and str(preferred).startswith("http"):
+            candidates.append(preferred)
+
+        try:
+            resolved = await loop.run_in_executor(None, resolve_tiktok, url)
+            if resolved and resolved.get("play_url"):
+                candidates.append(resolved["play_url"])
+        except Exception as e:
+            error_logger.error(f"TikTok resolve_tiktok error: {e}")
+
+        try:
+            tk = await loop.run_in_executor(None, scrape_tiktok, url)
+            if tk and tk.get("play_url"):
+                candidates.append(tk["play_url"])
+        except Exception as e:
+            error_logger.error(f"TikTok scrape_tiktok error: {e}")
+
+        seen = set()
+        unique = []
+        for c in candidates:
+            if c and c not in seen:
+                seen.add(c)
+                unique.append(c)
+
+        for i, direct in enumerate(unique):
             try:
                 path = await loop.run_in_executor(
-                    None, download_tiktok_direct, direct, direct_path
+                    None, download_tiktok_direct, direct, f"{direct_path}.{i}"
                 )
                 if path and os.path.exists(path) and os.path.getsize(path) > 1000:
-                    download_logger.info(f"TikTok direct download OK: {path}")
+                    download_logger.info(f"TikTok direct OK via candidate #{i}")
                     return path
             except Exception as e:
-                error_logger.error(f"TikTok direct download error: {e}")
+                error_logger.error(f"TikTok direct candidate #{i} error: {e}")
+        return None
 
+    # 1) TikTok multi-provider direct CDN first (survives yt-dlp IP bans)
+    if is_tiktok:
+        path = await _tiktok_direct_attempts(play_url)
+        if path:
+            return path
+
+    # 2) yt-dlp
     try:
         file_path = await loop.run_in_executor(
             None, _download_sync, url, format_id, out_path, hook
         )
-        return file_path
+        if file_path:
+            return file_path
     except Exception as e:
         error_logger.error(f"Download error {url}: {e}")
-        # Last-resort TikTok retry after yt-dlp failure
-        if is_tiktok:
-            try:
-                from .tiktok_scraper import scrape_tiktok, download_tiktok_direct
-                tk = await loop.run_in_executor(None, scrape_tiktok, url)
-                direct = (tk or {}).get("play_url")
-                if direct:
-                    path = await loop.run_in_executor(
-                        None, download_tiktok_direct, direct, direct_path
-                    )
-                    if path and os.path.exists(path):
-                        return path
-            except Exception as e2:
-                error_logger.error(f"TikTok fallback after yt-dlp also failed: {e2}")
-        return None
+
+    # 3) TikTok last-resort after yt-dlp failure
+    if is_tiktok:
+        path = await _tiktok_direct_attempts(None)
+        if path:
+            return path
+
+    return None
 
 
 async def download_audio(url: str, progress_callback: Callable = None) -> str | None:
