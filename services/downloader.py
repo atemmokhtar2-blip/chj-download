@@ -89,6 +89,9 @@ def _extract_info_sync(url: str) -> dict:
             "Accept-Language": "en-US,en;q=0.9",
             "Sec-Fetch-Mode": "navigate",
         }
+        ydl_opts["extractor_args"] = {
+            "tiktok": {"api_hostname": "api16-normal-c-useast1a.tiktokv.com"}
+        }
 
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
         return ydl.extract_info(url, download=False)
@@ -334,38 +337,41 @@ def _fallback_pinterest_extract(url: str) -> dict | None:
 async def analyze_url(url: str) -> dict | None:
     try:
         loop = asyncio.get_event_loop()
-        
-        # TikTok Pre-processing: Expand short URLs and bypass initial blocks
-        if "tiktok.com" in url or "vt.tiktok.com" in url:
+        tk_info = None
+
+        # TikTok: expand short links + multi-strategy scrape BEFORE yt-dlp
+        if any(x in url for x in ("tiktok.com", "vt.tiktok.com", "vm.tiktok.com")):
             from .tiktok_scraper import scrape_tiktok
             tk_info = await loop.run_in_executor(None, scrape_tiktok, url)
             if tk_info and tk_info.get("webpage_url"):
-                url = tk_info["webpage_url"] # Use expanded URL
-                # If yt-dlp still fails, we at least have metadata from scrape_tiktok
-        
+                url = tk_info["webpage_url"]
+
         try:
             info = await asyncio.wait_for(
                 loop.run_in_executor(None, _extract_info_sync, url),
                 timeout=30
             )
         except Exception as e:
-            # If yt-dlp fails and it's Pinterest, try fallback
             if "pinterest.com" in url or "pin.it" in url:
                 download_logger.info(f"yt-dlp failed for Pinterest, trying fallback: {url}")
                 return await loop.run_in_executor(None, _fallback_pinterest_extract, url)
-            
-            # If yt-dlp fails for TikTok but we have scraper info, use it
-            if "tiktok.com" in url:
+
+            # TikTok blocked / yt-dlp failed → use scraper result (may include direct play_url)
+            if tk_info:
+                download_logger.info(f"yt-dlp failed for TikTok, using scraper source={tk_info.get('source')}")
+                return _normalize_tiktok_info(tk_info, url)
+            if any(x in url for x in ("tiktok.com", "vt.tiktok.com", "vm.tiktok.com")):
                 from .tiktok_scraper import scrape_tiktok
                 tk_info = await loop.run_in_executor(None, scrape_tiktok, url)
                 if tk_info:
-                    return tk_info
+                    return _normalize_tiktok_info(tk_info, url)
             raise e
 
         if not info:
-            # Also try fallback if info is empty for Pinterest
             if "pinterest.com" in url or "pin.it" in url:
                 return await loop.run_in_executor(None, _fallback_pinterest_extract, url)
+            if tk_info:
+                return _normalize_tiktok_info(tk_info, url)
             return None
 
         platform = get_platform(url)
@@ -472,7 +478,7 @@ async def analyze_url(url: str) -> dict | None:
                         "type": item_type,
                     })
 
-        return {
+        result = {
             "title": info.get("title", "Unknown"),
             "uploader": info.get("uploader") or info.get("channel") or "Unknown",
             "duration": format_duration(int(duration_secs)) if duration_secs else "Unknown",
@@ -488,15 +494,47 @@ async def analyze_url(url: str) -> dict | None:
             "webpage_url": info.get("webpage_url", url),
             "ext": info.get("ext", ""),
         }
+        # Attach TikTok direct CDN URL when scraper found one (used if yt-dlp download fails)
+        if tk_info and tk_info.get("play_url"):
+            result["play_url"] = tk_info["play_url"]
+        return result
     except asyncio.TimeoutError:
         error_logger.error(f"Timeout analyzing: {url}")
         return None
     except Exception as e:
-        # One last check for Pinterest fallback if any other error occurred
         if "pinterest.com" in url or "pin.it" in url:
             return await loop.run_in_executor(None, _fallback_pinterest_extract, url)
         error_logger.error(f"Error analyzing {url}: {e}")
         return None
+
+
+def _normalize_tiktok_info(tk: dict, original_url: str) -> dict:
+    """Build a standard analyze_url result from the multi-strategy TikTok scraper."""
+    duration_secs = tk.get("duration") or 0
+    try:
+        duration_secs = int(duration_secs)
+    except Exception:
+        duration_secs = 0
+    qualities = tk.get("qualities") or [
+        {"label": "Best", "format_id": "best", "has_audio": True}
+    ]
+    return {
+        "title": tk.get("title") or "TikTok Video",
+        "uploader": tk.get("uploader") or "TikTok User",
+        "duration": format_duration(duration_secs) if duration_secs else "Unknown",
+        "duration_secs": duration_secs,
+        "thumbnail": tk.get("thumbnail") or "",
+        "platform": "TikTok",
+        "media_type": "video",
+        "qualities": qualities,
+        "audio_formats": [],
+        "image_url": None,
+        "album_items": [],
+        "url": tk.get("webpage_url") or original_url,
+        "webpage_url": tk.get("webpage_url") or original_url,
+        "play_url": tk.get("play_url"),
+        "ext": "mp4",
+    }
 
 
 def _extract_image_url(info: dict) -> str | None:
@@ -681,6 +719,9 @@ def _download_sync(url: str, fmt_id: str, out_path: str,
             "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
             "Accept-Language": "en-US,en;q=0.9",
         }
+        ydl_opts["extractor_args"] = {
+            "tiktok": {"api_hostname": "api16-normal-c-useast1a.tiktokv.com"}
+        }
     if progress_hook:
         ydl_opts["progress_hooks"] = [progress_hook]
 
@@ -742,9 +783,11 @@ def _download_audio_sync(url: str, out_path: str,
 
 
 async def download_video(url: str, format_id: str, quality_label: str,
-                         progress_callback: Callable = None) -> str | None:
+                         progress_callback: Callable = None,
+                         play_url: str | None = None) -> str | None:
     safe_name = sanitize_filename(f"video_{hash(url) % 100000}_{quality_label}")
     out_path = os.path.join(TEMP_DIR, f"{safe_name}.%(ext)s")
+    direct_path = os.path.join(TEMP_DIR, f"{safe_name}.mp4")
 
     last_percent = [0]
     loop = asyncio.get_running_loop()
@@ -755,7 +798,7 @@ async def download_video(url: str, format_id: str, quality_label: str,
             downloaded = d.get("downloaded_bytes", 0)
             speed = d.get("speed", 0)
             eta = d.get("eta", 0)
-            
+
             if total > 0:
                 pct = round((downloaded / total) * 100, 1)
                 if pct >= last_percent[0] + 5 or pct >= 99:
@@ -772,6 +815,29 @@ async def download_video(url: str, format_id: str, quality_label: str,
                             loop
                         )
 
+    is_tiktok = any(x in (url or "") for x in ("tiktok.com", "vt.tiktok.com", "vm.tiktok.com"))
+
+    # TikTok: try direct CDN URL first (survives IP blocks that kill yt-dlp)
+    if is_tiktok:
+        from .tiktok_scraper import scrape_tiktok, download_tiktok_direct
+        direct = play_url
+        if not direct:
+            try:
+                tk = await loop.run_in_executor(None, scrape_tiktok, url)
+                direct = (tk or {}).get("play_url")
+            except Exception:
+                direct = None
+        if direct:
+            try:
+                path = await loop.run_in_executor(
+                    None, download_tiktok_direct, direct, direct_path
+                )
+                if path and os.path.exists(path) and os.path.getsize(path) > 1000:
+                    download_logger.info(f"TikTok direct download OK: {path}")
+                    return path
+            except Exception as e:
+                error_logger.error(f"TikTok direct download error: {e}")
+
     try:
         file_path = await loop.run_in_executor(
             None, _download_sync, url, format_id, out_path, hook
@@ -779,6 +845,20 @@ async def download_video(url: str, format_id: str, quality_label: str,
         return file_path
     except Exception as e:
         error_logger.error(f"Download error {url}: {e}")
+        # Last-resort TikTok retry after yt-dlp failure
+        if is_tiktok:
+            try:
+                from .tiktok_scraper import scrape_tiktok, download_tiktok_direct
+                tk = await loop.run_in_executor(None, scrape_tiktok, url)
+                direct = (tk or {}).get("play_url")
+                if direct:
+                    path = await loop.run_in_executor(
+                        None, download_tiktok_direct, direct, direct_path
+                    )
+                    if path and os.path.exists(path):
+                        return path
+            except Exception as e2:
+                error_logger.error(f"TikTok fallback after yt-dlp also failed: {e2}")
         return None
 
 
