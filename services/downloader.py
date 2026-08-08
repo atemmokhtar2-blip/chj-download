@@ -643,6 +643,9 @@ async def download_image(url: str, image_url: str) -> str | None:
 
 def _resolve_format(fmt_id: str) -> str:
     """Map UI labels / empty values to a format that always includes audio."""
+    if fmt_id is None:
+        return BEST_FORMAT_WITH_AUDIO
+    fmt_id = str(fmt_id).strip()
     if not fmt_id or fmt_id.lower() in ("best", "best_quality"):
         return BEST_FORMAT_WITH_AUDIO
     # Height labels like "1080p" / "720p" → constrained best with audio
