@@ -432,3 +432,198 @@ def cleanup_old_cache(days: int | None = None) -> int:
     with _l1_lock:
         _l1.clear()
     return n
+
+
+# ---------------------------------------------------------------------------
+# Content fingerprint — cross-URL dedup (same YouTube id, different share links)
+# ---------------------------------------------------------------------------
+def make_fingerprint(platform: str, media_id: str, quality: str, media_type: str) -> str:
+    """
+    Stable content key independent of URL.
+    Same TikTok/YouTube id + quality + type → same fingerprint → shared file_id.
+    """
+    if not media_id:
+        return ""
+    raw = f"{(platform or '').strip().lower()}|{str(media_id).strip()}|{(quality or '').strip()}|{(media_type or '').strip()}"
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+def get_cached_by_fingerprint(fingerprint: str, quality: str, media_type: str) -> dict | None:
+    """
+    Lookup by content fingerprint.
+    Returns {file_id, vault_chat_id, vault_message_id, url_hash} or None.
+    """
+    if not fingerprint:
+        return None
+    # L1
+    l1k = f"fp|{fingerprint}|{quality}|{media_type}"
+    hit = _l1_get(l1k)
+    if isinstance(hit, dict) and hit.get("file_id"):
+        return hit
+
+    # L2
+    r = _get_redis()
+    if r is not None:
+        try:
+            raw = r.get(f"tgfp:v1:{fingerprint}:{quality}:{media_type}")
+            if raw:
+                data = json.loads(raw)
+                _l1_set(l1k, data)
+                return data
+        except Exception:
+            pass
+
+    # L3 index table
+    try:
+        with db_cursor() as c:
+            c.execute(
+                """
+                SELECT file_id, vault_chat_id, vault_message_id, url_hash
+                FROM media_fingerprint_index
+                WHERE fingerprint = ? AND quality = ? AND media_type = ?
+                """,
+                (fingerprint, quality, media_type),
+            )
+            row = c.fetchone()
+            if not row or not row["file_id"]:
+                return None
+            data = {
+                "file_id": row["file_id"],
+                "vault_chat_id": row["vault_chat_id"],
+                "vault_message_id": row["vault_message_id"],
+                "url_hash": row["url_hash"],
+            }
+            _l1_set(l1k, data)
+            if r is not None:
+                try:
+                    r.setex(
+                        f"tgfp:v1:{fingerprint}:{quality}:{media_type}",
+                        max(60, CACHE_TTL_SECONDS),
+                        json.dumps(data),
+                    )
+                except Exception:
+                    pass
+            return data
+    except Exception as e:
+        logger.debug("fingerprint lookup failed: %s", e)
+        return None
+
+
+def index_fingerprint(
+    fingerprint: str,
+    quality: str,
+    media_type: str,
+    url: str,
+    file_id: str,
+    vault_chat_id: int | None = None,
+    vault_message_id: int | None = None,
+) -> None:
+    if not fingerprint or not file_id:
+        return
+    h = url_hash(url)
+    data = {
+        "file_id": file_id,
+        "vault_chat_id": vault_chat_id,
+        "vault_message_id": vault_message_id,
+        "url_hash": h,
+    }
+    l1k = f"fp|{fingerprint}|{quality}|{media_type}"
+    _l1_set(l1k, data)
+    r = _get_redis()
+    if r is not None:
+        try:
+            r.setex(
+                f"tgfp:v1:{fingerprint}:{quality}:{media_type}",
+                max(60, CACHE_TTL_SECONDS),
+                json.dumps(data),
+            )
+        except Exception:
+            pass
+    try:
+        with db_cursor() as c:
+            c.execute(
+                """
+                INSERT INTO media_fingerprint_index
+                    (fingerprint, quality, media_type, url_hash, file_id,
+                     vault_chat_id, vault_message_id, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'))
+                ON CONFLICT(fingerprint, quality, media_type) DO UPDATE SET
+                    url_hash = excluded.url_hash,
+                    file_id = excluded.file_id,
+                    vault_chat_id = COALESCE(excluded.vault_chat_id, media_fingerprint_index.vault_chat_id),
+                    vault_message_id = COALESCE(excluded.vault_message_id, media_fingerprint_index.vault_message_id),
+                    updated_at = datetime('now')
+                """,
+                (fingerprint, quality, media_type, h, file_id, vault_chat_id, vault_message_id),
+            )
+            # Also stamp fingerprint on the primary file_cache row when present
+            c.execute(
+                """
+                UPDATE file_cache SET fingerprint = ?,
+                    vault_chat_id = COALESCE(?, vault_chat_id),
+                    vault_message_id = COALESCE(?, vault_message_id)
+                WHERE url_hash = ? AND quality = ? AND media_type = ?
+                """,
+                (fingerprint, vault_chat_id, vault_message_id, h, quality, media_type),
+            )
+    except Exception as e:
+        logger.warning("fingerprint index write failed: %s", e)
+
+
+def set_cache_with_meta(
+    url: str,
+    quality: str,
+    media_type: str,
+    file_id: str,
+    *,
+    title: str = "",
+    platform: str = "",
+    media_id: str = "",
+    vault_chat_id: int | None = None,
+    vault_message_id: int | None = None,
+) -> None:
+    """Write URL cache + content-fingerprint index + optional vault coords."""
+    set_cache(url, quality, media_type, file_id, title, platform)
+    fp = make_fingerprint(platform, media_id, quality, media_type)
+    if fp:
+        index_fingerprint(
+            fp, quality, media_type, url, file_id,
+            vault_chat_id=vault_chat_id, vault_message_id=vault_message_id,
+        )
+
+
+def resolve_cached_delivery(
+    url: str,
+    quality: str,
+    media_type: str,
+    *,
+    platform: str = "",
+    media_id: str = "",
+) -> dict | None:
+    """
+    Unified lookup: URL key first, then content fingerprint.
+    Returns {file_id, vault_chat_id, vault_message_id, source} or None.
+    """
+    fid = get_cached(url, quality, media_type)
+    if fid:
+        # Try enrich with vault coords from fingerprint row
+        fp = make_fingerprint(platform, media_id, quality, media_type)
+        meta = get_cached_by_fingerprint(fp, quality, media_type) if fp else None
+        return {
+            "file_id": fid,
+            "vault_chat_id": (meta or {}).get("vault_chat_id"),
+            "vault_message_id": (meta or {}).get("vault_message_id"),
+            "source": "url",
+        }
+    fp = make_fingerprint(platform, media_id, quality, media_type)
+    meta = get_cached_by_fingerprint(fp, quality, media_type) if fp else None
+    if meta and meta.get("file_id"):
+        # Promote into URL cache for next time
+        set_cache(url, quality, media_type, meta["file_id"], platform=platform)
+        return {
+            "file_id": meta["file_id"],
+            "vault_chat_id": meta.get("vault_chat_id"),
+            "vault_message_id": meta.get("vault_message_id"),
+            "source": "fingerprint",
+        }
+    return None
