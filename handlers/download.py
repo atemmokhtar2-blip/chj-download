@@ -185,6 +185,12 @@ async def download_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
         except TelegramError: pass
 
+    # Consume rate-limit windows atomically when a real download starts
+    # (cache hits do not consume). Closes double-click races.
+    if not mark_download(user.id):
+        await query.answer(t(lang, "rate_limit", seconds=1), show_alert=True)
+        return
+
     active_downloads[user.id] = True
     progress_msg = query.message
     file_path = None
@@ -394,7 +400,6 @@ async def _run_download(query, context, info, user, lang, quality_label,
 
         increment_downloads(user.id)
         log_download(user.id, info["url"], title, platform, quality_label, "audio" if is_audio else ("image" if is_image else "video"))
-        mark_download(user.id)
     finally:
         if file_path and os.path.exists(file_path):
             try: os.remove(file_path)
