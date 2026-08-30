@@ -10,7 +10,7 @@ from telegram.error import TelegramError, NetworkError
 
 from database.users import get_user, increment_downloads
 from database.downloads import log_download
-from database.cache import get_cached, set_cache, invalidate_cache
+from database.cache import get_cached, set_cache, invalidate_cache, get_cached_album, set_cache_album
 from services.downloader import (
     analyze_url, download_video, download_audio, download_image,
     download_album, FileTooLargeError, ALBUM_MAX_ITEMS,
@@ -173,6 +173,26 @@ async def download_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     is_album = data == "dl_album"
     quality_label = "audio" if is_audio else ("image" if is_image else data.replace("dl_video_", ""))
 
+    if is_album:
+        cached_album = get_cached_album(info["url"])
+        if cached_album and len(cached_album) >= 2:
+            try:
+                edit_fn = query.edit_message_caption if query.message.caption else query.edit_message_text
+                await edit_fn(t(lang, "from_cache"), parse_mode="HTML")
+                media_group = []
+                for i, it in enumerate(cached_album[:ALBUM_MAX_ITEMS]):
+                    caption = t(lang, "completed") if i == 0 else None
+                    if it.get("type") == "video":
+                        media_group.append(InputMediaVideo(media=it["file_id"], caption=caption, parse_mode="HTML" if caption else None, supports_streaming=True))
+                    else:
+                        media_group.append(InputMediaPhoto(media=it["file_id"], caption=caption, parse_mode="HTML" if caption else None))
+                await _upload_with_retry(query.message.reply_media_group(media=media_group))
+                increment_downloads(user.id)
+                return
+            except TelegramError as e:
+                logger.warning("Stale album cache for %s: %s", info["url"][:80], e)
+                invalidate_cache(info["url"], "album", "album")
+
     media_kind = "audio" if is_audio else ("image" if is_image else "video")
     cached_id = get_cached(info["url"], quality_label, media_kind)
     if cached_id:
@@ -332,16 +352,18 @@ async def _run_download(query, context, info, user, lang, quality_label,
                         query.message.reply_media_group(media=media_group)
                     )
                     if sent_msgs:
-                        first = sent_msgs[0]
-                        if first.photo:
+                        album_entries = []
+                        for msg in sent_msgs:
+                            if msg.photo:
+                                album_entries.append({"file_id": msg.photo[-1].file_id, "type": "image"})
+                            elif msg.video:
+                                album_entries.append({"file_id": msg.video.file_id, "type": "video"})
+                        if len(album_entries) >= 2:
+                            set_cache_album(info["url"], album_entries, title, platform)
+                        elif album_entries:
                             set_cache(
-                                info["url"], quality_label, "image",
-                                first.photo[-1].file_id, title, platform,
-                            )
-                        elif first.video:
-                            set_cache(
-                                info["url"], quality_label, "video",
-                                first.video.file_id, title, platform,
+                                info["url"], quality_label, album_entries[0]["type"],
+                                album_entries[0]["file_id"], title, platform,
                             )
             finally:
                 for fh in open_handles:

@@ -1,17 +1,13 @@
 """
-Telegram file_id media cache — production grade (2026).
+Telegram media file_id cache — 3-tier production architecture (2026).
 
-Why file_id caching matters:
-  Re-sending by file_id skips re-upload entirely (bandwidth + latency).
-  Telegram bot file_ids stay valid long-term while the bot has seen the file;
-  they can still go stale → must invalidate + re-upload on send failure.
+  Request → L1 in-process TTLCache (cachetools, µs)
+         → L2 Redis (optional, multi-worker, ms)
+         → L3 SQLite (durable, TTL + LRU eviction)
 
-Layers:
-  1. URL normalization before hashing (stable keys across tracking params)
-  2. SQLite persistent store with TTL (CACHE_TTL_SECONDS)
-  3. Optional Redis hot layer when REDIS_URL is set (multi-worker)
-  4. Stale-file_id invalidation API used by handlers on TelegramError
-  5. Soft max-size eviction (lowest hits, then oldest)
+Also supports album/media-group entries as ordered JSON lists of file_ids.
+
+Stale file_ids: handlers call invalidate_* on TelegramError and re-upload.
 """
 from __future__ import annotations
 
@@ -20,24 +16,29 @@ import json
 import logging
 import os
 import re
+import threading
+import time
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
+
+from cachetools import TTLCache
 
 from config.settings import CACHE_TTL_SECONDS, CACHE_MAX_SIZE
 from .db import db_cursor
 
 logger = logging.getLogger(__name__)
 
-# Tracking / share junk stripped so the same media shares one cache key.
+# ---------------------------------------------------------------------------
+# URL canonicalization
+# ---------------------------------------------------------------------------
 _STRIP_QUERY_KEYS = {
     "utm_source", "utm_medium", "utm_campaign", "utm_term", "utm_content",
     "utm_id", "fbclid", "gclid", "igshid", "igsh", "si", "feature",
     "ref", "ref_src", "ref_url", "s", "t", "tt_from", "share_app_id",
-    "share_link_id", "timestamp", "context", "entry_point",
+    "share_link_id", "timestamp", "context", "entry_point", "spm",
 }
 
 
 def normalize_url(url: str) -> str:
-    """Canonical form for cache keys — host lowercased, tracking params dropped."""
     if not url:
         return ""
     try:
@@ -46,21 +47,24 @@ def normalize_url(url: str) -> str:
         netloc = (p.netloc or "").lower()
         if netloc.startswith("www."):
             netloc = netloc[4:]
-        # Drop mobile subdomains that point at the same content
-        for prefix in ("m.", "mobile.", "vm.", "vt."):
+        for prefix in ("m.", "mobile."):
             if netloc.startswith(prefix) and netloc.count(".") >= 2:
-                # keep tiktok short hosts as-is (vm/vt are real hosts)
-                if not netloc.startswith(("vm.tiktok.", "vt.tiktok.")):
-                    netloc = netloc[len(prefix):]
+                netloc = netloc[len(prefix):]
                 break
         path = re.sub(r"/+", "/", p.path or "/")
         if path != "/" and path.endswith("/"):
             path = path.rstrip("/")
-        query_pairs = [
-            (k, v) for k, v in parse_qsl(p.query, keep_blank_values=True)
-            if k.lower() not in _STRIP_QUERY_KEYS
-        ]
-        query = urlencode(sorted(query_pairs), doseq=True)
+        # YouTube: keep only v= for watch URLs
+        if "youtube.com" in netloc and path == "/watch":
+            qs = dict(parse_qsl(p.query, keep_blank_values=True))
+            v = qs.get("v")
+            query = f"v={v}" if v else ""
+        else:
+            pairs = [
+                (k, v) for k, v in parse_qsl(p.query, keep_blank_values=True)
+                if k.lower() not in _STRIP_QUERY_KEYS
+            ]
+            query = urlencode(sorted(pairs), doseq=True)
         return urlunparse((scheme, netloc, path, "", query, ""))
     except Exception:
         return url.strip()
@@ -70,8 +74,53 @@ def url_hash(url: str) -> str:
     return hashlib.sha256(normalize_url(url).encode("utf-8")).hexdigest()
 
 
+def _compound_key(url: str, quality: str, media_type: str) -> str:
+    return f"{url_hash(url)}|{quality}|{media_type}"
+
+
 # ---------------------------------------------------------------------------
-# Optional Redis hot layer
+# L1 — in-process (shared across threads in one worker)
+# ---------------------------------------------------------------------------
+_L1_MAX = max(256, min(CACHE_MAX_SIZE or 1000, 5000))
+_L1_TTL = max(30, min(CACHE_TTL_SECONDS, 3600))  # L1 shorter than durable TTL
+_l1: TTLCache = TTLCache(maxsize=_L1_MAX, ttl=_L1_TTL)
+_l1_lock = threading.RLock()
+
+# Stampede locks: one writer per compound key
+_write_locks: dict[str, threading.Lock] = {}
+_write_locks_guard = threading.Lock()
+
+
+def _write_lock_for(key: str) -> threading.Lock:
+    with _write_locks_guard:
+        lock = _write_locks.get(key)
+        if lock is None:
+            lock = threading.Lock()
+            _write_locks[key] = lock
+            # Bound the map size
+            if len(_write_locks) > 10_000:
+                for k in list(_write_locks.keys())[:1000]:
+                    _write_locks.pop(k, None)
+        return lock
+
+
+def _l1_get(key: str):
+    with _l1_lock:
+        return _l1.get(key)
+
+
+def _l1_set(key: str, value) -> None:
+    with _l1_lock:
+        _l1[key] = value
+
+
+def _l1_del(key: str) -> None:
+    with _l1_lock:
+        _l1.pop(key, None)
+
+
+# ---------------------------------------------------------------------------
+# L2 — Redis
 # ---------------------------------------------------------------------------
 _redis = None
 _redis_checked = False
@@ -91,68 +140,47 @@ def _get_redis():
         return None
     try:
         import redis
-        client = redis.Redis.from_url(redis_url, decode_responses=True, socket_connect_timeout=1.5)
+        client = redis.Redis.from_url(
+            redis_url, decode_responses=True, socket_connect_timeout=1.5
+        )
         client.ping()
         _redis = client
-        logger.info("Media cache: Redis hot layer enabled")
+        logger.info("Media cache L2: Redis enabled")
     except Exception as e:
-        logger.warning("Media cache: Redis unavailable (%s); SQLite only", e)
+        logger.warning("Media cache L2: Redis unavailable (%s)", e)
         _redis = None
     return _redis
 
 
 def _redis_key(h: str, quality: str, media_type: str) -> str:
-    return f"tgcache:{h}:{quality}:{media_type}"
+    return f"tgcache:v2:{h}:{quality}:{media_type}"
 
 
 # ---------------------------------------------------------------------------
-# Public API
+# L3 helpers — SQLite
 # ---------------------------------------------------------------------------
-def get_cached(url: str, quality: str, media_type: str) -> str | None:
-    """Return a live file_id or None. Honors TTL and bumps hit counter."""
-    h = url_hash(url)
-    r = _get_redis()
-    if r is not None:
-        try:
-            raw = r.get(_redis_key(h, quality, media_type))
-            if raw:
-                return raw
-        except Exception:
-            pass
-
+def _sqlite_get(h: str, quality: str, media_type: str) -> str | None:
     with db_cursor() as c:
         c.execute(
             """
-            SELECT file_id, created_at FROM file_cache
+            SELECT file_id FROM file_cache
             WHERE url_hash = ? AND quality = ? AND media_type = ?
+              AND created_at >= datetime('now', ?)
             """,
-            (h, quality, media_type),
+            (h, quality, media_type, f"-{int(CACHE_TTL_SECONDS)} seconds"),
         )
         row = c.fetchone()
         if not row:
-            return None
-
-        # TTL enforcement (CACHE_TTL_SECONDS)
-        try:
+            # Expired or missing — purge if expired row exists
             c.execute(
                 """
-                SELECT file_id FROM file_cache
+                DELETE FROM file_cache
                 WHERE url_hash = ? AND quality = ? AND media_type = ?
-                  AND created_at >= datetime('now', ?)
+                  AND created_at < datetime('now', ?)
                 """,
                 (h, quality, media_type, f"-{int(CACHE_TTL_SECONDS)} seconds"),
             )
-            live = c.fetchone()
-        except Exception:
-            live = row
-
-        if not live:
-            c.execute(
-                "DELETE FROM file_cache WHERE url_hash = ? AND quality = ? AND media_type = ?",
-                (h, quality, media_type),
-            )
             return None
-
         c.execute(
             """
             UPDATE file_cache SET hits = hits + 1
@@ -160,9 +188,92 @@ def get_cached(url: str, quality: str, media_type: str) -> str | None:
             """,
             (h, quality, media_type),
         )
-        file_id = live["file_id"]
+        return row["file_id"]
 
-    if r is not None and file_id:
+
+def _sqlite_set(
+    h: str, quality: str, media_type: str, file_id: str,
+    title: str, platform: str,
+) -> None:
+    with db_cursor() as c:
+        c.execute(
+            """
+            INSERT INTO file_cache
+                (url_hash, quality, media_type, file_id, title, platform, hits, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, 0, datetime('now'))
+            ON CONFLICT(url_hash, quality, media_type) DO UPDATE SET
+                file_id = excluded.file_id,
+                title = excluded.title,
+                platform = excluded.platform,
+                created_at = datetime('now')
+            """,
+            (h, quality, media_type, file_id, title, platform),
+        )
+        if CACHE_MAX_SIZE > 0:
+            c.execute("SELECT COUNT(*) AS cnt FROM file_cache")
+            cnt = int(c.fetchone()["cnt"])
+            if cnt > CACHE_MAX_SIZE:
+                c.execute(
+                    """
+                    DELETE FROM file_cache WHERE id IN (
+                        SELECT id FROM file_cache
+                        ORDER BY hits ASC, created_at ASC
+                        LIMIT ?
+                    )
+                    """,
+                    (cnt - CACHE_MAX_SIZE,),
+                )
+
+
+def _sqlite_delete(h: str, quality: str | None = None, media_type: str | None = None) -> int:
+    with db_cursor() as c:
+        if quality is not None and media_type is not None:
+            c.execute(
+                "DELETE FROM file_cache WHERE url_hash = ? AND quality = ? AND media_type = ?",
+                (h, quality, media_type),
+            )
+        else:
+            c.execute("DELETE FROM file_cache WHERE url_hash = ?", (h,))
+        return c.rowcount if c.rowcount and c.rowcount > 0 else 0
+
+
+# ---------------------------------------------------------------------------
+# Public single-item API
+# ---------------------------------------------------------------------------
+def get_cached(url: str, quality: str, media_type: str) -> str | None:
+    """Read-through L1 → L2 → L3. Promotes hits upward."""
+    key = _compound_key(url, quality, media_type)
+    h = url_hash(url)
+
+    # L1
+    val = _l1_get(key)
+    if isinstance(val, str) and val:
+        return val
+
+    # L2
+    r = _get_redis()
+    if r is not None:
+        try:
+            raw = r.get(_redis_key(h, quality, media_type))
+            if raw:
+                _l1_set(key, raw)
+                return raw
+        except Exception:
+            pass
+
+    # L3
+    try:
+        file_id = _sqlite_get(h, quality, media_type)
+    except Exception as e:
+        logger.debug("SQLite cache get failed: %s", e)
+        file_id = None
+
+    if not file_id:
+        return None
+
+    # Promote
+    _l1_set(key, file_id)
+    if r is not None:
         try:
             r.setex(_redis_key(h, quality, media_type), max(60, CACHE_TTL_SECONDS), file_id)
         except Exception:
@@ -178,64 +289,38 @@ def set_cache(
     title: str = "",
     platform: str = "",
 ) -> None:
+    """Write-through to L1 + L2 + L3 under a per-key lock (stampede-safe)."""
     if not file_id:
         return
+    key = _compound_key(url, quality, media_type)
     h = url_hash(url)
-    with db_cursor() as c:
-        c.execute(
-            """
-            INSERT INTO file_cache
-                (url_hash, quality, media_type, file_id, title, platform, hits, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, 0, datetime('now'))
-            ON CONFLICT(url_hash, quality, media_type) DO UPDATE SET
-                file_id = excluded.file_id,
-                title = excluded.title,
-                platform = excluded.platform,
-                created_at = datetime('now')
-            """,
-            (h, quality, media_type, file_id, title, platform),
-        )
-        # Soft max-size: evict coldest entries beyond CACHE_MAX_SIZE
-        if CACHE_MAX_SIZE > 0:
-            c.execute("SELECT COUNT(*) AS cnt FROM file_cache")
-            cnt = int(c.fetchone()["cnt"])
-            if cnt > CACHE_MAX_SIZE:
-                overflow = cnt - CACHE_MAX_SIZE
-                c.execute(
-                    """
-                    DELETE FROM file_cache WHERE id IN (
-                        SELECT id FROM file_cache
-                        ORDER BY hits ASC, created_at ASC
-                        LIMIT ?
-                    )
-                    """,
-                    (overflow,),
-                )
-
-    r = _get_redis()
-    if r is not None:
+    with _write_lock_for(key):
+        _l1_set(key, file_id)
+        r = _get_redis()
+        if r is not None:
+            try:
+                r.setex(_redis_key(h, quality, media_type), max(60, CACHE_TTL_SECONDS), file_id)
+            except Exception:
+                pass
         try:
-            r.setex(_redis_key(h, quality, media_type), max(60, CACHE_TTL_SECONDS), file_id)
-        except Exception:
-            pass
+            _sqlite_set(h, quality, media_type, file_id, title, platform)
+        except Exception as e:
+            logger.warning("SQLite cache set failed: %s", e)
 
 
-def invalidate_cache(url: str, quality: str | None = None, media_type: str | None = None) -> int:
-    """
-    Drop cache entries for a URL (or a specific quality/type).
-    Call this when Telegram rejects a file_id as invalid/unavailable.
-    """
+def invalidate_cache(
+    url: str, quality: str | None = None, media_type: str | None = None
+) -> int:
+    """Drop from all tiers (stale file_id recovery)."""
     h = url_hash(url)
-    deleted = 0
-    with db_cursor() as c:
-        if quality is not None and media_type is not None:
-            c.execute(
-                "DELETE FROM file_cache WHERE url_hash = ? AND quality = ? AND media_type = ?",
-                (h, quality, media_type),
-            )
-        else:
-            c.execute("DELETE FROM file_cache WHERE url_hash = ?", (h,))
-        deleted = c.rowcount if c.rowcount and c.rowcount > 0 else 0
+    if quality is not None and media_type is not None:
+        _l1_del(_compound_key(url, quality, media_type))
+    else:
+        # Drop all L1 keys for this hash prefix
+        with _l1_lock:
+            for k in list(_l1.keys()):
+                if isinstance(k, str) and k.startswith(h):
+                    _l1.pop(k, None)
 
     r = _get_redis()
     if r is not None:
@@ -243,37 +328,107 @@ def invalidate_cache(url: str, quality: str | None = None, media_type: str | Non
             if quality is not None and media_type is not None:
                 r.delete(_redis_key(h, quality, media_type))
             else:
-                for key in r.scan_iter(match=f"tgcache:{h}:*"):
-                    r.delete(key)
+                for rk in r.scan_iter(match=f"tgcache:v2:{h}:*"):
+                    r.delete(rk)
         except Exception:
             pass
+
+    try:
+        deleted = _sqlite_delete(h, quality, media_type)
+    except Exception:
+        deleted = 0
     if deleted:
-        logger.info("Invalidated %s cache entr(y/ies) for %s", deleted, h[:12])
+        logger.info("Cache invalidated %s entr(y/ies) hash=%s", deleted, h[:12])
     return deleted
 
 
+# ---------------------------------------------------------------------------
+# Album / media-group API (ordered list of file_ids)
+# ---------------------------------------------------------------------------
+def get_cached_album(url: str) -> list[dict] | None:
+    """
+    Returns list of {file_id, type} or None.
+    Stored under quality='album', media_type='album' as JSON.
+    """
+    raw = get_cached(url, "album", "album")
+    if not raw:
+        return None
+    try:
+        data = json.loads(raw)
+        if isinstance(data, list) and data:
+            return data
+    except Exception:
+        invalidate_cache(url, "album", "album")
+    return None
+
+
+def set_cache_album(url: str, items: list[dict], title: str = "", platform: str = "") -> None:
+    """
+    items: [{file_id: str, type: 'image'|'video'}, ...]
+    """
+    clean = []
+    for it in items:
+        fid = it.get("file_id")
+        if not fid:
+            continue
+        clean.append({"file_id": fid, "type": it.get("type") or "image"})
+    if len(clean) < 2:
+        return
+    set_cache(url, "album", "album", json.dumps(clean, separators=(",", ":")), title, platform)
+
+
+# ---------------------------------------------------------------------------
+# Metrics / maintenance
+# ---------------------------------------------------------------------------
 def get_cache_count() -> int:
-    with db_cursor() as c:
-        c.execute("SELECT COUNT(*) as cnt FROM file_cache")
-        return int(c.fetchone()["cnt"])
+    try:
+        with db_cursor() as c:
+            c.execute("SELECT COUNT(*) as cnt FROM file_cache")
+            return int(c.fetchone()["cnt"])
+    except Exception:
+        return 0
 
 
 def get_cache_hits() -> int:
-    with db_cursor() as c:
-        c.execute("SELECT COALESCE(SUM(hits), 0) as total FROM file_cache")
-        return int(c.fetchone()["total"])
+    try:
+        with db_cursor() as c:
+            c.execute("SELECT COALESCE(SUM(hits), 0) as total FROM file_cache")
+            return int(c.fetchone()["total"])
+    except Exception:
+        return 0
+
+
+def get_cache_stats() -> dict:
+    with _l1_lock:
+        l1_size = len(_l1)
+        l1_max = _l1.maxsize
+    return {
+        "l1_size": l1_size,
+        "l1_max": l1_max,
+        "l1_ttl": _L1_TTL,
+        "l2_redis": _get_redis() is not None,
+        "l3_rows": get_cache_count(),
+        "l3_hits": get_cache_hits(),
+        "ttl_seconds": CACHE_TTL_SECONDS,
+        "max_size": CACHE_MAX_SIZE,
+    }
 
 
 def cleanup_old_cache(days: int | None = None) -> int:
-    """Delete entries older than `days` (default from CACHE_TTL_SECONDS)."""
     if days is None:
         days = max(1, int(CACHE_TTL_SECONDS / 86400) or 1)
-    with db_cursor() as c:
-        c.execute(
-            """
-            DELETE FROM file_cache
-            WHERE created_at < datetime('now', '-' || ? || ' days')
-            """,
-            (int(days),),
-        )
-        return c.rowcount if c.rowcount and c.rowcount > 0 else 0
+    try:
+        with db_cursor() as c:
+            c.execute(
+                """
+                DELETE FROM file_cache
+                WHERE created_at < datetime('now', '-' || ? || ' days')
+                """,
+                (int(days),),
+            )
+            n = c.rowcount if c.rowcount and c.rowcount > 0 else 0
+    except Exception:
+        n = 0
+    with _l1_lock:
+        _l1.clear()
+    return n
