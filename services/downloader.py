@@ -608,7 +608,6 @@ async def analyze_url(url: str) -> dict | None:
                 item_image_url = None
                 if item_type == "image":
                     item_image_url = _extract_image_url(entry)
-                # Prefer direct media URL; fall back to webpage URL for re-extraction.
                 direct = entry.get("url") or ""
                 if item_type == "image" and not item_image_url and direct:
                     if any(direct.lower().split("?")[0].endswith(x) for x in (
@@ -623,15 +622,74 @@ async def analyze_url(url: str) -> dict | None:
                     "type": item_type,
                     "id": str(entry.get("id") or entry.get("display_id") or ""),
                 })
-            # If yt-dlp returned a playlist shell with zero usable entries, demote
-            # to a single media type so the user still gets a download button.
-            if not album_items:
-                media_type = _detect_media_type(
-                    {k: v for k, v in info.items() if k != "entries"},
-                    platform,
-                )
-                if media_type == "album":
-                    media_type = "video"
+
+        # gallery-dl fallback / upgrade for carousel platforms.
+        # yt-dlp 2026 often returns null entries for image-only Instagram carousels;
+        # gallery-dl is the production standard for those posts.
+        needs_gallery = (
+            platform in CAROUSEL_PLATFORMS
+            and (
+                media_type == "album"
+                and (not album_items or all(not (it.get("image_url") or it.get("url")) for it in album_items))
+                or media_type in ("image", "video")
+                and platform in ("Instagram", "Reddit", "Pinterest", "TikTok")
+            )
+        )
+        # Always try gallery-dl for Instagram posts — it is stronger for multi-image.
+        if platform in ("Instagram", "Reddit", "Pinterest") or (
+            platform == "TikTok" and ("/photo/" in url or media_type == "album")
+        ):
+            needs_gallery = True
+
+        if needs_gallery:
+            from .gallery_extractor import extract_gallery_items
+            g_items = await loop.run_in_executor(
+                get_executor(), extract_gallery_items, url, ALBUM_MAX_ITEMS
+            )
+            if g_items:
+                album_items = [
+                    {
+                        "title": g.get("title") or info.get("title") or "",
+                        "url": g["url"],
+                        "thumbnail": g.get("thumbnail") or "",
+                        "image_url": g.get("image_url") or (g["url"] if g.get("type") == "image" else None),
+                        "type": g.get("type") or "image",
+                        "id": str(g.get("id") or ""),
+                    }
+                    for g in g_items
+                ]
+                if len(album_items) >= 2:
+                    media_type = "album"
+                elif len(album_items) == 1:
+                    media_type = album_items[0]["type"]
+                    if media_type == "image":
+                        image_url = album_items[0].get("image_url") or album_items[0]["url"]
+
+        # TikTok photo-mode images from our multi-provider scraper
+        if platform == "TikTok" and tk_info and tk_info.get("images"):
+            imgs = tk_info["images"][:ALBUM_MAX_ITEMS]
+            if len(imgs) >= 2:
+                album_items = [
+                    {
+                        "title": tk_info.get("title") or f"photo_{i + 1}",
+                        "url": img_url,
+                        "thumbnail": img_url,
+                        "image_url": img_url,
+                        "type": "image",
+                        "id": str(i),
+                    }
+                    for i, img_url in enumerate(imgs)
+                    if img_url and str(img_url).startswith("http")
+                ]
+                media_type = "album"
+
+        if media_type == "album" and not album_items:
+            media_type = _detect_media_type(
+                {k: v for k, v in info.items() if k != "entries"},
+                platform,
+            )
+            if media_type == "album":
+                media_type = "video"
 
         result = {
             "title": info.get("title", "Unknown"),
@@ -649,7 +707,6 @@ async def analyze_url(url: str) -> dict | None:
             "webpage_url": info.get("webpage_url", url),
             "ext": info.get("ext", ""),
         }
-        # Attach TikTok direct CDN URL when scraper found one (used if yt-dlp download fails)
         if tk_info and tk_info.get("play_url"):
             result["play_url"] = tk_info["play_url"]
         return result
@@ -673,18 +730,42 @@ def _normalize_tiktok_info(tk: dict, original_url: str) -> dict:
     qualities = tk.get("qualities") or [
         {"label": "Best", "format_id": "best", "has_audio": True}
     ]
+    images = [
+        u for u in (tk.get("images") or [])
+        if u and str(u).startswith("http")
+    ][:ALBUM_MAX_ITEMS]
+    if len(images) >= 2:
+        media_type = "album"
+        album_items = [
+            {
+                "title": tk.get("title") or f"photo_{i + 1}",
+                "url": img,
+                "thumbnail": img,
+                "image_url": img,
+                "type": "image",
+                "id": str(i),
+            }
+            for i, img in enumerate(images)
+        ]
+    elif len(images) == 1:
+        media_type = "image"
+        album_items = []
+    else:
+        media_type = "video"
+        album_items = []
+
     return {
         "title": tk.get("title") or "TikTok Video",
         "uploader": tk.get("uploader") or "TikTok User",
         "duration": format_duration(duration_secs) if duration_secs else "Unknown",
         "duration_secs": duration_secs,
-        "thumbnail": tk.get("thumbnail") or "",
+        "thumbnail": tk.get("thumbnail") or (images[0] if images else ""),
         "platform": "TikTok",
-        "media_type": "video",
-        "qualities": qualities,
+        "media_type": media_type,
+        "qualities": qualities if media_type == "video" else [],
         "audio_formats": [],
-        "image_url": None,
-        "album_items": [],
+        "image_url": images[0] if len(images) == 1 else None,
+        "album_items": album_items,
         "url": tk.get("webpage_url") or original_url,
         "webpage_url": tk.get("webpage_url") or original_url,
         "play_url": tk.get("play_url"),
