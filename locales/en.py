@@ -23,6 +23,8 @@ translations = {
     "download_audio": "🎵 Download Audio",
     "download_image": "🖼 Download Image",
     "download_album": "📂 Download Album",
+    "album_downloading": "📂 Downloading album item {current}/{total}...",
+    "album_uploading": "📤 Uploading {count} items to Telegram...",
     "cancel_button": "❌ Cancel",
     "cancelled": "Cancelled.",
     "session_expired": "Session expired. Please send the link again.",

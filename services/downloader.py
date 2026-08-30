@@ -16,6 +16,13 @@ from middlewares.concurrency import get_executor
 IMAGE_PLATFORMS = {"Pinterest", "Instagram"}
 # Platforms that serve audio
 AUDIO_PLATFORMS = {"SoundCloud", "Spotify"}
+# Multi-item posts (carousels / sidecars) — extract full entry list, not only first item.
+# Telegram media groups accept at most 10 items, so we hard-cap extraction at 10.
+CAROUSEL_PLATFORMS = {
+    "Instagram", "TikTok", "Facebook", "Twitter/X", "Twitter", "X",
+    "Threads", "Reddit", "Pinterest",
+}
+ALBUM_MAX_ITEMS = 10
 # Pinterest-specific image URL patterns
 PINTEREST_IMAGE_PATTERNS = [
     "i.pinimg.com",
@@ -145,10 +152,19 @@ def _filesize_progress_guard(d: dict) -> None:
 
 
 def _extract_info_sync(url: str) -> dict:
-    ydl_opts = _base_ydl_opts({
+    platform = get_platform(url)
+    # Carousel posts are playlists in yt-dlp. Global noplaylist=True would collapse
+    # them to a single item — disable it here and hard-cap the entry count.
+    extract_extra = {
         "skip_download": True,
         "extract_flat": False,
-    })
+    }
+    if platform in CAROUSEL_PLATFORMS:
+        extract_extra["noplaylist"] = False
+        extract_extra["playlistend"] = ALBUM_MAX_ITEMS
+        extract_extra["yes_playlist"] = True
+
+    ydl_opts = _base_ydl_opts(extract_extra)
 
     # Advanced TikTok/Platform bypass
     if "tiktok.com" in url:
@@ -583,19 +599,39 @@ async def analyze_url(url: str) -> dict | None:
         if media_type == "image":
             image_url = _extract_image_url(info)
 
-        # Handle album entries
+        # Handle album / carousel entries (Instagram sidecar, multi-media posts, …)
         album_items = []
         if media_type == "album":
-            entries = info.get("entries", [])
-            for entry in entries[:10]:  # limit to 10 items
-                if entry:
-                    item_type = _detect_media_type(entry, platform)
-                    album_items.append({
-                        "title": entry.get("title", ""),
-                        "url": entry.get("webpage_url") or entry.get("url", ""),
-                        "thumbnail": entry.get("thumbnail", ""),
-                        "type": item_type,
-                    })
+            entries = [e for e in (info.get("entries") or []) if e]
+            for entry in entries[:ALBUM_MAX_ITEMS]:
+                item_type = _detect_media_type(entry, platform)
+                item_image_url = None
+                if item_type == "image":
+                    item_image_url = _extract_image_url(entry)
+                # Prefer direct media URL; fall back to webpage URL for re-extraction.
+                direct = entry.get("url") or ""
+                if item_type == "image" and not item_image_url and direct:
+                    if any(direct.lower().split("?")[0].endswith(x) for x in (
+                        ".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp"
+                    )) or "pinimg.com" in direct or "cdninstagram.com" in direct:
+                        item_image_url = direct
+                album_items.append({
+                    "title": entry.get("title") or info.get("title") or "",
+                    "url": entry.get("webpage_url") or entry.get("original_url") or entry.get("url") or url,
+                    "thumbnail": entry.get("thumbnail") or "",
+                    "image_url": item_image_url,
+                    "type": item_type,
+                    "id": str(entry.get("id") or entry.get("display_id") or ""),
+                })
+            # If yt-dlp returned a playlist shell with zero usable entries, demote
+            # to a single media type so the user still gets a download button.
+            if not album_items:
+                media_type = _detect_media_type(
+                    {k: v for k, v in info.items() if k != "entries"},
+                    platform,
+                )
+                if media_type == "album":
+                    media_type = "video"
 
         result = {
             "title": info.get("title", "Unknown"),
@@ -1132,4 +1168,67 @@ async def download_audio(url: str, progress_callback: Callable = None) -> str | 
     except Exception as e:
         error_logger.error(f"Audio download error {url}: {e}")
         return None
+
+
+async def download_album(
+    items: list[dict],
+    progress_callback: Callable = None,
+) -> list[dict]:
+    """
+    Download every item in a carousel / album (max ALBUM_MAX_ITEMS).
+
+    Returns a list of dicts: {"path": str, "type": "image"|"video", "title": str}.
+    Skips individual failures so one broken entry does not kill the whole album.
+    Raises FileTooLargeError only if EVERY successful candidate exceeded the limit
+    (partial success is preferred for multi-item posts).
+    """
+    if not items:
+        return []
+
+    results: list[dict] = []
+    oversized = 0
+    total = min(len(items), ALBUM_MAX_ITEMS)
+
+    for idx, item in enumerate(items[:ALBUM_MAX_ITEMS]):
+        item_type = (item.get("type") or "video").lower()
+        item_url = item.get("url") or ""
+        item_title = item.get("title") or f"item_{idx + 1}"
+        image_url = item.get("image_url") or item.get("thumbnail") or ""
+
+        if progress_callback:
+            try:
+                await progress_callback({
+                    "pct": round((idx / max(total, 1)) * 100, 1),
+                    "downloaded": idx,
+                    "total": total,
+                    "speed": 0,
+                    "eta": 0,
+                    "album_index": idx + 1,
+                    "album_total": total,
+                })
+            except Exception:
+                pass
+
+        try:
+            if item_type == "image":
+                path = await download_image(item_url or image_url, image_url or item_url)
+                if path:
+                    results.append({"path": path, "type": "image", "title": item_title})
+            else:
+                path = await download_video(
+                    item_url, "best", "best",
+                    progress_callback=None,
+                    play_url=item.get("play_url"),
+                )
+                if path:
+                    results.append({"path": path, "type": "video", "title": item_title})
+        except FileTooLargeError:
+            oversized += 1
+            error_logger.error(f"Album item {idx + 1}/{total} exceeds size limit")
+        except Exception as e:
+            error_logger.error(f"Album item {idx + 1}/{total} failed: {e}")
+
+    if not results and oversized:
+        raise FileTooLargeError(limit_bytes=MAX_FILE_SIZE_BYTES)
+    return results
 
