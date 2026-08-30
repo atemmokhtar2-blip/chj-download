@@ -454,10 +454,141 @@ def _walk_for_pin(obj: Any, depth: int = 0) -> dict | None:
     return None
 
 
+
+def _from_pinterest_downloader(url: str) -> dict | None:
+    """
+    Primary engine: pinterest-downloader (PyPI) — dedicated 2026 library.
+    Returns structured pin with images.orig + video.formats.
+    """
+    try:
+        from pinterest_downloader import Pinterest
+    except ImportError:
+        logger.warning("pinterest-downloader not installed")
+        return None
+    try:
+        client = Pinterest()
+        result = client.get_pin(url)
+        if not result or not result.get("ok"):
+            err = (result or {}).get("error")
+            logger.info("pinterest-downloader get_pin failed: %s", err)
+            return None
+        pin = result.get("pin") or {}
+        if not pin:
+            return None
+
+        pin_id = str(pin.get("id") or extract_pin_id(url) or "")
+        title = (pin.get("title") or pin.get("description") or "Pinterest Pin")
+        if isinstance(title, str):
+            title = title.strip()[:200] or "Pinterest Pin"
+        author = pin.get("author") or {}
+        uploader = (
+            author.get("username")
+            or author.get("full_name")
+            or "Pinterest User"
+        )
+
+        images = pin.get("images") or {}
+        image_url = None
+        # Prefer orig / originals
+        for key in ("orig", "originals", "736x", "564x", "474x"):
+            node = images.get(key)
+            if isinstance(node, dict) and node.get("url") and not _is_placeholder(node["url"]):
+                image_url = node["url"]
+                break
+            if isinstance(node, str) and node.startswith("http"):
+                image_url = node
+                break
+        if image_url:
+            image_url = upgrade_to_originals(image_url)
+
+        # Video formats — prefer highest non-HLS MP4
+        video_url = None
+        duration_secs = 0
+        video = pin.get("video") or {}
+        formats = video.get("formats") or []
+        mp4s = []
+        for fmt in formats:
+            if not isinstance(fmt, dict):
+                continue
+            u = fmt.get("url") or ""
+            if not u.startswith("http"):
+                continue
+            h = int(fmt.get("height") or 0)
+            if ".m3u8" in u or "hls" in (fmt.get("quality") or "").lower():
+                score = h - 10_000
+            else:
+                score = h
+            mp4s.append((score, u, fmt))
+        if mp4s:
+            mp4s.sort(key=lambda x: x[0], reverse=True)
+            video_url = mp4s[0][1]
+            try:
+                duration_secs = int((mp4s[0][2].get("duration") or 0) / 1000)
+            except Exception:
+                duration_secs = 0
+
+        media_type_raw = (pin.get("media_type") or "").lower()
+        if video_url or media_type_raw == "video":
+            media_type = "video"
+            qualities = [{"label": "Best", "format_id": "best", "has_audio": True}]
+            # secondary qualities from formats
+            for score, u, fmt in mp4s[:4]:
+                if ".m3u8" in u:
+                    continue
+                qlabel = fmt.get("quality") or f"{fmt.get('height') or ''}p"
+                if qlabel and not any(q["label"] == qlabel for q in qualities):
+                    qualities.append({
+                        "label": str(qlabel),
+                        "format_id": "best",
+                        "has_audio": True,
+                    })
+        elif media_type_raw == "gif":
+            media_type = "image"
+            qualities = []
+        else:
+            media_type = "image"
+            qualities = []
+
+        ext = "mp4" if media_type == "video" else "jpg"
+        if image_url and "." in image_url.split("?")[0]:
+            e = image_url.split("?")[0].rsplit(".", 1)[-1].lower()
+            if e in ("jpg", "jpeg", "png", "webp", "gif"):
+                ext = e
+
+        return {
+            "title": title,
+            "uploader": str(uploader),
+            "duration": f"{duration_secs}s" if duration_secs else "Unknown",
+            "duration_secs": duration_secs,
+            "thumbnail": image_url or (video.get("poster") or ""),
+            "platform": "Pinterest",
+            "media_type": media_type,
+            "qualities": qualities if media_type == "video" else [],
+            "audio_formats": [],
+            "image_url": image_url if media_type == "image" else None,
+            "album_items": [],
+            "url": pin.get("url") or url,
+            "webpage_url": pin.get("url") or url,
+            "ext": ext,
+            "media_id": pin_id,
+            "play_url": video_url,
+            "source": "pinterest_downloader",
+        }
+    except Exception as e:
+        logger.info("pinterest-downloader error: %s", e)
+        return None
+
+
 def scrape_pinterest(url: str) -> dict | None:
     """
     Full multi-strategy Pinterest extract.
     Returns a standard analyze_url-compatible dict or None.
+
+    Order (strongest first):
+      1. pinterest-downloader (dedicated PyPI library, 2026)
+      2. PinResource JSON API
+      3. gallery-dl
+      4. HTML / __PWS_DATA__
     """
     if not url or not any(x in url for x in ("pinterest.", "pin.it")):
         return None
@@ -466,25 +597,36 @@ def scrape_pinterest(url: str) -> dict | None:
     url = expand_pin_url(url, session)
     pin_id = extract_pin_id(url)
 
-    # 1) Official-style PinResource API
+    # 1) Dedicated library
+    lib = _from_pinterest_downloader(url if pin_id is None else (url or pin_id))
+    if not lib and pin_id:
+        lib = _from_pinterest_downloader(pin_id)
+    if lib and (lib.get("image_url") or lib.get("play_url") or lib.get("album_items")):
+        logger.info(
+            "Pinterest pinterest-downloader ok id=%s type=%s",
+            lib.get("media_id"), lib.get("media_type"),
+        )
+        return lib
+
+    # 2) PinResource API
     if pin_id:
         pin = _pin_from_api(pin_id, session)
         if pin:
             result = _result_from_pin_data(pin, url)
             if result.get("image_url") or result.get("play_url") or result.get("album_items"):
                 logger.info(
-                    "Pinterest PinResource ok id=%s type=%s source=%s",
-                    pin_id, result.get("media_type"), result.get("source"),
+                    "Pinterest PinResource ok id=%s type=%s",
+                    pin_id, result.get("media_type"),
                 )
                 return result
 
-    # 2) gallery-dl
+    # 3) gallery-dl
     g = _from_gallery_dl(url)
     if g:
         logger.info("Pinterest gallery-dl ok type=%s", g.get("media_type"))
         return g
 
-    # 3) HTML scrape
+    # 4) HTML scrape
     h = _from_html(url, session)
     if h:
         logger.info("Pinterest HTML ok type=%s", h.get("media_type"))
