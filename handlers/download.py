@@ -1,14 +1,20 @@
 import asyncio
 import os
 import logging
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, InputFile
+from telegram import (
+    Update, InlineKeyboardButton, InlineKeyboardMarkup, InputFile,
+    InputMediaPhoto, InputMediaVideo,
+)
 from telegram.ext import ContextTypes
 from telegram.error import TelegramError, NetworkError
 
 from database.users import get_user, increment_downloads
 from database.downloads import log_download
 from database.cache import get_cached, set_cache
-from services.downloader import analyze_url, download_video, download_audio, download_image, FileTooLargeError
+from services.downloader import (
+    analyze_url, download_video, download_audio, download_image,
+    download_album, FileTooLargeError, ALBUM_MAX_ITEMS,
+)
 from middlewares.rate_limiter import check_rate_limit, mark_download
 from middlewares.concurrency import download_slot, active_global_slots
 from middlewares.auth import is_banned
@@ -72,11 +78,14 @@ async def handle_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
     platform = info.get("platform", "")
     platform_emoji = get_platform_emoji(platform)
 
-    keyboard = _build_action_keyboard(media_type, qualities, lang)
+    album_count = len(info.get("album_items") or [])
+    keyboard = _build_action_keyboard(media_type, qualities, lang, album_count=album_count)
     caption = t(lang, "video_info",
                 title=title, uploader=uploader,
                 duration=duration,
                 platform=f"{platform_emoji} {platform}")
+    if media_type == "album" and album_count:
+        caption += f"\n📂 <b>Items:</b> {album_count}"
 
     if info.get("thumbnail"):
         try:
@@ -92,7 +101,9 @@ async def handle_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await status_msg.edit_text(caption, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard))
 
-def _build_action_keyboard(media_type: str, qualities: list, lang: str) -> list:
+def _build_action_keyboard(
+    media_type: str, qualities: list, lang: str, album_count: int = 0
+) -> list:
     """Video: best + quality buttons only (audio is always included in the video file)."""
     keyboard = []
     if media_type == "video":
@@ -107,7 +118,10 @@ def _build_action_keyboard(media_type: str, qualities: list, lang: str) -> list:
     elif media_type == "image":
         keyboard.append([InlineKeyboardButton(t(lang, "download_image"), callback_data="dl_image")])
     elif media_type == "album":
-        keyboard.append([InlineKeyboardButton(t(lang, "download_album"), callback_data="dl_album")])
+        label = t(lang, "download_album")
+        if album_count:
+            label = f"{label} ({album_count})"
+        keyboard.append([InlineKeyboardButton(label, callback_data="dl_album")])
     return keyboard
 
 async def download_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -200,40 +214,89 @@ async def _run_download(query, context, info, user, lang, quality_label,
         platform = info.get("platform", "")
 
         if is_album:
-            # Album/carousel: download first item as a practical fallback
             items = info.get("album_items") or []
             if not items:
                 raise Exception("Album has no items")
-            first = items[0]
-            item_url = first.get("url") or info["url"]
-            item_type = first.get("type", "video")
-            if item_type == "image":
-                file_path = await download_image(item_url, first.get("thumbnail") or info.get("image_url"))
-                if not file_path:
-                    raise Exception("Download failed")
-                await edit_fn(t(lang, "uploading"), parse_mode="HTML")
-                with open(file_path, "rb") as f:
-                    sent = await _upload_with_retry(
-                        query.message.reply_photo(
-                            photo=InputFile(f, filename=f"{title[:50]}.jpg"),
-                            caption=t(lang, "completed"),
+
+            async def album_progress(prog):
+                try:
+                    idx = prog.get("album_index", 0)
+                    tot = prog.get("album_total", len(items))
+                    txt = t(lang, "album_downloading", current=idx, total=tot)
+                    if progress_msg.caption:
+                        await progress_msg.edit_caption(txt, parse_mode="HTML")
+                    else:
+                        await progress_msg.edit_text(txt, parse_mode="HTML")
+                except Exception:
+                    pass
+
+            downloaded = await download_album(items, album_progress)
+            if not downloaded:
+                raise Exception("Album download failed")
+
+            await edit_fn(
+                t(lang, "album_uploading", count=len(downloaded)),
+                parse_mode="HTML",
+            )
+
+            # Telegram media groups: max 10 items. Open all files, build media list,
+            # send as one group, then close/cleanup.
+            open_handles = []
+            media_group = []
+            try:
+                for i, item in enumerate(downloaded[:ALBUM_MAX_ITEMS]):
+                    fh = open(item["path"], "rb")
+                    open_handles.append(fh)
+                    caption = t(lang, "completed") if i == 0 else None
+                    safe_title = (item.get("title") or title or "media")[:40]
+                    if item["type"] == "image":
+                        media_group.append(
+                            InputMediaPhoto(
+                                media=InputFile(fh, filename=f"{safe_title}_{i + 1}.jpg"),
+                                caption=caption,
+                                parse_mode="HTML" if caption else None,
+                            )
                         )
-                    )
-                set_cache(info["url"], quality_label, "image", sent.photo[-1].file_id, title, platform)
-            else:
-                file_path = await download_video(item_url, "best", "best", update_progress)
-                if not file_path:
-                    raise Exception("Download failed")
-                await edit_fn(t(lang, "uploading"), parse_mode="HTML")
-                with open(file_path, "rb") as f:
-                    sent = await _upload_with_retry(
-                        query.message.reply_video(
-                            video=InputFile(f, filename=f"{title[:50]}.mp4"),
-                            caption=t(lang, "completed"),
-                            supports_streaming=True,
+                    else:
+                        media_group.append(
+                            InputMediaVideo(
+                                media=InputFile(fh, filename=f"{safe_title}_{i + 1}.mp4"),
+                                caption=caption,
+                                parse_mode="HTML" if caption else None,
+                                supports_streaming=True,
+                            )
                         )
-                    )
-                set_cache(info["url"], quality_label, "video", sent.video.file_id, title, platform)
+
+                sent_msgs = await _upload_with_retry(
+                    query.message.reply_media_group(media=media_group)
+                )
+                # Cache first item only (cache schema is single file_id).
+                if sent_msgs:
+                    first = sent_msgs[0]
+                    if first.photo:
+                        set_cache(
+                            info["url"], quality_label, "image",
+                            first.photo[-1].file_id, title, platform,
+                        )
+                    elif first.video:
+                        set_cache(
+                            info["url"], quality_label, "video",
+                            first.video.file_id, title, platform,
+                        )
+            finally:
+                for fh in open_handles:
+                    try:
+                        fh.close()
+                    except Exception:
+                        pass
+                for item in downloaded:
+                    p = item.get("path")
+                    if p and os.path.exists(p):
+                        try:
+                            os.remove(p)
+                        except Exception:
+                            pass
+                file_path = None  # already cleaned
 
         elif is_image:
             file_path = await download_image(info["url"], info.get("image_url"))

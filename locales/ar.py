@@ -23,6 +23,8 @@ translations = {
     "download_audio": "🎵 تحميل الصوت",
     "download_image": "🖼 تحميل الصورة",
     "download_album": "📂 تحميل الألبوم",
+    "album_downloading": "📂 جاري تحميل عنصر الألبوم {current}/{total}...",
+    "album_uploading": "📤 جاري رفع {count} عناصر إلى تيليجرام...",
     "cancel_button": "❌ إلغاء",
     "cancelled": "تم الإلغاء.",
     "session_expired": "انتهت الجلسة. أرسل الرابط مرة أخرى.",
