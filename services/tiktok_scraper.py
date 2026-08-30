@@ -57,10 +57,30 @@ def _session(ua: str = DESKTOP_UA) -> requests.Session:
 
 
 def _safe_get(url: str, **kwargs) -> Optional[requests.Response]:
+    """GET with optional Chrome TLS fingerprint (curl_cffi) then requests fallback."""
+    timeout = kwargs.pop("timeout", PROVIDER_TIMEOUT)
+    session = kwargs.pop("session", None)
+    headers = kwargs.pop("headers", None)
+    # Prefer curl_cffi Chrome impersonation — TikTok blocks plain Python TLS often
     try:
-        timeout = kwargs.pop("timeout", PROVIDER_TIMEOUT)
-        s = kwargs.pop("session", None) or _session()
-        return s.get(url, timeout=timeout, allow_redirects=True, **kwargs)
+        from curl_cffi import requests as creq
+        hdrs = {}
+        if session is not None and getattr(session, "headers", None):
+            hdrs.update(dict(session.headers))
+        if headers:
+            hdrs.update(headers)
+        if not hdrs.get("User-Agent"):
+            hdrs["User-Agent"] = DESKTOP_UA
+        r = creq.get(
+            url, headers=hdrs, impersonate="chrome",
+            timeout=timeout, allow_redirects=True, **kwargs,
+        )
+        return r
+    except Exception:
+        pass
+    try:
+        s = session or _session()
+        return s.get(url, timeout=timeout, allow_redirects=True, headers=headers, **kwargs)
     except Exception as e:
         logger.debug(f"GET fail {url[:60]}: {e}")
         return None
@@ -581,8 +601,80 @@ def provider_aweme(url: str) -> Optional[dict]:
 # Orchestrator — run providers in parallel, first success wins
 # ---------------------------------------------------------------------------
 
+
+def provider_ytdlp(url: str) -> Optional[dict]:
+    """
+    Use yt-dlp extract_info only (no download) as a peer provider.
+    Strong when third-party sites (tikwm/ssstik) are down.
+    """
+    try:
+        import yt_dlp
+    except ImportError:
+        return None
+    opts = {
+        "quiet": True,
+        "no_warnings": True,
+        "skip_download": True,
+        "extract_flat": False,
+        "noplaylist": True,
+        "socket_timeout": PROVIDER_TIMEOUT,
+    }
+    try:
+        with yt_dlp.YoutubeDL(opts) as ydl:
+            info = ydl.extract_info(url, download=False)
+        if not info:
+            return None
+        # Prefer direct format URL (no watermark when available)
+        play = None
+        height = 0
+        formats = info.get("formats") or []
+        # Prefer http mp4 without watermark markers
+        ranked = []
+        for f in formats:
+            fu = f.get("url") or ""
+            if not fu.startswith("http"):
+                continue
+            if f.get("vcodec") in (None, "none"):
+                continue
+            h = int(f.get("height") or 0)
+            score = h
+            # Prefer non-watermark if labeled
+            fmt_note = (f.get("format_note") or "") + (f.get("format_id") or "")
+            if "watermark" in fmt_note.lower():
+                score -= 5000
+            ranked.append((score, fu, h))
+        if ranked:
+            ranked.sort(key=lambda x: x[0], reverse=True)
+            play, height = ranked[0][1], ranked[0][2]
+        if not play:
+            play = info.get("url")
+        if not play:
+            return None
+        images = []
+        # photo mode
+        if info.get("entries"):
+            for e in info["entries"] or []:
+                if e and e.get("url"):
+                    images.append(e["url"])
+        return _result(
+            play,
+            title=info.get("title") or "TikTok Video",
+            uploader=info.get("uploader") or info.get("creator") or "TikTok User",
+            thumbnail=info.get("thumbnail") or "",
+            duration=int(info.get("duration") or 0),
+            height=height,
+            source="yt-dlp",
+            webpage_url=info.get("webpage_url") or url,
+            images=images or None,
+        )
+    except Exception as e:
+        logger.debug(f"provider_ytdlp: {e}")
+        return None
+
+
 PROVIDERS: list[tuple[str, Callable[[str], Optional[dict]]]] = [
     ("tikwm", provider_tikwm),
+    ("ytdlp", provider_ytdlp),
     ("page_json", provider_page_json),
     ("aweme", provider_aweme),
     ("ssstik", provider_ssstik),

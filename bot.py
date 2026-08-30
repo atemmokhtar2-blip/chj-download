@@ -59,6 +59,20 @@ async def post_init(application: Application):
     asyncio.create_task(cleanup_old_cache())
     system_logger.info("Background workers started.")
 
+
+async def global_error_handler(update: object, context) -> None:
+    """Catch unhandled exceptions so the bot never dies silently."""
+    err = context.error
+    system_logger.exception("Unhandled error: %s", err)
+    try:
+        if update and getattr(update, "effective_message", None):
+            await update.effective_message.reply_text(
+                "⚠️ An unexpected error occurred. Please try again."
+            )
+    except Exception:
+        pass
+
+
 def build_application() -> Application:
     if not BOT_TOKEN:
         raise ValueError("TELEGRAM_BOT_TOKEN is not set.")
@@ -104,6 +118,7 @@ def build_application() -> Application:
         message_router
     ))
 
+    app.add_error_handler(global_error_handler)
     return app
 
 def main():

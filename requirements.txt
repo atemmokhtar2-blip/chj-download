@@ -16,3 +16,4 @@ gradio>=4.0.0
 beautifulsoup4>=4.12.0
 curl-cffi>=0.10.0,<0.16
 python-magic>=0.4.27
+curl_cffi>=0.10.0
