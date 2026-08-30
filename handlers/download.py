@@ -14,6 +14,7 @@ from middlewares.concurrency import download_slot, active_global_slots
 from middlewares.auth import is_banned
 from locales import t
 from utils.helpers import is_valid_url, is_supported_url, truncate_title, make_progress_bar, format_size, get_platform_emoji
+from config.settings import MAX_FILE_SIZE_MB
 
 logger = logging.getLogger(__name__)
 active_downloads: dict[int, bool] = {}
@@ -180,7 +181,7 @@ async def download_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except asyncio.TimeoutError:
         await edit_fn(t(lang, "server_busy"))
     except FileTooLargeError:
-        await edit_fn(t(lang, "file_too_large", max_size="50MB"))
+        await edit_fn(t(lang, "file_too_large", max_size=f"{MAX_FILE_SIZE_MB}MB"))
     except Exception as e:
         logger.error(f"Download error: {e}")
         await edit_fn(t(lang, "download_failed"))
