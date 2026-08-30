@@ -88,3 +88,32 @@ def init_db():
             CREATE INDEX IF NOT EXISTS idx_cache_hash        ON file_cache(url_hash);
         """)
     logger.info("Database initialized.")
+    ensure_cache_schema()
+
+def ensure_cache_schema():
+    """Additive migrations for fingerprint + vault columns (safe on existing DBs)."""
+    with db_cursor() as c:
+        cols = {row[1] for row in c.execute("PRAGMA table_info(file_cache)").fetchall()}
+        if "fingerprint" not in cols:
+            c.execute("ALTER TABLE file_cache ADD COLUMN fingerprint TEXT DEFAULT ''")
+        if "vault_chat_id" not in cols:
+            c.execute("ALTER TABLE file_cache ADD COLUMN vault_chat_id INTEGER")
+        if "vault_message_id" not in cols:
+            c.execute("ALTER TABLE file_cache ADD COLUMN vault_message_id INTEGER")
+        c.execute(
+            "CREATE INDEX IF NOT EXISTS idx_cache_fingerprint ON file_cache(fingerprint)"
+        )
+        c.execute("""
+            CREATE TABLE IF NOT EXISTS media_fingerprint_index (
+                fingerprint TEXT NOT NULL,
+                quality     TEXT NOT NULL,
+                media_type  TEXT NOT NULL,
+                url_hash    TEXT NOT NULL,
+                file_id     TEXT NOT NULL,
+                vault_chat_id INTEGER,
+                vault_message_id INTEGER,
+                updated_at  TEXT DEFAULT (datetime('now')),
+                PRIMARY KEY (fingerprint, quality, media_type)
+            )
+        """)
+

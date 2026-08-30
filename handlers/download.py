@@ -10,7 +10,11 @@ from telegram.error import TelegramError, NetworkError
 
 from database.users import get_user, increment_downloads
 from database.downloads import log_download
-from database.cache import get_cached, set_cache, invalidate_cache, get_cached_album, set_cache_album
+from database.cache import (
+    get_cached, set_cache, invalidate_cache, get_cached_album, set_cache_album,
+    resolve_cached_delivery, set_cache_with_meta, make_fingerprint,
+)
+from services.media_vault import archive_to_vault, deliver_from_vault, get_storage_channel_id
 from services.downloader import (
     analyze_url, download_video, download_audio, download_image,
     download_album, FileTooLargeError, ALBUM_MAX_ITEMS,
@@ -194,22 +198,38 @@ async def download_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 invalidate_cache(info["url"], "album", "album")
 
     media_kind = "audio" if is_audio else ("image" if is_image else "video")
-    cached_id = get_cached(info["url"], quality_label, media_kind)
-    if cached_id:
+    cached = resolve_cached_delivery(
+        info["url"], quality_label, media_kind,
+        platform=info.get("platform") or "",
+        media_id=str(info.get("media_id") or ""),
+    )
+    if cached and cached.get("file_id"):
         try:
             edit_fn = query.edit_message_caption if query.message.caption else query.edit_message_text
             await edit_fn(t(lang, "from_cache"), parse_mode="HTML")
-            if is_audio:
-                await query.message.reply_audio(audio=cached_id)
-            elif is_image:
-                await query.message.reply_photo(photo=cached_id)
-            else:
-                await query.message.reply_video(video=cached_id)
+            delivered = False
+            # Prefer vault copy_message (durable CDN path)
+            if cached.get("vault_chat_id") and cached.get("vault_message_id"):
+                try:
+                    await deliver_from_vault(
+                        context.bot, query.message.chat_id,
+                        int(cached["vault_chat_id"]), int(cached["vault_message_id"]),
+                    )
+                    delivered = True
+                except TelegramError as ve:
+                    logger.warning("Vault deliver failed, trying file_id: %s", ve)
+            if not delivered:
+                fid = cached["file_id"]
+                if is_audio:
+                    await query.message.reply_audio(audio=fid)
+                elif is_image:
+                    await query.message.reply_photo(photo=fid)
+                else:
+                    await query.message.reply_video(video=fid)
             increment_downloads(user.id)
             return
         except TelegramError as e:
-            # Stale / rotated file_id — drop it and fall through to a real download.
-            logger.warning("Stale file_id for %s (%s): %s", info["url"][:80], quality_label, e)
+            logger.warning("Stale cache for %s (%s): %s", info["url"][:80], quality_label, e)
             invalidate_cache(info["url"], quality_label, media_kind)
 
     # Consume rate-limit windows atomically when a real download starts
@@ -386,7 +406,15 @@ async def _run_download(query, context, info, user, lang, quality_label,
             await edit_fn(t(lang, "uploading"), parse_mode="HTML")
             with open(file_path, "rb") as f:
                 sent = await _upload_with_retry(query.message.reply_photo(photo=InputFile(f, filename=f"{title[:50]}.jpg"), caption=t(lang, "completed")))
-            set_cache(info["url"], quality_label, "image", sent.photo[-1].file_id, title, platform)
+            _fid = sent.photo[-1].file_id
+            _vault = await archive_to_vault(context.bot, sent)
+            set_cache_with_meta(
+                info["url"], quality_label, "image", _fid,
+                title=title, platform=platform,
+                media_id=str(info.get("media_id") or ""),
+                vault_chat_id=(_vault or {}).get("chat_id"),
+                vault_message_id=(_vault or {}).get("message_id"),
+            )
 
         elif is_audio:
             file_path = await download_audio(info["url"], update_progress)
@@ -394,7 +422,15 @@ async def _run_download(query, context, info, user, lang, quality_label,
             await edit_fn(t(lang, "uploading"), parse_mode="HTML")
             with open(file_path, "rb") as f:
                 sent = await _upload_with_retry(query.message.reply_audio(audio=InputFile(f, filename=f"{title[:50]}.mp3"), caption=t(lang, "completed")))
-            set_cache(info["url"], quality_label, "audio", sent.audio.file_id, title, platform)
+            _fid = sent.audio.file_id
+            _vault = await archive_to_vault(context.bot, sent)
+            set_cache_with_meta(
+                info["url"], quality_label, "audio", _fid,
+                title=title, platform=platform,
+                media_id=str(info.get("media_id") or ""),
+                vault_chat_id=(_vault or {}).get("chat_id"),
+                vault_message_id=(_vault or {}).get("message_id"),
+            )
 
         else:
             # Resolve real yt-dlp format_id from the analyzed qualities list.
@@ -422,9 +458,14 @@ async def _run_download(query, context, info, user, lang, quality_label,
                         supports_streaming=True,
                     )
                 )
-            set_cache(
-                info["url"], quality_label, "video",
-                sent.video.file_id, title, platform,
+            _fid = sent.video.file_id
+            _vault = await archive_to_vault(context.bot, sent)
+            set_cache_with_meta(
+                info["url"], quality_label, "video", _fid,
+                title=title, platform=platform,
+                media_id=str(info.get("media_id") or ""),
+                vault_chat_id=(_vault or {}).get("chat_id"),
+                vault_message_id=(_vault or {}).get("message_id"),
             )
 
         increment_downloads(user.id)

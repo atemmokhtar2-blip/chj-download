@@ -691,6 +691,12 @@ async def analyze_url(url: str) -> dict | None:
             if media_type == "album":
                 media_type = "video"
 
+        media_id = str(
+            info.get("id")
+            or info.get("display_id")
+            or info.get("extractor_key", "") + ":" + str(info.get("id") or "")
+            or ""
+        )
         result = {
             "title": info.get("title", "Unknown"),
             "uploader": info.get("uploader") or info.get("channel") or "Unknown",
@@ -706,6 +712,7 @@ async def analyze_url(url: str) -> dict | None:
             "url": url,
             "webpage_url": info.get("webpage_url", url),
             "ext": info.get("ext", ""),
+            "media_id": media_id,
         }
         if tk_info and tk_info.get("play_url"):
             result["play_url"] = tk_info["play_url"]

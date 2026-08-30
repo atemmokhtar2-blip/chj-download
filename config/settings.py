@@ -28,6 +28,7 @@ HOURLY_DOWNLOAD_LIMIT = int(os.getenv("HOURLY_DOWNLOAD_LIMIT", "30"))
 DAILY_DOWNLOAD_LIMIT = int(os.getenv("DAILY_DOWNLOAD_LIMIT", "100"))
 # Optional: redis://[:password]@host:6379/0  (also REDIS_URL / RATE_LIMIT_REDIS_URL)
 REDIS_URL = os.getenv("REDIS_URL", os.getenv("RATE_LIMIT_REDIS_URL", "")).strip()
+STORAGE_CHANNEL_ID = os.getenv("STORAGE_CHANNEL_ID", os.getenv("MEDIA_VAULT_CHANNEL_ID", "")).strip()
 MAX_CONCURRENT_DOWNLOADS = int(os.getenv("MAX_CONCURRENT_DOWNLOADS", "5"))
 
 CACHE_TTL_SECONDS = int(os.getenv("CACHE_TTL_SECONDS", "86400"))
