@@ -15,6 +15,8 @@ from urllib.parse import quote, urlencode
 
 import requests
 
+from config.settings import MAX_FILE_SIZE_BYTES
+
 logger = logging.getLogger(__name__)
 
 MOBILE_UA = (
@@ -672,8 +674,14 @@ def scrape_tiktok(url: str) -> Optional[dict]:
 
 def download_tiktok_direct(play_url: str, out_path: str) -> Optional[str]:
     """
-    Stream CDN bytes to disk with retries. Never raises.
+    Stream CDN bytes to disk with retries.
+
+    Aborts mid-stream (and raises) when transferred size exceeds MAX_FILE_SIZE_BYTES
+    so a large remote file never fully lands on disk. Other failures return None.
     """
+    # Local import avoids hard coupling for callers that only resolve metadata.
+    from services.downloader import FileTooLargeError
+
     if not play_url or not str(play_url).startswith("http"):
         return None
     path = out_path if out_path.endswith((".mp4", ".webm", ".mov")) else out_path + ".mp4"
@@ -691,17 +699,50 @@ def download_tiktok_direct(play_url: str, out_path: str) -> Optional[str]:
                     logger.debug(f"direct status {r.status_code} attempt {attempt}")
                     time.sleep(0.5 * (attempt + 1))
                     continue
+
+                # Pre-abort when CDN advertises an oversize body.
+                cl = r.headers.get("Content-Length")
+                if cl:
+                    try:
+                        if int(cl) > MAX_FILE_SIZE_BYTES:
+                            raise FileTooLargeError(
+                                size_bytes=int(cl),
+                                limit_bytes=MAX_FILE_SIZE_BYTES,
+                            )
+                    except ValueError:
+                        pass
+
+                written = 0
                 with open(path, "wb") as f:
                     for chunk in r.iter_content(chunk_size=256 * 1024):
-                        if chunk:
-                            f.write(chunk)
-                size = os.path.getsize(path)
+                        if not chunk:
+                            continue
+                        written += len(chunk)
+                        if written > MAX_FILE_SIZE_BYTES:
+                            f.close()
+                            try:
+                                os.remove(path)
+                            except OSError:
+                                pass
+                            raise FileTooLargeError(
+                                size_bytes=written,
+                                limit_bytes=MAX_FILE_SIZE_BYTES,
+                            )
+                        f.write(chunk)
+                size = os.path.getsize(path) if os.path.exists(path) else 0
                 if size > 1000:
                     return path
                 try:
                     os.remove(path)
                 except OSError:
                     pass
+        except FileTooLargeError:
+            try:
+                if os.path.exists(path):
+                    os.remove(path)
+            except OSError:
+                pass
+            raise
         except Exception as e:
             logger.debug(f"direct download attempt {attempt}: {e}")
             time.sleep(0.5 * (attempt + 1))
