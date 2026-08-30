@@ -129,19 +129,23 @@ def _result(
     source: str = "unknown",
     webpage_url: str = "",
     music_url: str | None = None,
+    images: list | None = None,
 ) -> dict:
+    img_list = [u for u in (images or []) if u and str(u).startswith("http")]
+    media_type = "album" if len(img_list) >= 2 else ("image" if len(img_list) == 1 else "video")
     return {
         "title": title or "TikTok Video",
         "uploader": uploader or "TikTok User",
         "duration": int(duration or 0),
-        "thumbnail": thumbnail or "",
+        "thumbnail": thumbnail or (img_list[0] if img_list else ""),
         "play_url": play_url,
         "music_url": music_url,
         "height": int(height or 0),
         "webpage_url": webpage_url,
         "source": source,
         "platform": "TikTok",
-        "media_type": "video",
+        "media_type": media_type,
+        "images": img_list,
     }
 
 
@@ -167,22 +171,34 @@ def provider_tikwm(url: str) -> Optional[dict]:
         if not isinstance(d, dict):
             continue
         play = d.get("hdplay") or d.get("play") or d.get("wmplay")
-        if not play or not str(play).startswith("http"):
+        # Photo-mode / slideshow: tikwm returns images[] without a video stream.
+        raw_images = d.get("images") or []
+        images: list[str] = []
+        if isinstance(raw_images, list):
+            for im in raw_images:
+                if isinstance(im, str) and im.startswith("http"):
+                    images.append(im)
+                elif isinstance(im, dict):
+                    u = im.get("url") or im.get("image") or im.get("display_image")
+                    if u and str(u).startswith("http"):
+                        images.append(str(u))
+        if (not play or not str(play).startswith("http")) and not images:
             continue
         author = d.get("author") or {}
         uploader = (
             author.get("nickname") if isinstance(author, dict) else None
         ) or (str(d.get("author") or "") if not isinstance(d.get("author"), dict) else "") or "TikTok User"
         return _result(
-            str(play),
+            str(play) if play and str(play).startswith("http") else "",
             title=d.get("title") or "TikTok Video",
             uploader=uploader,
-            thumbnail=d.get("cover") or d.get("origin_cover") or "",
+            thumbnail=d.get("cover") or d.get("origin_cover") or (images[0] if images else ""),
             duration=int(d.get("duration") or 0),
             height=int(d.get("height") or 0),
             source="tikwm",
             webpage_url=url,
             music_url=d.get("music"),
+            images=images,
         )
     return None
 
@@ -490,6 +506,21 @@ def _from_item(item: dict) -> dict:
         or _addr_url(video.get("originCover"))
         or ""
     )
+    # Photo-mode / slideshow: imagePost.images[].imageURL.urlList
+    images: list[str] = []
+    image_post = item.get("imagePost") or item.get("image_post") or {}
+    for im in (image_post.get("images") or []):
+        if not isinstance(im, dict):
+            continue
+        image_url = im.get("imageURL") or im.get("image_url") or im.get("displayImage") or {}
+        if isinstance(image_url, str) and image_url.startswith("http"):
+            images.append(image_url)
+            continue
+        if isinstance(image_url, dict):
+            for u in (image_url.get("urlList") or image_url.get("url_list") or []):
+                if u and str(u).startswith("http"):
+                    images.append(str(u))
+                    break
     return _result(
         play or "",
         title=title,
@@ -498,6 +529,7 @@ def _from_item(item: dict) -> dict:
         duration=duration,
         height=int(video.get("height") or 0),
         source="page_json",
+        images=images,
     )
 
 

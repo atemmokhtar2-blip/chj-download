@@ -239,50 +239,76 @@ async def _run_download(query, context, info, user, lang, quality_label,
                 parse_mode="HTML",
             )
 
-            # Telegram media groups: max 10 items. Open all files, build media list,
-            # send as one group, then close/cleanup.
+            # Telegram media groups require 2–10 items. Single item → normal send.
             open_handles = []
-            media_group = []
             try:
-                for i, item in enumerate(downloaded[:ALBUM_MAX_ITEMS]):
-                    fh = open(item["path"], "rb")
-                    open_handles.append(fh)
-                    caption = t(lang, "completed") if i == 0 else None
+                if len(downloaded) == 1:
+                    item = downloaded[0]
                     safe_title = (item.get("title") or title or "media")[:40]
-                    if item["type"] == "image":
-                        media_group.append(
-                            InputMediaPhoto(
-                                media=InputFile(fh, filename=f"{safe_title}_{i + 1}.jpg"),
-                                caption=caption,
-                                parse_mode="HTML" if caption else None,
+                    with open(item["path"], "rb") as fh:
+                        if item["type"] == "image":
+                            sent = await _upload_with_retry(
+                                query.message.reply_photo(
+                                    photo=InputFile(fh, filename=f"{safe_title}.jpg"),
+                                    caption=t(lang, "completed"),
+                                )
                             )
-                        )
-                    else:
-                        media_group.append(
-                            InputMediaVideo(
-                                media=InputFile(fh, filename=f"{safe_title}_{i + 1}.mp4"),
-                                caption=caption,
-                                parse_mode="HTML" if caption else None,
-                                supports_streaming=True,
+                            set_cache(
+                                info["url"], quality_label, "image",
+                                sent.photo[-1].file_id, title, platform,
                             )
-                        )
+                        else:
+                            sent = await _upload_with_retry(
+                                query.message.reply_video(
+                                    video=InputFile(fh, filename=f"{safe_title}.mp4"),
+                                    caption=t(lang, "completed"),
+                                    supports_streaming=True,
+                                )
+                            )
+                            set_cache(
+                                info["url"], quality_label, "video",
+                                sent.video.file_id, title, platform,
+                            )
+                else:
+                    media_group = []
+                    for i, item in enumerate(downloaded[:ALBUM_MAX_ITEMS]):
+                        fh = open(item["path"], "rb")
+                        open_handles.append(fh)
+                        caption = t(lang, "completed") if i == 0 else None
+                        safe_title = (item.get("title") or title or "media")[:40]
+                        if item["type"] == "image":
+                            media_group.append(
+                                InputMediaPhoto(
+                                    media=InputFile(fh, filename=f"{safe_title}_{i + 1}.jpg"),
+                                    caption=caption,
+                                    parse_mode="HTML" if caption else None,
+                                )
+                            )
+                        else:
+                            media_group.append(
+                                InputMediaVideo(
+                                    media=InputFile(fh, filename=f"{safe_title}_{i + 1}.mp4"),
+                                    caption=caption,
+                                    parse_mode="HTML" if caption else None,
+                                    supports_streaming=True,
+                                )
+                            )
 
-                sent_msgs = await _upload_with_retry(
-                    query.message.reply_media_group(media=media_group)
-                )
-                # Cache first item only (cache schema is single file_id).
-                if sent_msgs:
-                    first = sent_msgs[0]
-                    if first.photo:
-                        set_cache(
-                            info["url"], quality_label, "image",
-                            first.photo[-1].file_id, title, platform,
-                        )
-                    elif first.video:
-                        set_cache(
-                            info["url"], quality_label, "video",
-                            first.video.file_id, title, platform,
-                        )
+                    sent_msgs = await _upload_with_retry(
+                        query.message.reply_media_group(media=media_group)
+                    )
+                    if sent_msgs:
+                        first = sent_msgs[0]
+                        if first.photo:
+                            set_cache(
+                                info["url"], quality_label, "image",
+                                first.photo[-1].file_id, title, platform,
+                            )
+                        elif first.video:
+                            set_cache(
+                                info["url"], quality_label, "video",
+                                first.video.file_id, title, platform,
+                            )
             finally:
                 for fh in open_handles:
                     try:
@@ -296,7 +322,7 @@ async def _run_download(query, context, info, user, lang, quality_label,
                             os.remove(p)
                         except Exception:
                             pass
-                file_path = None  # already cleaned
+                file_path = None
 
         elif is_image:
             file_path = await download_image(info["url"], info.get("image_url"))
