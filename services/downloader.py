@@ -287,6 +287,17 @@ async def analyze_url(url: str) -> dict | None:
             ):
                 return pin_info
 
+        # Instagram: gallery-dl + instaloader before yt-dlp (carousels / reels)
+        if any(x in url for x in ("instagram.com", "instagr.am")):
+            from .instagram_scraper import scrape_instagram
+            ig_info = await loop.run_in_executor(get_executor(), scrape_instagram, url)
+            if ig_info and (
+                ig_info.get("image_url")
+                or ig_info.get("play_url")
+                or ig_info.get("album_items")
+            ):
+                return ig_info
+
         # TikTok: expand short links + multi-strategy scrape BEFORE yt-dlp
         if any(x in url for x in ("tiktok.com", "vt.tiktok.com", "vm.tiktok.com")):
             from .tiktok_scraper import scrape_tiktok

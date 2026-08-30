@@ -2,6 +2,7 @@ python-telegram-bot==21.6
 yt-dlp>=2025.1.1
 gallery-dl>=1.27.0
 pinterest-downloader>=4.0.0
+instaloader>=4.13
 limits>=3.13
 redis>=5.0.0
 requests>=2.31.0
