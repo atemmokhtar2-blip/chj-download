@@ -15,12 +15,12 @@ from services.downloader import (
     analyze_url, download_video, download_audio, download_image,
     download_album, FileTooLargeError, ALBUM_MAX_ITEMS,
 )
-from middlewares.rate_limiter import check_rate_limit, mark_download
+from middlewares.rate_limiter import check_rate_limit_detailed, mark_download
 from middlewares.concurrency import download_slot, active_global_slots
 from middlewares.auth import is_banned
 from locales import t
 from utils.helpers import is_valid_url, is_supported_url, truncate_title, make_progress_bar, format_size, get_platform_emoji
-from config.settings import MAX_FILE_SIZE_MB
+from config.settings import MAX_FILE_SIZE_MB, HOURLY_DOWNLOAD_LIMIT, DAILY_DOWNLOAD_LIMIT
 
 logger = logging.getLogger(__name__)
 active_downloads: dict[int, bool] = {}
@@ -54,9 +54,20 @@ async def handle_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(t(lang, "invalid_url"))
         return
 
-    allowed, wait_secs = check_rate_limit(user.id)
-    if not allowed:
-        await update.message.reply_text(t(lang, "rate_limit", seconds=wait_secs))
+    rl = check_rate_limit_detailed(user.id)
+    if not rl.allowed:
+        if rl.reason == "daily":
+            await update.message.reply_text(
+                t(lang, "rate_limit_daily", limit=DAILY_DOWNLOAD_LIMIT)
+            )
+        elif rl.reason == "hourly":
+            await update.message.reply_text(
+                t(lang, "rate_limit_hourly", limit=HOURLY_DOWNLOAD_LIMIT)
+            )
+        else:
+            await update.message.reply_text(
+                t(lang, "rate_limit", seconds=rl.wait_seconds)
+            )
         return
 
     if active_downloads.get(user.id):
@@ -144,6 +155,16 @@ async def download_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if active_downloads.get(user.id):
         await query.answer(t(lang, "queue_full"), show_alert=True)
+        return
+
+    rl = check_rate_limit_detailed(user.id)
+    if not rl.allowed:
+        if rl.reason == "daily":
+            await query.answer(t(lang, "rate_limit_daily", limit=DAILY_DOWNLOAD_LIMIT), show_alert=True)
+        elif rl.reason == "hourly":
+            await query.answer(t(lang, "rate_limit_hourly", limit=HOURLY_DOWNLOAD_LIMIT), show_alert=True)
+        else:
+            await query.answer(t(lang, "rate_limit", seconds=rl.wait_seconds), show_alert=True)
         return
 
     await query.answer()
