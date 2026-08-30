@@ -260,169 +260,32 @@ def _detect_media_type(info: dict, platform: str) -> str:
 
 
 def _fallback_pinterest_extract(url: str) -> dict | None:
-    """Fallback extraction for Pinterest using requests and regex when yt-dlp fails.
-
-    This is the critical path for Pinterest image pins: yt-dlp frequently fails on
-    Pinterest, so we scrape the pin HTML and find the *real* pin image. The key
-    gotcha is that Pinterest HTML always contains a *placeholder* image
-    (the hash "d53b014d86a6b6761bf649a0ed813c2b") that must be skipped, otherwise
-    we would hand the user a non-existent image that returns 403 on download.
-    """
-    # The well-known Pinterest placeholder/og-default image hash that appears on
-    # every Pinterest page and must NEVER be used as the pin image.
-    PLACEHOLDER_HASHES = (
-        "d53b014d86a6b6761bf649a0ed813c2b",  # generic Pinterest placeholder PNG
-    )
-    # Preferred size buckets in priority order: highest quality first.
-    PREFERRED_SIZES = ("originals", "1200x", "736x", "564x", "474x", "236x")
-
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
-        "Accept-Language": "en-US,en;q=0.9",
-        "Referer": "https://www.pinterest.com/",
-    }
-
+    """Delegate to multi-strategy Pinterest scraper (PinResource + gallery-dl + HTML)."""
     try:
-        session = requests.Session()
-        res = session.get(url, headers=headers, timeout=20, allow_redirects=True)
-        html = res.text
-        final_url = res.url
-        
-        # If we got redirected to login, the HTML is useless
-        if "login" in final_url.lower():
-             download_logger.error(f"Pinterest Scraper: Redirected to login for {url}")
-             return None
-
-
-        # 1) Try the structured og:image meta tag first — it points to the real pin.
-        # Robust regex for og:image (property and content can be in any order)
-        og_image = None
-        og_patterns = [
-            r'<meta[^>]+property=["\']og:image["\'][^>]+content=["\']([^"\']+)["\']',
-            r'<meta[^>]+content=["\']([^"\']+)["\'][^>]+property=["\']og:image["\']',
-        ]
-        for pattern in og_patterns:
-            og_match = re.search(pattern, html, re.IGNORECASE)
-            if og_match:
-                cand = og_match.group(1)
-                if not any(ph in cand for ph in PLACEHOLDER_HASHES):
-                    og_image = cand
-                    break
-
-        # 2) Collect ALL pinimg image URLs, then pick the best real one.
-        # More flexible regex for pinimg URLs
-        all_imgs = re.findall(
-            r'https://i\.pinimg\.com/([a-zA-Z0-9x_-]+)/([a-zA-Z0-9/_.\-]+)\.(jpg|jpeg|png|webp)',
-            html,
-            re.IGNORECASE,
-        )
-        # Map size-bucket -> full URL for the real pin image (not the placeholder).
-        by_bucket: dict[str, str] = {}
-        for size_bucket, file_hash, ext in all_imgs:
-            full = f"https://i.pinimg.com/{size_bucket}/{file_hash}.{ext}"
-            # Skip the placeholder / Pinterest logo images.
-            if any(ph in full for ph in PLACEHOLDER_HASHES):
-                continue
-            # Skip tiny favicons / board thumbnails that aren't the pin itself.
-            if size_bucket in ("60x60", "136x136", "75x75"):
-                continue
-            # Prefer the first occurrence per bucket.
-            if size_bucket not in by_bucket:
-                by_bucket[size_bucket] = full
-
-        # Pick the highest-quality bucket available.
-        chosen_image = None
-        for bucket in PREFERRED_SIZES:
-            if bucket in by_bucket:
-                chosen_image = by_bucket[bucket]
-                break
-        # If no preferred bucket, take whatever real image we found.
-        if not chosen_image and by_bucket:
-            chosen_image = next(iter(by_bucket.values()))
-
-        # 3) Try to find image in JSON blobs (e.g. __PWS_DATA__)
-        json_image = None
-        # Pinterest sometimes uses different script types or IDs for data
-        json_blobs = re.findall(r'<script[^>]*>(.*?)</script>', html, re.DOTALL)
-        for blob in json_blobs:
-            if "i.pinimg.com" not in blob:
-                continue
-            # Look for "originals":{"url":"..."}
-            m = re.search(r'["\']originals["\']\s*:\s*\{\s*["\']url["\']\s*:\s*["\'](https?://i\.pinimg\.com/[^"\']+)["\']', blob)
-            if m:
-                json_image = m.group(1).replace("\\/", "/")
-                break
-            # Look for any large image bucket
-            m = re.search(r'["\'](https?://i\.pinimg\.com/(?:originals|736x|564x|736x|474x)/[^"\']+)["\']', blob)
-            if m:
-                cand = m.group(1).replace("\\/", "/")
-                if not any(ph in cand for ph in PLACEHOLDER_HASHES):
-                    json_image = cand
-                    break
-            # Very broad fallback for any pinimg URL
-            m = re.search(r'(https?://i\.pinimg\.com/[^"\']+\.(?:jpg|png|webp))', blob)
-            if m:
-                cand = m.group(1).replace("\\/", "/")
-                if not any(ph in cand for ph in PLACEHOLDER_HASHES):
-                    json_image = cand
-                    break
-
-        # Prefer og:image, then JSON image, then scraped image.
-        image_url = og_image or json_image or chosen_image
-        if not image_url:
-            download_logger.error(f"Pinterest Scraper: No image URL found in HTML for {url}")
-            return None
-        download_logger.info(f"Pinterest Scraper: Found image {image_url}")
-
-        # Normalize: convert any size bucket to /originals/ for maximum quality,
-        # but only if it exists in our by_bucket map; otherwise keep the bucket we have.
-        # (We avoid blind string-replacement to /originals/ because not every pin has
-        #  an originals variant — that's what causes silent 403s downstream.)
-
-        # Try to extract a real title from <title> or og:title.
-        title = "Pinterest Image"
-        title_match = re.search(r"<title>(.*?)</title>", html, re.IGNORECASE | re.DOTALL)
-        if title_match:
-            title = title_match.group(1).strip()
-            title = re.sub(r"\s*\|\s*Pinterest\s*$", "", title, flags=re.IGNORECASE)
-        og_title = re.search(
-            r'<meta[^>]+property=["\']og:title["\'][^>]+content=["\']([^"\']+)["\']',
-            html, re.IGNORECASE,
-        )
-        if og_title:
-            title = og_title.group(1).strip()
-
-        ext = image_url.rsplit(".", 1)[-1].lower() if "." in image_url else "jpg"
-        # yt-dlp sometimes returns 'jpeg' for .jpg; keep it simple.
-        if ext not in ("jpg", "jpeg", "png", "webp", "gif", "bmp", "svg"):
-            ext = "jpg"
-
-        return {
-            "title": title,
-            "uploader": "Pinterest User",
-            "duration": "Unknown",
-            "duration_secs": 0,
-            "thumbnail": image_url,
-            "platform": "Pinterest",
-            "media_type": "image",
-            "qualities": [],
-            "audio_formats": [],
-            "image_url": image_url,
-            "album_items": [],
-            "url": url,
-            "webpage_url": final_url,
-            "ext": ext,
-        }
+        from .pinterest_scraper import scrape_pinterest
+        return scrape_pinterest(url)
     except Exception as e:
-        error_logger.error(f"Fallback Pinterest error for {url}: {e}")
+        error_logger.error(f"Pinterest extract error for {url}: {e}")
         return None
+
 
 
 async def analyze_url(url: str) -> dict | None:
     try:
         loop = asyncio.get_event_loop()
         tk_info = None
+
+        # Pinterest: dedicated multi-strategy extractor (PinResource API first)
+        if any(x in url for x in ("pinterest.", "pin.it")):
+            pin_info = await loop.run_in_executor(
+                get_executor(), _fallback_pinterest_extract, url
+            )
+            if pin_info and (
+                pin_info.get("image_url")
+                or pin_info.get("play_url")
+                or pin_info.get("album_items")
+            ):
+                return pin_info
 
         # TikTok: expand short links + multi-strategy scrape BEFORE yt-dlp
         if any(x in url for x in ("tiktok.com", "vt.tiktok.com", "vm.tiktok.com")):
@@ -1194,6 +1057,22 @@ async def download_video(url: str, format_id: str, quality_label: str,
         path = await _tiktok_direct_attempts(play_url)
         if path:
             return _enforce_max_file_size(path)
+
+    # 1b) Direct CDN play_url (Pinterest videos etc.) — skip yt-dlp when we already
+    # have a pinimg/v.pinimg stream URL from PinResource.
+    if play_url and str(play_url).startswith("http") and not is_tiktok:
+        try:
+            from .tiktok_scraper import download_tiktok_direct
+            path = await loop.run_in_executor(
+                get_executor(), download_tiktok_direct, play_url, direct_path
+            )
+            if path and os.path.exists(path) and os.path.getsize(path) > 1000:
+                download_logger.info("Direct play_url download OK for %s", url[:60])
+                return _enforce_max_file_size(path)
+        except FileTooLargeError:
+            raise
+        except Exception as e:
+            error_logger.error(f"Direct play_url failed: {e}")
 
     # 2) yt-dlp
     try:
