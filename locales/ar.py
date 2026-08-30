@@ -31,6 +31,8 @@ translations = {
     "queue_full": "⏳ لديك تحميل جارٍ بالفعل. يرجى الانتظار.",
     "invalid_url": "❌ رابط غير صالح أو غير مدعوم.",
     "rate_limit": "⏳ انتظر {seconds} ثانية قبل التحميل التالي.",
+    "rate_limit_hourly": "⏳ وصلت للحد الساعي ({limit} تحميل/ساعة). حاول لاحقاً.",
+    "rate_limit_daily": "⏳ وصلت للحد اليومي ({limit} تحميل/يوم). عد غداً.",
     "from_cache": "✅ تم الإرسال من الذاكرة المؤقتة.",
     "downloading": "⏳ {bar} {percent}%\n📥 {downloaded} / {total}\n🚀 {speed} · المتبقي {eta}",
     "uploading": "📤 جاري الرفع إلى تيليجرام...",

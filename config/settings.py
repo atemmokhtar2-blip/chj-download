@@ -20,7 +20,13 @@ MAX_FILE_SIZE_MB = int(os.getenv("MAX_FILE_SIZE_MB", "50"))
 MAX_FILE_SIZE_BYTES = MAX_FILE_SIZE_MB * 1024 * 1024
 
 DOWNLOAD_TIMEOUT = int(os.getenv("DOWNLOAD_TIMEOUT", "300"))
-RATE_LIMIT_SECONDS = int(os.getenv("RATE_LIMIT_SECONDS", "10"))
+# Token-bucket cooldown between downloads (seconds per token refill).
+RATE_LIMIT_SECONDS = int(os.getenv("RATE_LIMIT_SECONDS", "15"))
+# Max burst tokens (allows a short burst then settles to 1 / RATE_LIMIT_SECONDS).
+RATE_LIMIT_BURST = int(os.getenv("RATE_LIMIT_BURST", "2"))
+# Persistent quotas (SQLite downloads table — survive process restart).
+HOURLY_DOWNLOAD_LIMIT = int(os.getenv("HOURLY_DOWNLOAD_LIMIT", "30"))
+DAILY_DOWNLOAD_LIMIT = int(os.getenv("DAILY_DOWNLOAD_LIMIT", "100"))
 MAX_CONCURRENT_DOWNLOADS = int(os.getenv("MAX_CONCURRENT_DOWNLOADS", "5"))
 
 CACHE_TTL_SECONDS = int(os.getenv("CACHE_TTL_SECONDS", "86400"))

@@ -31,6 +31,8 @@ translations = {
     "queue_full": "⏳ You already have a download in progress. Please wait.",
     "invalid_url": "❌ Invalid or unsupported link.",
     "rate_limit": "⏳ Please wait {seconds}s before the next download.",
+    "rate_limit_hourly": "⏳ Hourly limit reached ({limit} downloads/hour). Try again later.",
+    "rate_limit_daily": "⏳ Daily limit reached ({limit} downloads/day). Come back tomorrow.",
     "from_cache": "✅ Sent from cache.",
     "downloading": "⏳ {bar} {percent}%\n📥 {downloaded} / {total}\n🚀 {speed} · ETA {eta}",
     "uploading": "📤 Uploading to Telegram...",
