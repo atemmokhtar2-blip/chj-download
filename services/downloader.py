@@ -93,6 +93,10 @@ def _base_ydl_opts(extra: dict | None = None) -> dict:
         "noplaylist": True,
         "nocheckcertificate": True,
         "ignoreerrors": False,
+        # Abort as soon as Content-Length exceeds the bot upload limit.
+        # Post-download _enforce_max_file_size remains the safety net when
+        # Content-Length is missing (chunked transfer / some HLS paths).
+        "max_filesize": MAX_FILE_SIZE_BYTES,
         "user_agent": (
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
             "AppleWebKit/537.36 (KHTML, like Gecko) "
@@ -110,6 +114,34 @@ def _base_ydl_opts(extra: dict | None = None) -> dict:
     if extra:
         opts.update(extra)
     return opts
+
+
+def _is_max_filesize_abort(err: BaseException) -> bool:
+    """True when yt-dlp aborted because the remote file exceeds max_filesize."""
+    msg = str(err).lower()
+    return (
+        "max-filesize" in msg
+        or "max_filesize" in msg
+        or "larger than max-filesize" in msg
+        or "file is larger than max-filesize" in msg
+    )
+
+
+def _filesize_progress_guard(d: dict) -> None:
+    """
+    yt-dlp progress hook: abort mid-download when transferred bytes exceed the
+    limit. Covers cases where Content-Length is absent (chunked / some HLS).
+    Raising from a progress hook stops the download.
+    """
+    if d.get("status") != "downloading":
+        return
+    downloaded = d.get("downloaded_bytes") or 0
+    total = d.get("total_bytes") or d.get("total_bytes_estimate") or 0
+    if downloaded > MAX_FILE_SIZE_BYTES or (total and total > MAX_FILE_SIZE_BYTES):
+        raise FileTooLargeError(
+            size_bytes=int(max(downloaded, total or 0)),
+            limit_bytes=MAX_FILE_SIZE_BYTES,
+        )
 
 
 def _extract_info_sync(url: str) -> dict:
@@ -734,15 +766,37 @@ async def download_image(url: str, image_url: str) -> str | None:
                         continue
 
                     content_type = (resp.headers.get("Content-Type", "") or "").lower()
-                    content = await resp.read()
-
-                    # Validate: must be an image by both content-type and magic bytes.
-                    if "image/" not in content_type and "application/xml" not in content_type:
-                        # Some CDNs send generic content-type; rely on magic bytes.
-                        pass
                     if "application/xml" in content_type or "text/html" in content_type:
                         last_err = f"Non-image Content-Type: {content_type}"
                         continue
+
+                    # Pre-abort when Content-Length already exceeds the limit.
+                    cl_header = resp.headers.get("Content-Length")
+                    if cl_header:
+                        try:
+                            if int(cl_header) > MAX_FILE_SIZE_BYTES:
+                                raise FileTooLargeError(
+                                    size_bytes=int(cl_header),
+                                    limit_bytes=MAX_FILE_SIZE_BYTES,
+                                )
+                        except ValueError:
+                            pass
+
+                    # Stream body so we never hold a huge buffer in RAM and can
+                    # abort mid-transfer when size crosses the limit.
+                    chunks: list[bytes] = []
+                    received = 0
+                    async for chunk in resp.content.iter_chunked(256 * 1024):
+                        if not chunk:
+                            continue
+                        received += len(chunk)
+                        if received > MAX_FILE_SIZE_BYTES:
+                            raise FileTooLargeError(
+                                size_bytes=received,
+                                limit_bytes=MAX_FILE_SIZE_BYTES,
+                            )
+                        chunks.append(chunk)
+                    content = b"".join(chunks)
 
                     if not _is_image_bytes(content):
                         last_err = "Downloaded bytes are not a valid image (magic-byte check failed)"
@@ -854,20 +908,28 @@ def _download_sync(url: str, fmt_id: str, out_path: str,
                 ),
                 "Accept-Language": "en-US,en;q=0.9",
             }
+        hooks = [_filesize_progress_guard]
         if progress_hook:
-            ydl_opts["progress_hooks"] = [progress_hook]
+            hooks.append(progress_hook)
+        ydl_opts["progress_hooks"] = hooks
         try:
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 ydl.download([url])
             found = _find_downloaded_file(out_path)
             if found:
                 return found
+        except FileTooLargeError:
+            raise
         except Exception as e:
+            if _is_max_filesize_abort(e):
+                raise FileTooLargeError(limit_bytes=MAX_FILE_SIZE_BYTES) from e
             last_err = e
             error_logger.error(f"format attempt failed ({str(attempt_fmt)[:50]}): {e}")
             continue
 
     if last_err:
+        if _is_max_filesize_abort(last_err):
+            raise FileTooLargeError(limit_bytes=MAX_FILE_SIZE_BYTES) from last_err
         raise last_err
     raise FileNotFoundError(f"Downloaded file not found for {url}")
 
@@ -892,11 +954,20 @@ def _download_audio_sync(url: str, out_path: str,
             "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
             "Accept-Language": "en-US,en;q=0.9",
         }
+    hooks = [_filesize_progress_guard]
     if progress_hook:
-        ydl_opts["progress_hooks"] = [progress_hook]
+        hooks.append(progress_hook)
+    ydl_opts["progress_hooks"] = hooks
 
-    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-        ydl.download([url])
+    try:
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            ydl.download([url])
+    except FileTooLargeError:
+        raise
+    except Exception as e:
+        if _is_max_filesize_abort(e):
+            raise FileTooLargeError(limit_bytes=MAX_FILE_SIZE_BYTES) from e
+        raise
 
     mp3_path = out_path.replace(".%(ext)s", ".mp3")
     if os.path.exists(mp3_path):
