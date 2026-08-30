@@ -10,7 +10,7 @@ from telegram.error import TelegramError, NetworkError
 
 from database.users import get_user, increment_downloads
 from database.downloads import log_download
-from database.cache import get_cached, set_cache
+from database.cache import get_cached, set_cache, invalidate_cache
 from services.downloader import (
     analyze_url, download_video, download_audio, download_image,
     download_album, FileTooLargeError, ALBUM_MAX_ITEMS,
@@ -173,17 +173,24 @@ async def download_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     is_album = data == "dl_album"
     quality_label = "audio" if is_audio else ("image" if is_image else data.replace("dl_video_", ""))
 
-    cached_id = get_cached(info["url"], quality_label, "audio" if is_audio else ("image" if is_image else "video"))
+    media_kind = "audio" if is_audio else ("image" if is_image else "video")
+    cached_id = get_cached(info["url"], quality_label, media_kind)
     if cached_id:
         try:
             edit_fn = query.edit_message_caption if query.message.caption else query.edit_message_text
             await edit_fn(t(lang, "from_cache"), parse_mode="HTML")
+            if is_audio:
+                await query.message.reply_audio(audio=cached_id)
+            elif is_image:
+                await query.message.reply_photo(photo=cached_id)
+            else:
+                await query.message.reply_video(video=cached_id)
             increment_downloads(user.id)
-            if is_audio: await query.message.reply_audio(audio=cached_id)
-            elif is_image: await query.message.reply_photo(photo=cached_id)
-            else: await query.message.reply_video(video=cached_id)
             return
-        except TelegramError: pass
+        except TelegramError as e:
+            # Stale / rotated file_id — drop it and fall through to a real download.
+            logger.warning("Stale file_id for %s (%s): %s", info["url"][:80], quality_label, e)
+            invalidate_cache(info["url"], quality_label, media_kind)
 
     # Consume rate-limit windows atomically when a real download starts
     # (cache hits do not consume). Closes double-click races.
