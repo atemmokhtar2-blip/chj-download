@@ -34,6 +34,42 @@ BEST_FORMAT_WITH_AUDIO = (
     "best"
 )
 
+class FileTooLargeError(Exception):
+    """Raised when a downloaded file exceeds MAX_FILE_SIZE_BYTES."""
+
+    def __init__(self, size_bytes: int = 0, limit_bytes: int = 0):
+        self.size_bytes = size_bytes
+        self.limit_bytes = limit_bytes or MAX_FILE_SIZE_BYTES
+        super().__init__(
+            f"File too large: {size_bytes} bytes (limit {self.limit_bytes})"
+        )
+
+
+def _enforce_max_file_size(path: str | None) -> str | None:
+    """
+    Guard every successful download return path.
+
+    - If path is missing / empty → return as-is (caller handles failure).
+    - If file exceeds MAX_FILE_SIZE_BYTES → delete it and raise FileTooLargeError.
+    - Otherwise return the same path unchanged.
+    """
+    if not path:
+        return path
+    try:
+        size = os.path.getsize(path)
+    except OSError:
+        return path
+    if size > MAX_FILE_SIZE_BYTES:
+        error_logger.error(
+            f"File exceeds size limit: {path} size={size} limit={MAX_FILE_SIZE_BYTES}"
+        )
+        try:
+            os.remove(path)
+        except OSError:
+            pass
+        raise FileTooLargeError(size_bytes=size, limit_bytes=MAX_FILE_SIZE_BYTES)
+    return path
+
 
 def _safe_impersonate():
     """Return ImpersonateTarget only when curl_cffi version is supported by yt-dlp."""
@@ -484,6 +520,11 @@ async def analyze_url(url: str) -> dict | None:
 
         # Sort ascending; keep only meaningful steps (max 5)
         qualities = sorted(quality_map.values(), key=lambda x: x["height"])
+        # Drop qualities whose known size already exceeds Telegram/bot limit
+        qualities = [
+            q for q in qualities
+            if not (q.get("filesize") and q["filesize"] > MAX_FILE_SIZE_BYTES)
+        ]
         if len(qualities) > 5:
             # keep lowest, some mids, and highest
             qualities = [qualities[0]] + qualities[1:-1][-3:] + [qualities[-1]]
@@ -711,8 +752,10 @@ async def download_image(url: str, image_url: str) -> str | None:
                     with open(out_path, "wb") as f:
                         f.write(content)
                     if os.path.getsize(out_path) > 0:
-                        return out_path
+                        return _enforce_max_file_size(out_path)
                     last_err = "Wrote 0-byte file"
+        except FileTooLargeError:
+            raise
         except asyncio.TimeoutError:
             last_err = "timeout"
             continue
@@ -944,7 +987,9 @@ async def download_video(url: str, format_id: str, quality_label: str,
                 )
                 if path and os.path.exists(path) and os.path.getsize(path) > 1000:
                     download_logger.info(f"TikTok direct OK via candidate #{i}")
-                    return path
+                    return _enforce_max_file_size(path)
+            except FileTooLargeError:
+                raise
             except Exception as e:
                 error_logger.error(f"TikTok direct candidate #{i} error: {e}")
         return None
@@ -953,7 +998,7 @@ async def download_video(url: str, format_id: str, quality_label: str,
     if is_tiktok:
         path = await _tiktok_direct_attempts(play_url)
         if path:
-            return path
+            return _enforce_max_file_size(path)
 
     # 2) yt-dlp
     try:
@@ -961,7 +1006,9 @@ async def download_video(url: str, format_id: str, quality_label: str,
             get_executor(), _download_sync, url, format_id, out_path, hook
         )
         if file_path:
-            return file_path
+            return _enforce_max_file_size(file_path)
+    except FileTooLargeError:
+        raise
     except Exception as e:
         error_logger.error(f"Download error {url}: {e}")
 
@@ -969,7 +1016,7 @@ async def download_video(url: str, format_id: str, quality_label: str,
     if is_tiktok:
         path = await _tiktok_direct_attempts(None)
         if path:
-            return path
+            return _enforce_max_file_size(path)
 
     return None
 
@@ -1008,10 +1055,10 @@ async def download_audio(url: str, progress_callback: Callable = None) -> str | 
         file_path = await loop.run_in_executor(
             get_executor(), _download_audio_sync, url, out_path, hook
         )
-        return file_path
+        return _enforce_max_file_size(file_path)
+    except FileTooLargeError:
+        raise
     except Exception as e:
         error_logger.error(f"Audio download error {url}: {e}")
         return None
 
-class FileTooLargeError(Exception):
-    pass
