@@ -1,6 +1,7 @@
 import os
 import time
 import logging
+import asyncio
 from datetime import datetime
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
@@ -23,6 +24,90 @@ logger = logging.getLogger(__name__)
 
 ADMIN_CONVERSATION_STATES = {}
 
+UPDATE_ANNOUNCEMENT_TEXT = """
+🚀 <b>تم تحديث البوت بنجاح</b>
+
+اضغط <b>Start</b> وافتح البوت من جديد لتجربة التحديثات الأخيرة.
+
+<b>ما الجديد في هذا التحديث؟</b>
+• 🖥 إضافة لوحة تحكم ومراقبة أقوى للأدمن.
+• 📊 إحصائيات أوضح للمستخدمين والتحميلات والكاش.
+• 🔐 تحسين طريقة قراءة التوكن بأمان من متغيرات البيئة.
+• ⚙️ تجهيز البوت لخطوات التطوير القادمة: اشتراكات، Queue، وتحليلات أعمق.
+• 🧹 تحسينات داخلية في الثبات وتجربة التشغيل.
+
+لو واجهتك أي مشكلة، ابدأ من جديد بإرسال /start.
+""".strip()
+
+
+def _build_update_keyboard(bot_username: str | None) -> InlineKeyboardMarkup:
+    if bot_username:
+        url = f"https://t.me/{bot_username}?start=updated"
+    else:
+        url = "https://t.me/"
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("🚀 Start / افتح البوت", url=url)],
+        [InlineKeyboardButton("📥 جرّب تحميل رابط الآن", callback_data="noop")],
+    ])
+
+
+async def send_update_announcement(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Send the latest release announcement to every known bot user."""
+    user = update.effective_user
+    if not user or not is_admin(user.id):
+        if update.effective_message:
+            await update.effective_message.reply_text("⛔ هذا الأمر متاح للمسؤولين فقط.")
+        return
+
+    status_message = await update.effective_message.reply_text("📢 جاري إرسال إعلان التحديث لكل المستخدمين...")
+    await _broadcast_update_message(context, status_message=status_message)
+
+
+async def _broadcast_update_message(context: ContextTypes.DEFAULT_TYPE, status_message=None, query=None):
+    all_ids = get_all_user_ids()
+    bot_username = getattr(context.bot, "username", None)
+    reply_markup = _build_update_keyboard(bot_username)
+
+    success = 0
+    failed = 0
+    blocked_or_inactive = 0
+    started_at = time.time()
+
+    for index, uid in enumerate(all_ids, start=1):
+        try:
+            await context.bot.send_message(
+                chat_id=uid,
+                text=UPDATE_ANNOUNCEMENT_TEXT,
+                parse_mode="HTML",
+                reply_markup=reply_markup,
+                disable_web_page_preview=True,
+            )
+            success += 1
+        except Exception as exc:
+            failed += 1
+            message = str(exc).lower()
+            if "blocked" in message or "chat not found" in message or "forbidden" in message:
+                blocked_or_inactive += 1
+            logger.warning("Failed to send update announcement to %s: %s", uid, exc)
+
+        if index % 20 == 0:
+            await asyncio.sleep(1)
+
+    elapsed = round(time.time() - started_at, 1)
+    result_text = (
+        "✅ <b>انتهى إرسال إعلان التحديث</b>\n\n"
+        f"👥 إجمالي المستخدمين: <b>{len(all_ids)}</b>\n"
+        f"✅ وصل بنجاح: <b>{success}</b>\n"
+        f"❌ فشل: <b>{failed}</b>\n"
+        f"🚫 محظور/غير نشط غالباً: <b>{blocked_or_inactive}</b>\n"
+        f"⏱ الزمن: <b>{elapsed}s</b>"
+    )
+
+    if status_message:
+        await status_message.edit_text(result_text, parse_mode="HTML")
+    elif query:
+        await query.edit_message_text(result_text, parse_mode="HTML")
+
 async def admin_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     if not is_admin(user.id):
@@ -38,10 +123,13 @@ async def admin_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ],
         [
             InlineKeyboardButton("📢 " + t(lang, "admin_broadcast_btn"), callback_data="admin_broadcast"),
-            InlineKeyboardButton("🔍 " + t(lang, "admin_search_btn"), callback_data="admin_search"),
+            InlineKeyboardButton("🚀 إعلان تحديث البوت", callback_data="admin_announce_update"),
         ],
         [
+            InlineKeyboardButton("🔍 " + t(lang, "admin_search_btn"), callback_data="admin_search"),
             InlineKeyboardButton("🚫 " + t(lang, "admin_ban_btn"), callback_data="admin_ban"),
+        ],
+        [
             InlineKeyboardButton("🚧 " + t(lang, "admin_maintenance_btn"), callback_data="admin_maintenance"),
         ],
     ]
@@ -69,6 +157,9 @@ async def admin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await _show_users_page(query, lang, page=0)
     elif data == "admin_broadcast":
         await _show_broadcast_form(query, lang)
+    elif data == "admin_announce_update":
+        await query.edit_message_text("📢 جاري إرسال إعلان التحديث لكل المستخدمين...", parse_mode="HTML")
+        await _broadcast_update_message(context, query=query)
     elif data == "admin_search":
         ADMIN_CONVERSATION_STATES[user.id] = "search"
         keyboard = [[InlineKeyboardButton("🔙 رجوع", callback_data="admin_panel")]]
@@ -117,6 +208,9 @@ async def _show_admin_panel(query, lang: str):
         [
             InlineKeyboardButton(t(lang, "admin_users_btn"), callback_data="admin_users"),
             InlineKeyboardButton(t(lang, "admin_broadcast_btn"), callback_data="admin_broadcast"),
+        ],
+        [
+            InlineKeyboardButton("🚀 إعلان تحديث البوت", callback_data="admin_announce_update"),
         ],
         [
             InlineKeyboardButton(t(lang, "admin_search_btn"), callback_data="admin_search"),
