@@ -11,7 +11,7 @@ import re
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any, Callable, Optional
-from urllib.parse import quote, urlencode
+from urllib.parse import quote, urlencode, urlparse
 
 import requests
 
@@ -281,6 +281,86 @@ def _deep_find_str(obj: Any, keys: tuple) -> Optional[str]:
             if found:
                 return found
     return None
+
+
+def _probe_media_url(url: str) -> tuple[bool, int, str]:
+    """HEAD/range probe for a candidate TikTok CDN URL without downloading it."""
+    if not url or not str(url).startswith("http"):
+        return False, 0, ""
+    headers = {
+        "User-Agent": DESKTOP_UA,
+        "Referer": "https://www.tiktok.com/",
+        "Accept": "video/mp4,video/*,*/*",
+        "Range": "bytes=0-1",
+    }
+    try:
+        parsed = urlparse(url)
+        if not parsed.scheme or not parsed.netloc:
+            return False, 0, ""
+        r = _safe_get(url, headers=headers, timeout=8, stream=True)
+        if r is None:
+            return False, 0, ""
+        ctype = (r.headers.get("Content-Type") or "").lower()
+        clen = r.headers.get("Content-Length") or "0"
+        try:
+            size = int(clen) if str(clen).isdigit() else 0
+        except Exception:
+            size = 0
+        ok = r.status_code in (200, 206) and "text/html" not in ctype and "application/json" not in ctype
+        try:
+            r.close()
+        except Exception:
+            pass
+        return ok, size, ctype
+    except Exception:
+        return False, 0, ""
+
+
+def _score_result(result: dict) -> int:
+    """Rank TikTok provider results by real usefulness: direct playable HD > image album > metadata."""
+    if not result:
+        return -1
+    score = 0
+    source = str(result.get("source") or "")
+    play = result.get("play_url") or ""
+    images = result.get("images") or []
+    if play:
+        score += 1000
+        lowered = str(play).lower()
+        if "watermark" not in lowered and "wmplay" not in lowered:
+            score += 250
+        if any(x in lowered for x in ("tiktokcdn", "byteoversea", "bytecdn", "muscdn", "akamaized")):
+            score += 150
+        ok, size, ctype = _probe_media_url(str(play))
+        if ok:
+            score += 700
+            if size:
+                score += min(size // (1024 * 1024), 80)
+            if "video" in ctype or "octet-stream" in ctype:
+                score += 75
+        else:
+            score -= 450
+    if len(images) >= 2:
+        score += 900 + min(len(images), 10) * 20
+    elif len(images) == 1:
+        score += 450
+    height = int(result.get("height") or 0)
+    score += min(height, 2160) // 3
+    if source == "tikwm":
+        score += 220
+    elif source == "aweme":
+        score += 180
+    elif source == "page_json":
+        score += 140
+    elif source == "yt-dlp":
+        score += 100
+    elif source in {"ssstik", "snaptik", "musicaldown"}:
+        score += 70
+    if result.get("title") and result.get("title") != "TikTok Video":
+        score += 25
+    if result.get("thumbnail"):
+        score += 20
+    return score
 
 
 # ---------------------------------------------------------------------------
@@ -686,15 +766,16 @@ PROVIDERS: list[tuple[str, Callable[[str], Optional[dict]]]] = [
 
 def resolve_tiktok(url: str) -> Optional[dict]:
     """
-    Expand short URL, then race all providers. Prefer results that have play_url.
-    Never raises — returns None only if every provider fails.
+    Expand short URL, run independent providers in parallel, then choose the
+    strongest verified candidate. This is intentionally not "first success wins":
+    TikTok mirrors often return expired/low-quality links, so we score candidates.
     """
     try:
         expanded = expand_tiktok_url(url)
     except Exception:
         expanded = url
 
-    best_meta_only: Optional[dict] = None
+    candidates: list[tuple[int, str, dict]] = []
     errors: list[str] = []
 
     def _run(name_fn):
@@ -702,35 +783,40 @@ def resolve_tiktok(url: str) -> Optional[dict]:
         try:
             return name, fn(expanded)
         except Exception as e:
+            logger.debug(f"TikTok provider {name} crashed: {e}")
             return name, None
 
-    # Parallel race (bounded workers)
-    with ThreadPoolExecutor(max_workers=5) as pool:
+    with ThreadPoolExecutor(max_workers=6) as pool:
         futures = {pool.submit(_run, p): p[0] for p in PROVIDERS}
-        for fut in as_completed(futures, timeout=PROVIDER_TIMEOUT + 5):
-            try:
-                name, result = fut.result()
-            except Exception as e:
-                errors.append(str(e))
-                continue
-            if not result:
-                continue
-            if result.get("play_url"):
+        try:
+            for fut in as_completed(futures, timeout=PROVIDER_TIMEOUT + 8):
+                try:
+                    name, result = fut.result()
+                except Exception as e:
+                    errors.append(str(e))
+                    continue
+                if not result:
+                    continue
                 result["url"] = url
                 result.setdefault("webpage_url", expanded)
-                logger.info(f"TikTok resolve OK via {name}")
-                # cancel remaining
-                for f in futures:
-                    f.cancel()
-                return result
-            if result.get("title") and best_meta_only is None:
-                best_meta_only = result
+                score = _score_result(result)
+                candidates.append((score, name, result))
+                logger.info("TikTok provider=%s score=%s source=%s", name, score, result.get("source"))
+        except TimeoutError:
+            errors.append("provider-race-timeout")
+            for f in futures:
+                f.cancel()
 
-    if best_meta_only:
-        best_meta_only["url"] = url
-        best_meta_only.setdefault("webpage_url", expanded)
-        logger.info(f"TikTok meta-only via {best_meta_only.get('source')}")
-        return best_meta_only
+    if candidates:
+        candidates.sort(key=lambda x: x[0], reverse=True)
+        score, name, result = candidates[0]
+        result["provider_score"] = score
+        result["provider_candidates"] = [
+            {"provider": n, "score": s, "source": r.get("source"), "has_play": bool(r.get("play_url")), "images": len(r.get("images") or [])}
+            for s, n, r in candidates[:5]
+        ]
+        logger.info("TikTok resolve OK via %s score=%s candidates=%s", name, score, len(candidates))
+        return result
 
     logger.warning(f"TikTok resolve FAILED for {url} errors={errors[:3]}")
     return None
@@ -760,24 +846,41 @@ def scrape_tiktok(url: str) -> Optional[dict]:
             }
 
         height = int(data.get("height") or 0)
-        qualities = [{"label": "Best", "format_id": "best", "has_audio": True}]
-        if height >= 360:
+        images = [u for u in (data.get("images") or []) if u and str(u).startswith("http")]
+        media_type = "album" if len(images) >= 2 else ("image" if len(images) == 1 else "video")
+        qualities = [] if media_type != "video" else [{"label": "Best", "format_id": "best", "has_audio": True}]
+        if media_type == "video" and height >= 360:
             qualities.append({"label": f"{height}p", "format_id": "best", "has_audio": True})
 
         return {
             "title": data.get("title") or "TikTok Video",
             "uploader": data.get("uploader") or "TikTok User",
             "duration": data.get("duration") or 0,
-            "thumbnail": data.get("thumbnail") or "",
+            "thumbnail": data.get("thumbnail") or (images[0] if images else ""),
             "platform": "TikTok",
-            "media_type": "video",
+            "media_type": media_type,
             "url": data.get("webpage_url") or url,
             "webpage_url": data.get("webpage_url") or url,
             "play_url": data.get("play_url"),
             "music_url": data.get("music_url"),
+            "images": images,
+            "image_url": images[0] if len(images) == 1 else None,
+            "album_items": [
+                {
+                    "title": f"{data.get('title') or 'TikTok Photo'} #{i + 1}",
+                    "url": img,
+                    "thumbnail": img,
+                    "image_url": img,
+                    "type": "image",
+                    "id": str(i),
+                }
+                for i, img in enumerate(images[:10])
+            ] if len(images) >= 2 else [],
             "qualities": qualities,
             "video_id": extract_video_id(data.get("webpage_url") or url),
             "source": data.get("source") or "unknown",
+            "provider_score": data.get("provider_score"),
+            "provider_candidates": data.get("provider_candidates") or [],
         }
     except Exception as e:
         logger.error(f"scrape_tiktok fatal (swallowed): {e}")

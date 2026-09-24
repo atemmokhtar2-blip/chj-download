@@ -1,6 +1,10 @@
 from __future__ import annotations
 
+import os
 from typing import Callable
+
+from config.settings import TEMP_DIR
+from utils.helpers import sanitize_filename
 
 from services.engines.base import PlatformEngine
 from utils.logger import download_logger, error_logger
@@ -12,11 +16,11 @@ class YouTubeEngine(PlatformEngine):
 
 
 class TikTokEngine(PlatformEngine):
-    name = "TikTokEngine"
+    name = "TikTokEnginePro"
     domains = ("tiktok.com", "vt.tiktok.com", "vm.tiktok.com", "m.tiktok.com")
 
     async def analyze(self, url: str) -> dict | None:
-        # Dedicated scraper first; generic yt-dlp still runs as backup inside downloader.
+        """TikTok Pro analyzer: providers race + CDN probing + photo-mode support."""
         from services import downloader
         from services.tiktok_scraper import scrape_tiktok
         from middlewares.concurrency import get_executor
@@ -25,11 +29,77 @@ class TikTokEngine(PlatformEngine):
         loop = asyncio.get_running_loop()
         try:
             tk = await loop.run_in_executor(get_executor(), scrape_tiktok, url)
-            if tk and (tk.get("play_url") or tk.get("images")):
-                return self._tag(downloader._normalize_tiktok_info(tk, url))
+            if tk and (tk.get("play_url") or tk.get("images") or tk.get("album_items") or tk.get("image_url")):
+                normalized = downloader._normalize_tiktok_info(tk, url)
+                normalized["engine_profile"] = "providers-race+cdn-probe+photo-mode"
+                normalized["source"] = tk.get("source") or normalized.get("source")
+                normalized["provider_score"] = tk.get("provider_score")
+                normalized["provider_candidates"] = tk.get("provider_candidates") or []
+                return self._tag(normalized)
         except Exception as exc:
-            error_logger.error("TikTokEngine scraper analyze failed: %s", exc)
-        return self._tag(await downloader._generic_analyze_url(url))
+            error_logger.error("TikTokEnginePro scraper analyze failed: %s", exc)
+
+        fallback = await downloader._generic_analyze_url(url)
+        if fallback:
+            fallback["engine_profile"] = "yt-dlp-generic-fallback"
+        return self._tag(fallback)
+
+    async def download_video(
+        self,
+        url: str,
+        format_id: str,
+        quality_label: str,
+        progress_callback: Callable | None = None,
+        play_url: str | None = None,
+    ) -> str | None:
+        """Try verified no-watermark/direct CDN first, then fall back to generic yt-dlp."""
+        from services import downloader
+        from services.tiktok_scraper import download_tiktok_direct, scrape_tiktok
+        from middlewares.concurrency import get_executor
+        import asyncio
+
+        loop = asyncio.get_running_loop()
+        safe_name = sanitize_filename(f"tiktok_{hash(url) % 100000}_{quality_label}")
+        direct_out = os.path.join(TEMP_DIR, safe_name)
+
+        candidate_play = play_url
+        if not candidate_play:
+            try:
+                meta = await loop.run_in_executor(get_executor(), scrape_tiktok, url)
+                candidate_play = meta.get("play_url") if meta else None
+                if meta:
+                    download_logger.info(
+                        "TikTokEnginePro selected source=%s score=%s",
+                        meta.get("source"), meta.get("provider_score"),
+                    )
+            except Exception as exc:
+                error_logger.error("TikTokEnginePro resolve before download failed: %s", exc)
+
+        if candidate_play:
+            try:
+                path = await loop.run_in_executor(
+                    get_executor(), download_tiktok_direct, candidate_play, direct_out
+                )
+                if path:
+                    if progress_callback:
+                        try:
+                            await progress_callback({"pct": 100, "downloaded": 1, "total": 1, "speed": 0, "eta": 0})
+                        except Exception:
+                            pass
+                    return downloader._enforce_max_file_size(path)
+            except downloader.FileTooLargeError:
+                raise
+            except Exception as exc:
+                error_logger.error("TikTokEnginePro direct download failed: %s", exc)
+
+        return await downloader._generic_download_video(
+            url, format_id, quality_label, progress_callback, play_url
+        )
+
+    async def download_audio(self, url: str, progress_callback: Callable | None = None) -> str | None:
+        # Keep audio on yt-dlp/ffmpeg path for reliable mp3 conversion.
+        from services import downloader
+        return await downloader._generic_download_audio(url, progress_callback)
 
 
 class InstagramEngine(PlatformEngine):
