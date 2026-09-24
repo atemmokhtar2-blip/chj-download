@@ -10,6 +10,7 @@ from services.engines.platforms import (
     TwitterEngine,
     RedditEngine,
     SoundCloudEngine,
+    SpotifyEngine,
     GenericEngine,
 )
 
@@ -23,6 +24,7 @@ ENGINES: tuple[PlatformEngine, ...] = (
     TwitterEngine(),
     RedditEngine(),
     SoundCloudEngine(),
+    SpotifyEngine(),
 )
 
 

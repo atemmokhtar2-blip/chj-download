@@ -584,6 +584,31 @@ class SoundCloudEngine(PlatformEngine):
         return await downloader._generic_download_audio(url, progress_callback)
 
 
+class SpotifyEngine(PlatformEngine):
+    name = "SpotifyEnginePro"
+    domains = ("spotify.com", "open.spotify.com", "play.spotify.com")
+
+    async def analyze(self, url: str) -> dict | None:
+        """Spotify Pro analyzer: metadata-first, explicit non-direct-download UI state."""
+        from services.spotify_scraper import scrape_spotify
+        from middlewares.concurrency import get_executor
+        import asyncio
+
+        loop = asyncio.get_running_loop()
+        try:
+            sp = await loop.run_in_executor(get_executor(), scrape_spotify, url)
+            if sp:
+                sp.setdefault("platform", "Spotify")
+                return self._tag(sp)
+        except Exception as exc:
+            error_logger.error("SpotifyEnginePro analyze failed: %s", exc)
+        return None
+
+    async def download_audio(self, url: str, progress_callback: Callable | None = None) -> str | None:
+        """Spotify is DRM/licensed: fail fast so UI can explain instead of spinning."""
+        raise RuntimeError("spotify_metadata_only")
+
+
 class GenericEngine(PlatformEngine):
     name = "GenericEngine"
     domains = ()

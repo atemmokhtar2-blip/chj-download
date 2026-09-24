@@ -142,6 +142,14 @@ python3 app.py
 - يضيف تشخيصًا واضحًا للحالات الخاصة: private/login required وregion blocked وremoved/not found.
 - يبقي تنزيل الصوت على مسار MP3 العام عبر yt-dlp + FFmpeg لضمان تحويل مستقر وprogress hooks موحدة.
 
+### SpotifyEnginePro
+- يدعم `spotify.com` و`open.spotify.com` و`play.spotify.com` مع تطبيع روابط `intl-*` وتنظيف tracking params.
+- يحلل track/album/playlist/show كـ metadata-first لأن Spotify لا يوفر ملف الصوت الأصلي كرابط تحميل مباشر بسبب الترخيص/DRM.
+- يضيف `metadata_only`, `downloadable=false`, و`user_message_key` حتى تظهر رسالة واضحة للمستخدم بدل زر تحميل يعلق.
+- يدعم قوائم حتى 10 عناصر كمعاينة metadata، ويعرض artist/title/duration/thumbnail إن توفرت.
+- يضيف رسائل UI جديدة: تجهيز التحميل، تجهيز MP3، وسبب عدم وجود زر تنزيل Spotify.
+- يصلح تجربة المستخدم عند الضغط على تنزيل: يظهر alert/رسالة واضحة بدل إحساس أن البوت توقف.
+
 ## 📢 إرسال إعلان تحديث لكل المستخدمين
 من داخل تيليجرام، يستطيع الأدمن إرسال رسالة تحديث جاهزة لكل المستخدمين بإحدى الطريقتين:
 

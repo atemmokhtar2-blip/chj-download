@@ -349,6 +349,14 @@ async def _generic_analyze_url(url: str) -> dict | None:
             ):
                 return ig_info
 
+        # Spotify: metadata-only/DRM platform. Resolve fast with clear UI state
+        # instead of letting yt-dlp appear stuck while trying non-direct streams.
+        if any(x in url for x in ("spotify.com", "open.spotify.com", "play.spotify.com")):
+            from .spotify_scraper import scrape_spotify
+            sp_info = await loop.run_in_executor(get_executor(), scrape_spotify, url)
+            if sp_info:
+                return sp_info
+
         # TikTok: expand short links + multi-strategy scrape BEFORE yt-dlp
         if any(x in url for x in ("tiktok.com", "vt.tiktok.com", "vm.tiktok.com")):
             from .tiktok_scraper import scrape_tiktok
