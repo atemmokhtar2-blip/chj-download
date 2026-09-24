@@ -6,7 +6,10 @@ import aiohttp
 import requests
 from typing import Callable, Optional
 import yt_dlp
-from config.settings import TEMP_DIR, MAX_FILE_SIZE_BYTES, DOWNLOAD_TIMEOUT
+from config.settings import (
+    TEMP_DIR, MAX_FILE_SIZE_BYTES, DOWNLOAD_TIMEOUT,
+    YTDLP_COOKIES_FILE, YTDLP_COOKIES_FROM_BROWSER, DOWNLOAD_PROXY, YTDLP_CLIENT,
+)
 from utils.helpers import sanitize_filename, format_duration, format_size, get_platform
 from services.url_resolver import normalize_url, clean_url
 from utils.logger import download_logger, error_logger
@@ -128,8 +131,20 @@ def _base_ydl_opts(extra: dict | None = None) -> dict:
     impersonate = _safe_impersonate()
     if impersonate is not None:
         opts["impersonate"] = impersonate
-    if os.path.exists("cookies.txt"):
-        opts["cookiefile"] = "cookies.txt"
+    cookie_path = YTDLP_COOKIES_FILE or "cookies.txt"
+    if cookie_path and os.path.exists(cookie_path):
+        opts["cookiefile"] = cookie_path
+    elif YTDLP_COOKIES_FROM_BROWSER:
+        # Optional and best-effort. In containers this may be unavailable, so callers still have fallbacks.
+        opts["cookiesfrombrowser"] = (YTDLP_COOKIES_FROM_BROWSER,)
+    if DOWNLOAD_PROXY:
+        opts["proxy"] = DOWNLOAD_PROXY
+    if YTDLP_CLIENT:
+        opts["http_client"] = YTDLP_CLIENT
+    opts.setdefault("extractor_args", {}).update({
+        "youtube": {"player_client": ["android", "web", "ios"]},
+        "tiktok": {"api_hostname": "api16-normal-c-useast1a.tiktokv.com"},
+    })
     if FFMPEG_PATH:
         opts["ffmpeg_location"] = FFMPEG_PATH
     if extra:
@@ -178,22 +193,38 @@ def _extract_info_sync(url: str) -> dict:
         extract_extra["playlistend"] = ALBUM_MAX_ITEMS
         extract_extra["yes_playlist"] = True
 
-    ydl_opts = _base_ydl_opts(extract_extra)
+    profiles = [
+        {"name": "default", "extra": {}},
+        {"name": "no-client", "extra": {"http_client": None}},
+        {"name": "mobile", "extra": {
+            "user_agent": "Mozilla/5.0 (Linux; Android 13; SM-G991B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Mobile Safari/537.36",
+            "http_headers": {"Accept-Language": "en-US,en;q=0.9,ar;q=0.8"},
+        }},
+    ]
+    last_err = None
+    for profile in profiles:
+        ydl_opts = _base_ydl_opts({**extract_extra, **profile["extra"]})
 
-    # Advanced TikTok/Platform bypass
-    if "tiktok.com" in url:
-        ydl_opts["referer"] = "https://www.tiktok.com/"
-        ydl_opts["headers"] = {
-            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
-            "Accept-Language": "en-US,en;q=0.9",
-            "Sec-Fetch-Mode": "navigate",
-        }
-        ydl_opts["extractor_args"] = {
-            "tiktok": {"api_hostname": "api16-normal-c-useast1a.tiktokv.com"}
-        }
+        # Advanced TikTok/Platform bypass
+        if "tiktok.com" in url:
+            ydl_opts["referer"] = "https://www.tiktok.com/"
+            ydl_opts["headers"] = {
+                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+                "Accept-Language": "en-US,en;q=0.9,ar;q=0.8",
+                "Sec-Fetch-Mode": "navigate",
+            }
+            ydl_opts["extractor_args"] = {
+                "tiktok": {"api_hostname": "api16-normal-c-useast1a.tiktokv.com"}
+            }
 
-    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-        return ydl.extract_info(url, download=False)
+        try:
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                return ydl.extract_info(url, download=False)
+        except Exception as e:
+            last_err = e
+            error_logger.error(f"extract profile {profile['name']} failed for {url[:80]}: {e}")
+            continue
+    raise last_err or RuntimeError("yt-dlp extract failed")
 
 
 def _is_pinterest_image_url(url_str: str) -> bool:
@@ -975,6 +1006,72 @@ def _download_sync(url: str, fmt_id: str, out_path: str,
     raise FileNotFoundError(f"Downloaded file not found for {url}")
 
 
+def _direct_media_from_info_sync(url: str, out_path: str) -> str | None:
+    """Last-resort: extract a direct media URL and stream it with aiohttp-like requests sync.
+
+    This helps social platforms where format merging fails but yt-dlp still exposes a
+    signed mp4 URL in info['url'] or a format URL.
+    """
+    try:
+        info = _extract_info_sync(url)
+    except Exception as e:
+        error_logger.error(f"direct-media extract failed for {url[:80]}: {e}")
+        return None
+
+    candidates = []
+    if info.get("url"):
+        candidates.append(info["url"])
+    for f in reversed(info.get("formats") or []):
+        furl = f.get("url")
+        vcodec = f.get("vcodec")
+        if furl and vcodec not in (None, "none"):
+            candidates.append(furl)
+    seen = set()
+    for direct_url in candidates:
+        if not direct_url or direct_url in seen:
+            continue
+        seen.add(direct_url)
+        try:
+            headers = {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36",
+                "Accept": "*/*",
+                "Accept-Language": "en-US,en;q=0.9,ar;q=0.8",
+                "Referer": url,
+            }
+            with requests.get(direct_url, headers=headers, stream=True, timeout=45, allow_redirects=True) as r:
+                if r.status_code != 200:
+                    continue
+                ctype = (r.headers.get("Content-Type") or "").lower()
+                if "text/html" in ctype or "application/json" in ctype:
+                    continue
+                cl = r.headers.get("Content-Length")
+                if cl and cl.isdigit() and int(cl) > MAX_FILE_SIZE_BYTES:
+                    raise FileTooLargeError(size_bytes=int(cl), limit_bytes=MAX_FILE_SIZE_BYTES)
+                final_path = out_path.replace(".%(ext)s", ".mp4")
+                received = 0
+                with open(final_path, "wb") as fh:
+                    for chunk in r.iter_content(chunk_size=512 * 1024):
+                        if not chunk:
+                            continue
+                        received += len(chunk)
+                        if received > MAX_FILE_SIZE_BYTES:
+                            fh.close()
+                            try:
+                                os.remove(final_path)
+                            except OSError:
+                                pass
+                            raise FileTooLargeError(size_bytes=received, limit_bytes=MAX_FILE_SIZE_BYTES)
+                        fh.write(chunk)
+                if os.path.exists(final_path) and os.path.getsize(final_path) > 1000:
+                    return final_path
+        except FileTooLargeError:
+            raise
+        except Exception as e:
+            error_logger.error(f"direct-media candidate failed for {url[:80]}: {e}")
+            continue
+    return None
+
+
 def _download_audio_sync(url: str, out_path: str,
                          progress_hook: Callable = None) -> str:
     ydl_opts = _base_ydl_opts({
@@ -1150,6 +1247,21 @@ async def download_video(url: str, format_id: str, quality_label: str,
             raise
         except Exception as e:
             error_logger.error(f"Download error {candidate_url}: {e}")
+            continue
+
+    # 2b) Generic direct-media last resort: yt-dlp may expose signed CDN URLs even
+    # when the normal downloader/merger fails.
+    for candidate_url in fallback_urls:
+        try:
+            direct_file = await loop.run_in_executor(
+                get_executor(), _direct_media_from_info_sync, candidate_url, out_path
+            )
+            if direct_file:
+                return _enforce_max_file_size(direct_file)
+        except FileTooLargeError:
+            raise
+        except Exception as e:
+            error_logger.error(f"Direct media fallback error {candidate_url}: {e}")
             continue
 
     # 3) TikTok last-resort after yt-dlp failure
