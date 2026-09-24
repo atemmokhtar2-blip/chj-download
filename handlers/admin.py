@@ -20,6 +20,7 @@ from database.downloads import (
 )
 from database.cache import get_cache_count, get_cache_hits
 from services.engine_maintenance import get_ytdlp_version, update_ytdlp
+from services.engines import list_engines
 from config.settings import YTDLP_COOKIES_FILE, YTDLP_COOKIES_FROM_BROWSER, DOWNLOAD_PROXY
 
 logger = logging.getLogger(__name__)
@@ -71,11 +72,15 @@ async def engine_status_command(update: Update, context: ContextTypes.DEFAULT_TY
         await update.effective_message.reply_text("⛔ هذا الأمر متاح للمسؤولين فقط.")
         return
     cookies_ready = bool(YTDLP_COOKIES_FROM_BROWSER or (YTDLP_COOKIES_FILE and os.path.exists(YTDLP_COOKIES_FILE)))
+    engines = list_engines()
+    engine_lines = "\n".join(f"• <code>{e['name']}</code>" for e in engines)
     text = (
         "🧠 <b>حالة محرك التنزيل</b>\n\n"
         f"yt-dlp: <code>{get_ytdlp_version()}</code>\n"
         f"Cookies: <b>{'مفعلة' if cookies_ready else 'غير مفعلة'}</b>\n"
-        f"Proxy: <b>{'مفعل' if DOWNLOAD_PROXY else 'غير مفعل'}</b>\n\n"
+        f"Proxy: <b>{'مفعل' if DOWNLOAD_PROXY else 'غير مفعل'}</b>\n"
+        f"Engines: <b>{len(engines)}</b>\n"
+        f"{engine_lines}\n\n"
         "أوامر مهمة:\n"
         "<code>/update_ytdlp</code> — تحديث yt-dlp عند فشل منصات مثل Instagram/Facebook/YouTube.\n"
         "<code>/engine_status</code> — عرض هذه الحالة."
@@ -202,11 +207,15 @@ async def admin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await _broadcast_update_message(context, query=query)
     elif data == "admin_engine_status":
         cookies_ready = bool(YTDLP_COOKIES_FROM_BROWSER or (YTDLP_COOKIES_FILE and os.path.exists(YTDLP_COOKIES_FILE)))
+        engines = list_engines()
+        engine_lines = "\n".join(f"• <code>{e['name']}</code>" for e in engines)
         await query.edit_message_text(
             "🧠 <b>حالة محرك التنزيل</b>\n\n"
             f"yt-dlp: <code>{get_ytdlp_version()}</code>\n"
             f"Cookies: <b>{'مفعلة' if cookies_ready else 'غير مفعلة'}</b>\n"
-            f"Proxy: <b>{'مفعل' if DOWNLOAD_PROXY else 'غير مفعل'}</b>",
+            f"Proxy: <b>{'مفعل' if DOWNLOAD_PROXY else 'غير مفعل'}</b>\n"
+            f"Engines: <b>{len(engines)}</b>\n"
+            f"{engine_lines}",
             parse_mode="HTML",
         )
     elif data == "admin_update_ytdlp":
