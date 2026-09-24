@@ -94,6 +94,14 @@ python3 app.py
 - يضيف تشخيص واضح للحسابات الخاصة أو المحتوى الذي يحتاج cookies/sessionid بدل فشل غامض.
 - يمرر `provider_score` و`provider_candidates` للسجلات ولوحة الصيانة لتحديد أفضل مصدر وفشل المزودات بسرعة.
 
+### FacebookEnginePro
+- يوسّع روابط `fb.watch` و`fb.com` وروابط الموبايل إلى الوجهة النهائية قبل التحليل.
+- يشغّل مزودات متوازية: yt-dlp metadata، HTML/OG parser، و mbasic/mobile parser.
+- يستخرج روابط HD/SD المباشرة من مفاتيح فيسبوك مثل `browser_native_hd_url` و`playable_url_quality_hd` و`og:video`.
+- يستخدم CDN probe لتجنب روابط login/error واختيار أفضل رابط `fbcdn/fbsbx/scontent` صالح.
+- يبدأ التنزيل من CDN المباشر عند توفره، ثم يرجع تلقائيًا إلى yt-dlp العام عند الحاجة.
+- يضيف تشخيص `login_required_or_private` عندما يتطلب الفيديو cookies أو يكون خاصًا/محذوفًا.
+
 ## 📢 إرسال إعلان تحديث لكل المستخدمين
 من داخل تيليجرام، يستطيع الأدمن إرسال رسالة تحديث جاهزة لكل المستخدمين بإحدى الطريقتين:
 
