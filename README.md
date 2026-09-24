@@ -68,6 +68,17 @@ python3 app.py
 - أمر أدمن `/engine_status` لعرض حالة المحرك.
 - أمر أدمن `/update_ytdlp` لتحديث yt-dlp بسرعة عند تغيير خوارزميات المنصات.
 - fallback مباشر للـ CDN/signed media URL إذا فشل الدمج العادي.
+- بنية Engines مستقلة لكل منصة داخل `services/engines/`:
+  - `YouTubeEngine`
+  - `TikTokEngine`
+  - `InstagramEngine`
+  - `PinterestEngine`
+  - `FacebookEngine`
+  - `TwitterEngine`
+  - `RedditEngine`
+  - `SoundCloudEngine`
+  - `GenericEngine`
+- اختيار تلقائي للمحرك حسب الدومين مع fallback عام إذا فشل محرك منصة معينة.
 
 ## 📢 إرسال إعلان تحديث لكل المستخدمين
 من داخل تيليجرام، يستطيع الأدمن إرسال رسالة تحديث جاهزة لكل المستخدمين بإحدى الطريقتين:

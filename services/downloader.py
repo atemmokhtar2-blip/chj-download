@@ -315,7 +315,7 @@ def _fallback_pinterest_extract(url: str) -> dict | None:
 
 
 
-async def analyze_url(url: str) -> dict | None:
+async def _generic_analyze_url(url: str) -> dict | None:
     try:
         original_url = url
         try:
@@ -1118,7 +1118,7 @@ def _download_audio_sync(url: str, out_path: str,
     raise FileNotFoundError("MP3 file not found after conversion")
 
 
-async def download_video(url: str, format_id: str, quality_label: str,
+async def _generic_download_video(url: str, format_id: str, quality_label: str,
                          progress_callback: Callable = None,
                          play_url: str | None = None) -> str | None:
     original_url = url
@@ -1273,7 +1273,7 @@ async def download_video(url: str, format_id: str, quality_label: str,
     return None
 
 
-async def download_audio(url: str, progress_callback: Callable = None) -> str | None:
+async def _generic_download_audio(url: str, progress_callback: Callable = None) -> str | None:
     original_url = url
     try:
         url = await asyncio.get_running_loop().run_in_executor(get_executor(), normalize_url, url)
@@ -1372,7 +1372,7 @@ async def download_album(
                 if path:
                     results.append({"path": path, "type": "image", "title": item_title})
             else:
-                path = await download_video(
+                path = await _generic_download_video(
                     item_url, "best", "best",
                     progress_callback=None,
                     play_url=item.get("play_url"),
@@ -1388,4 +1388,59 @@ async def download_album(
     if not results and oversized:
         raise FileTooLargeError(limit_bytes=MAX_FILE_SIZE_BYTES)
     return results
+
+
+async def analyze_url(url: str) -> dict | None:
+    """Public analyzer: route each URL to its dedicated platform engine."""
+    from services.engines import get_engine
+
+    engine = get_engine(url)
+    download_logger.info("Analyze routed to %s for %s", engine.name, (url or "")[:120])
+    try:
+        info = await engine.analyze(url)
+        if info:
+            info.setdefault("engine", engine.name)
+        return info
+    except Exception as exc:
+        error_logger.error("%s analyze failed, falling back to generic: %s", engine.name, exc)
+        info = await _generic_analyze_url(url)
+        if info:
+            info.setdefault("engine", "GenericFallback")
+        return info
+
+
+async def download_video(
+    url: str,
+    format_id: str,
+    quality_label: str,
+    progress_callback: Callable = None,
+    play_url: str | None = None,
+) -> str | None:
+    """Public video downloader: route each URL to its dedicated platform engine."""
+    from services.engines import get_engine
+
+    engine = get_engine(url)
+    download_logger.info("Video download routed to %s for %s", engine.name, (url or "")[:120])
+    try:
+        return await engine.download_video(url, format_id, quality_label, progress_callback, play_url)
+    except FileTooLargeError:
+        raise
+    except Exception as exc:
+        error_logger.error("%s video failed, falling back to generic: %s", engine.name, exc)
+        return await _generic_download_video(url, format_id, quality_label, progress_callback, play_url)
+
+
+async def download_audio(url: str, progress_callback: Callable = None) -> str | None:
+    """Public audio downloader: route each URL to its dedicated platform engine."""
+    from services.engines import get_engine
+
+    engine = get_engine(url)
+    download_logger.info("Audio download routed to %s for %s", engine.name, (url or "")[:120])
+    try:
+        return await engine.download_audio(url, progress_callback)
+    except FileTooLargeError:
+        raise
+    except Exception as exc:
+        error_logger.error("%s audio failed, falling back to generic: %s", engine.name, exc)
+        return await _generic_download_audio(url, progress_callback)
 
