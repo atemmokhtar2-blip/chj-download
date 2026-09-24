@@ -14,8 +14,8 @@ from __future__ import annotations
 import json
 import logging
 import re
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any
-from urllib.parse import urlparse
 
 import requests
 
@@ -141,6 +141,108 @@ def _best_video_url(videos: Any) -> str | None:
         candidates.sort(key=lambda x: x[0], reverse=True)
         return candidates[0][1]
     return None
+
+
+def _probe_media_url(url: str, session: requests.Session | None = None, timeout: int = 10) -> dict:
+    """Validate a Pinterest CDN URL without downloading the whole file."""
+    result = {"ok": False, "status": None, "content_type": "", "content_length": 0}
+    if not url or not str(url).startswith("http"):
+        return result
+    s = session or _session()
+    headers = dict(_HEADERS)
+    headers["Range"] = "bytes=0-1023"
+    try:
+        r = s.get(url, headers=headers, stream=True, timeout=timeout, allow_redirects=True)
+        result["status"] = r.status_code
+        ctype = (r.headers.get("Content-Type") or "").lower()
+        clen = int(r.headers.get("Content-Length") or 0)
+        result["content_type"] = ctype
+        result["content_length"] = clen
+        if r.status_code not in (200, 206):
+            return result
+        if "text/html" in ctype or "application/json" in ctype:
+            return result
+        if any(token in ctype for token in ("image/", "video/", "application/octet-stream")):
+            result["ok"] = True
+            return result
+        # Some Pinterest CDN responses omit a useful content-type; trust known CDN hosts.
+        if any(host in url for host in ("pinimg.com", "pin.it", "pinterest.com/videos")):
+            result["ok"] = True
+    except Exception as exc:
+        logger.info("Pinterest probe failed for %s: %s", url[:120], exc)
+    return result
+
+
+def _primary_media_url(result: dict) -> str | None:
+    if not isinstance(result, dict):
+        return None
+    return result.get("play_url") or result.get("image_url") or result.get("thumbnail")
+
+
+def _score_result(result: dict, session: requests.Session | None = None) -> int:
+    """Rank Pinterest candidates. Probe direct URLs and prefer playable/high-res media."""
+    if not isinstance(result, dict):
+        return -1
+    score = 0
+    source = result.get("source") or ""
+    media_type = result.get("media_type") or ""
+    source_bonus = {
+        "pinterest_downloader": 380,
+        "pin_resource": 340,
+        "gallery_dl": 260,
+        "html_json": 200,
+        "html": 120,
+    }.get(source, 80)
+    score += source_bonus
+
+    if media_type == "video" and result.get("play_url"):
+        score += 1000
+        if ".mp4" in result.get("play_url", ""):
+            score += 220
+        if ".m3u8" in result.get("play_url", ""):
+            score -= 180
+    elif media_type == "album" and result.get("album_items"):
+        score += 850 + min(len(result.get("album_items") or []), 20) * 35
+    elif media_type == "image" and result.get("image_url"):
+        score += 700
+
+    media_url = _primary_media_url(result)
+    if media_url:
+        if "i.pinimg.com/originals/" in media_url:
+            score += 180
+        elif "i.pinimg.com/1200x/" in media_url or "i.pinimg.com/736x/" in media_url:
+            score += 90
+        if "pinimg.com" in media_url:
+            score += 80
+        probe = _probe_media_url(media_url, session=session)
+        result["cdn_probe"] = probe
+        if probe.get("ok"):
+            score += 600
+            ctype = probe.get("content_type") or ""
+            if media_type == "video" and "video" in ctype:
+                score += 120
+            if media_type in ("image", "album") and "image" in ctype:
+                score += 120
+            size = int(probe.get("content_length") or 0)
+            if size:
+                score += min(size // 100_000, 120)
+        else:
+            score -= 260
+
+    album = result.get("album_items") or []
+    if album:
+        ok_items = 0
+        for item in album[:8]:
+            u = item.get("url") or item.get("image_url") or item.get("thumbnail")
+            if u and _probe_media_url(u, session=session, timeout=6).get("ok"):
+                ok_items += 1
+        result["album_probe_ok"] = ok_items
+        score += ok_items * 60
+        if ok_items == 0:
+            score -= 220
+
+    result["provider_score"] = score
+    return score
 
 
 def _pin_from_api(pin_id: str, session: requests.Session) -> dict | None:
@@ -597,40 +699,58 @@ def scrape_pinterest(url: str) -> dict | None:
     url = expand_pin_url(url, session)
     pin_id = extract_pin_id(url)
 
-    # 1) Dedicated library
-    lib = _from_pinterest_downloader(url if pin_id is None else (url or pin_id))
-    if not lib and pin_id:
-        lib = _from_pinterest_downloader(pin_id)
-    if lib and (lib.get("image_url") or lib.get("play_url") or lib.get("album_items")):
-        logger.info(
-            "Pinterest pinterest-downloader ok id=%s type=%s",
-            lib.get("media_id"), lib.get("media_type"),
-        )
+    candidates: list[dict] = []
+
+    def add_candidate(candidate: dict | None):
+        if candidate and (candidate.get("image_url") or candidate.get("play_url") or candidate.get("album_items")):
+            candidate.setdefault("platform", "Pinterest")
+            candidate.setdefault("url", url)
+            candidate.setdefault("webpage_url", url)
+            candidates.append(candidate)
+
+    def run_pinterest_downloader():
+        lib = _from_pinterest_downloader(url if pin_id is None else (url or pin_id))
+        if not lib and pin_id:
+            lib = _from_pinterest_downloader(pin_id)
         return lib
 
-    # 2) PinResource API
-    if pin_id:
+    def run_pin_resource():
+        if not pin_id:
+            return None
         pin = _pin_from_api(pin_id, session)
-        if pin:
-            result = _result_from_pin_data(pin, url)
-            if result.get("image_url") or result.get("play_url") or result.get("album_items"):
-                logger.info(
-                    "Pinterest PinResource ok id=%s type=%s",
-                    pin_id, result.get("media_type"),
-                )
-                return result
+        return _result_from_pin_data(pin, url) if pin else None
 
-    # 3) gallery-dl
-    g = _from_gallery_dl(url)
-    if g:
-        logger.info("Pinterest gallery-dl ok type=%s", g.get("media_type"))
-        return g
+    tasks = [run_pinterest_downloader, run_pin_resource, lambda: _from_gallery_dl(url), lambda: _from_html(url, session)]
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        futures = [pool.submit(task) for task in tasks]
+        for future in as_completed(futures, timeout=28):
+            try:
+                add_candidate(future.result())
+            except Exception as exc:
+                logger.info("Pinterest provider failed: %s", exc)
 
-    # 4) HTML scrape
-    h = _from_html(url, session)
-    if h:
-        logger.info("Pinterest HTML ok type=%s", h.get("media_type"))
-        return h
+    if candidates:
+        for candidate in candidates:
+            _score_result(candidate, session=session)
+        candidates.sort(key=lambda item: item.get("provider_score", 0), reverse=True)
+        best = candidates[0]
+        best["provider_candidates"] = [
+            {
+                "source": c.get("source"),
+                "media_type": c.get("media_type"),
+                "score": c.get("provider_score"),
+                "has_video": bool(c.get("play_url")),
+                "has_image": bool(c.get("image_url")),
+                "album_count": len(c.get("album_items") or []),
+            }
+            for c in candidates[:6]
+        ]
+        best["engine_profile"] = "pinterest-downloader+pin-resource+gallery-dl+html+cdn-probe"
+        logger.info(
+            "Pinterest best source=%s type=%s score=%s candidates=%s",
+            best.get("source"), best.get("media_type"), best.get("provider_score"), len(candidates),
+        )
+        return best
 
     logger.warning("Pinterest extract failed for %s", url)
     return None
