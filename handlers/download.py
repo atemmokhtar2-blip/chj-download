@@ -81,7 +81,11 @@ async def handle_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
     status_msg = await update.message.reply_text(t(lang, "analyzing"), parse_mode="HTML")
     info = await analyze_url(url)
     if not info:
-        await status_msg.edit_text(t(lang, "analysis_failed"))
+        await status_msg.edit_text(t(lang, "analysis_failed"), parse_mode="HTML")
+        return
+
+    if info.get("error_reason") and not (info.get("downloadable", True) or info.get("album_items")):
+        await status_msg.edit_text(_friendly_error(lang, info), parse_mode="HTML")
         return
 
     context.user_data["current_info"] = info
@@ -94,7 +98,7 @@ async def handle_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
     platform_emoji = get_platform_emoji(platform)
 
     album_count = len(info.get("album_items") or [])
-    keyboard = _build_action_keyboard(media_type, qualities, lang, album_count=album_count)
+    keyboard = _build_action_keyboard(media_type, qualities, lang, album_count=album_count, info=info)
     caption = t(lang, "video_info",
                 title=title, uploader=uploader,
                 duration=duration,
@@ -116,11 +120,27 @@ async def handle_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await status_msg.edit_text(caption, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard))
 
+def _friendly_error(lang: str, info: dict) -> str:
+    reason = info.get("user_message_key") or info.get("error_reason") or "analysis_failed"
+    if reason == "spotify_metadata_only":
+        return t(lang, "spotify_metadata_only")
+    if reason in {"spotify_drm_protected", "private_or_login_required"}:
+        return t(lang, "spotify_drm_protected")
+    if reason == "region_or_availability_blocked":
+        return t(lang, "region_blocked")
+    if reason == "removed_or_not_found":
+        return t(lang, "removed_or_not_found")
+    return t(lang, "analysis_failed")
+
+
 def _build_action_keyboard(
-    media_type: str, qualities: list, lang: str, album_count: int = 0
+    media_type: str, qualities: list, lang: str, album_count: int = 0, info: dict | None = None
 ) -> list:
     """Video: best + quality buttons only (audio is always included in the video file)."""
     keyboard = []
+    if info and info.get("downloadable") is False:
+        keyboard.append([InlineKeyboardButton(t(lang, "why_no_download"), callback_data="dl_unavailable")])
+        return keyboard
     if media_type == "video":
         keyboard.append([InlineKeyboardButton(t(lang, "best_quality"), callback_data="dl_video_best")])
         if qualities:
@@ -155,6 +175,12 @@ async def download_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     info = context.user_data.get("current_info")
     if not info:
         await query.answer(t(lang, "session_expired"), show_alert=True)
+        return
+
+    if data == "dl_unavailable" or info.get("downloadable") is False:
+        await query.answer(t(lang, "spotify_download_unavailable_alert"), show_alert=True)
+        edit_fn = query.edit_message_caption if query.message.caption else query.edit_message_text
+        await edit_fn(_friendly_error(lang, info), parse_mode="HTML")
         return
 
     if active_downloads.get(user.id):
@@ -297,13 +323,11 @@ async def _run_download(query, context, info, user, lang, quality_label,
                     idx = prog.get("album_index", 0)
                     tot = prog.get("album_total", len(items))
                     txt = t(lang, "album_downloading", current=idx, total=tot)
-                    if progress_msg.caption:
-                        await progress_msg.edit_caption(txt, parse_mode="HTML")
-                    else:
-                        await progress_msg.edit_text(txt, parse_mode="HTML")
+                    await edit_fn(txt, parse_mode="HTML")
                 except Exception:
                     pass
 
+            await edit_fn(t(lang, "preparing_download"), parse_mode="HTML")
             downloaded = await download_album(items, album_progress)
             if not downloaded:
                 raise Exception("Album download failed")
@@ -401,6 +425,7 @@ async def _run_download(query, context, info, user, lang, quality_label,
                 file_path = None
 
         elif is_image:
+            await edit_fn(t(lang, "preparing_download"), parse_mode="HTML")
             file_path = await download_image(info["url"], info.get("image_url"))
             if not file_path: raise Exception("Download failed")
             await edit_fn(t(lang, "uploading"), parse_mode="HTML")
@@ -417,6 +442,7 @@ async def _run_download(query, context, info, user, lang, quality_label,
             )
 
         elif is_audio:
+            await edit_fn(t(lang, "preparing_audio"), parse_mode="HTML")
             file_path = await download_audio(info["url"], update_progress)
             if not file_path: raise Exception("Download failed")
             await edit_fn(t(lang, "uploading"), parse_mode="HTML")
@@ -443,6 +469,7 @@ async def _run_download(query, context, info, user, lang, quality_label,
             if str(quality_label).lower() in ("best", "best_quality"):
                 format_id = "best"
 
+            await edit_fn(t(lang, "preparing_download"), parse_mode="HTML")
             file_path = await download_video(
                 info["url"], format_id, quality_label, update_progress,
                 play_url=info.get("play_url"),
