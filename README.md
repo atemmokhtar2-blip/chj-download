@@ -102,6 +102,14 @@ python3 app.py
 - يبدأ التنزيل من CDN المباشر عند توفره، ثم يرجع تلقائيًا إلى yt-dlp العام عند الحاجة.
 - يضيف تشخيص `login_required_or_private` عندما يتطلب الفيديو cookies أو يكون خاصًا/محذوفًا.
 
+### TwitterEnginePro
+- يدعم `x.com` و`twitter.com` و`t.co` و`fxtwitter.com` و`fixupx.com` و`vxtwitter.com` مع تطبيع الروابط إلى صيغة موحدة.
+- يشغّل مزودات متوازية: yt-dlp metadata، واجهات vxtwitter/fxtwitter العامة، و HTML/OpenGraph fallback.
+- يدعم فيديوهات X، GIFs المتحركة، الصور، والتغريدات متعددة الوسائط كـ album.
+- يختار أفضل variant مباشر من `video.twimg.com` ويفضل MP4 على HLS عندما يكون مناسبًا لتليجرام.
+- يستخدم CDN probe لفحص روابط `twimg` قبل إرسالها للمستخدم أو بدء التنزيل المباشر.
+- يضيف `provider_score` و`provider_candidates` لتشخيص مصدر النجاح أو سبب الفشل بسرعة.
+
 ## 📢 إرسال إعلان تحديث لكل المستخدمين
 من داخل تيليجرام، يستطيع الأدمن إرسال رسالة تحديث جاهزة لكل المستخدمين بإحدى الطريقتين:
 
