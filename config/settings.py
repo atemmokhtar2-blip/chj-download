@@ -45,11 +45,11 @@ CACHE_TTL_SECONDS = int(os.getenv("CACHE_TTL_SECONDS", "86400"))
 CACHE_MAX_SIZE = int(os.getenv("CACHE_MAX_SIZE", "1000"))
 
 SUPPORTED_DOMAINS = [
-    "youtube.com", "youtu.be", "youtube-nocookie.com", "m.youtube.com",
+    "youtube.com", "youtu.be", "youtube-nocookie.com", "m.youtube.com", "music.youtube.com",
     "tiktok.com", "vm.tiktok.com", "vt.tiktok.com", "m.tiktok.com",
-    "instagram.com", "instagr.am", "l.instagram.com",
-    "facebook.com", "fb.watch", "fb.com", "m.facebook.com",
-    "twitter.com", "x.com", "t.co", "nitter.net",
+    "instagram.com", "instagr.am", "l.instagram.com", "cdninstagram.com",
+    "facebook.com", "fb.watch", "fb.com", "m.facebook.com", "mobile.facebook.com", "facebookreel.com",
+    "twitter.com", "x.com", "t.co", "nitter.net", "fixupx.com", "fxtwitter.com",
     "threads.net", "www.threads.net",
     "reddit.com", "redd.it", "v.redd.it", "old.reddit.com",
     "pinterest.com", "pin.it", "pinterest.fr", "pinterest.co.uk",

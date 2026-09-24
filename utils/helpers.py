@@ -47,7 +47,7 @@ def get_platform(url: str) -> str:
     if netloc in ("fb.watch", "fb.com") or "facebook" in netloc:
         return "Facebook"
     # Twitter / X: match exact short domains only, not substrings
-    if netloc in ("x.com", "t.co") or "twitter" in netloc:
+    if netloc in ("x.com", "t.co", "fixupx.com", "fxtwitter.com") or "twitter" in netloc:
         return "Twitter/X"
     if "threads.net" in netloc:
         return "Threads"
