@@ -5,14 +5,39 @@ from urllib.parse import urlparse, urlunparse, parse_qsl, urlencode
 
 import yt_dlp
 
-from config.settings import MAX_FILE_SIZE_BYTES
+from config.settings import MAX_FILE_SIZE_BYTES, YTDLP_COOKIES_FILE, DOWNLOAD_PROXY
 from utils.helpers import format_duration, format_size
 from utils.logger import error_logger
-from services.downloader import _base_ydl_opts
 
 SPOTIFY_HOSTS = {"spotify.com", "open.spotify.com", "play.spotify.com"}
 SPOTIFY_RE = re.compile(r"spotify\.com/(?:intl-[a-z]{2}/)?(?P<kind>track|album|playlist|episode|show|artist)/(?P<id>[A-Za-z0-9]+)")
 MAX_SPOTIFY_ITEMS = 10
+
+
+def _spotify_ydl_opts(extra: dict | None = None) -> dict:
+    opts = {
+        "quiet": True,
+        "no_warnings": True,
+        "skip_download": True,
+        "nocheckcertificate": True,
+        "ignoreerrors": True,
+        "user_agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/124.0.0.0 Safari/537.36"
+        ),
+        "http_headers": {
+            "Accept-Language": "en-US,en;q=0.9,ar;q=0.8",
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        },
+    }
+    if YTDLP_COOKIES_FILE:
+        opts["cookiefile"] = YTDLP_COOKIES_FILE
+    if DOWNLOAD_PROXY:
+        opts["proxy"] = DOWNLOAD_PROXY
+    if extra:
+        opts.update(extra)
+    return opts
 
 
 def normalize_spotify_url(url: str) -> str:
@@ -152,7 +177,7 @@ def scrape_spotify(url: str) -> dict:
     ]
     last_error: Exception | None = None
     for profile, extra in profiles:
-        opts = _base_ydl_opts({
+        opts = _spotify_ydl_opts({
             **extra,
             "ignoreerrors": True,
             "playlistend": MAX_SPOTIFY_ITEMS,
