@@ -8,6 +8,7 @@ from typing import Callable, Optional
 import yt_dlp
 from config.settings import TEMP_DIR, MAX_FILE_SIZE_BYTES, DOWNLOAD_TIMEOUT
 from utils.helpers import sanitize_filename, format_duration, format_size, get_platform
+from services.url_resolver import normalize_url, clean_url
 from utils.logger import download_logger, error_logger
 from utils.ffmpeg_check import FFMPEG_AVAILABLE, FFMPEG_PATH
 from middlewares.concurrency import get_executor
@@ -109,6 +110,19 @@ def _base_ydl_opts(extra: dict | None = None) -> dict:
             "AppleWebKit/537.36 (KHTML, like Gecko) "
             "Chrome/124.0.0.0 Safari/537.36"
         ),
+        "http_headers": {
+            "Accept-Language": "en-US,en;q=0.9,ar;q=0.8",
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+            "DNT": "1",
+            "Upgrade-Insecure-Requests": "1",
+        },
+        "retries": 5,
+        "fragment_retries": 5,
+        "extractor_retries": 3,
+        "file_access_retries": 3,
+        "socket_timeout": 30,
+        "sleep_interval_requests": 0.2,
+        "geo_bypass": True,
         "http_chunk_size": 10485760,
     }
     impersonate = _safe_impersonate()
@@ -272,6 +286,12 @@ def _fallback_pinterest_extract(url: str) -> dict | None:
 
 async def analyze_url(url: str) -> dict | None:
     try:
+        original_url = url
+        try:
+            url = await asyncio.get_event_loop().run_in_executor(get_executor(), normalize_url, url)
+        except Exception as e:
+            download_logger.info(f"URL normalization skipped for {url}: {e}")
+            url = clean_url(url)
         loop = asyncio.get_event_loop()
         tk_info = None
 
@@ -584,6 +604,7 @@ async def analyze_url(url: str) -> dict | None:
             "image_url": image_url,
             "album_items": album_items,
             "url": url,
+            "original_url": original_url,
             "webpage_url": info.get("webpage_url", url),
             "ext": info.get("ext", ""),
             "media_id": media_id,
@@ -871,59 +892,81 @@ def _find_downloaded_file(out_path: str) -> str | None:
 def _download_sync(url: str, fmt_id: str, out_path: str,
                    progress_hook: Callable = None) -> str:
     resolved = _resolve_format(fmt_id)
-    # Primary format, then safer fallbacks so quality buttons rarely hard-fail
+    # Primary format, then safer fallbacks so quality buttons rarely hard-fail.
     format_attempts = []
-    for a in (resolved, BEST_FORMAT_WITH_AUDIO, "best"):
+    for a in (resolved, BEST_FORMAT_WITH_AUDIO, "best[ext=mp4]/best", "best"):
         if a not in format_attempts:
             format_attempts.append(a)
 
+    downloader_profiles = [
+        {"name": "default", "extra": {}},
+        {"name": "native-hls", "extra": {"hls_prefer_native": True}},
+        {
+            "name": "ffmpeg-hls",
+            "extra": {
+                "hls_prefer_native": False,
+                "external_downloader_args": {"ffmpeg_i": ["-nostdin"]},
+            },
+        },
+    ]
+
     last_err = None
     for attempt_fmt in format_attempts:
-        ydl_opts = _base_ydl_opts({
-            "format": attempt_fmt,
-            "outtmpl": out_path,
-            "merge_output_format": "mp4",
-            "logtostderr": True,
-            "no_color": True,
-            "buffersize": 1024 * 1024,
-            "prefer_ffmpeg": True,
-        })
-        if "tiktok.com" in url:
-            ydl_opts["referer"] = "https://www.tiktok.com/"
-            ydl_opts["headers"] = {
-                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-                "Accept-Language": "en-US,en;q=0.9",
-            }
-            ydl_opts["extractor_args"] = {
-                "tiktok": {"api_hostname": "api16-normal-c-useast1a.tiktokv.com"}
-            }
-        if any(x in url for x in ("facebook.com", "fb.watch", "fb.com", "instagram.com")):
-            ydl_opts["headers"] = {
-                "User-Agent": (
-                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                    "AppleWebKit/537.36 (KHTML, like Gecko) "
-                    "Chrome/124.0.0.0 Safari/537.36"
-                ),
-                "Accept-Language": "en-US,en;q=0.9",
-            }
-        hooks = [_filesize_progress_guard]
-        if progress_hook:
-            hooks.append(progress_hook)
-        ydl_opts["progress_hooks"] = hooks
-        try:
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                ydl.download([url])
-            found = _find_downloaded_file(out_path)
-            if found:
-                return found
-        except FileTooLargeError:
-            raise
-        except Exception as e:
-            if _is_max_filesize_abort(e):
-                raise FileTooLargeError(limit_bytes=MAX_FILE_SIZE_BYTES) from e
-            last_err = e
-            error_logger.error(f"format attempt failed ({str(attempt_fmt)[:50]}): {e}")
-            continue
+        for profile in downloader_profiles:
+            ydl_opts = _base_ydl_opts({
+                "format": attempt_fmt,
+                "outtmpl": out_path,
+                "merge_output_format": "mp4",
+                "logtostderr": True,
+                "no_color": True,
+                "buffersize": 1024 * 1024,
+                "prefer_ffmpeg": True,
+                **profile["extra"],
+            })
+            if "tiktok.com" in url:
+                ydl_opts["referer"] = "https://www.tiktok.com/"
+                ydl_opts["headers"] = {
+                    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                    "Accept-Language": "en-US,en;q=0.9,ar;q=0.8",
+                }
+                ydl_opts["extractor_args"] = {
+                    "tiktok": {"api_hostname": "api16-normal-c-useast1a.tiktokv.com"}
+                }
+            if any(x in url for x in ("facebook.com", "fb.watch", "fb.com", "instagram.com", "x.com", "twitter.com", "reddit.com")):
+                ydl_opts["headers"] = {
+                    "User-Agent": (
+                        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                        "AppleWebKit/537.36 (KHTML, like Gecko) "
+                        "Chrome/124.0.0.0 Safari/537.36"
+                    ),
+                    "Accept-Language": "en-US,en;q=0.9,ar;q=0.8",
+                    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                }
+            hooks = [_filesize_progress_guard]
+            if progress_hook:
+                hooks.append(progress_hook)
+            ydl_opts["progress_hooks"] = hooks
+            try:
+                download_logger.info(
+                    "yt-dlp attempt profile=%s format=%s url=%s",
+                    profile["name"], str(attempt_fmt)[:80], url[:120]
+                )
+                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                    ydl.download([url])
+                found = _find_downloaded_file(out_path)
+                if found:
+                    return found
+            except FileTooLargeError:
+                raise
+            except Exception as e:
+                if _is_max_filesize_abort(e):
+                    raise FileTooLargeError(limit_bytes=MAX_FILE_SIZE_BYTES) from e
+                last_err = e
+                error_logger.error(
+                    "download attempt failed profile=%s format=%s: %s",
+                    profile["name"], str(attempt_fmt)[:50], e
+                )
+                continue
 
     if last_err:
         if _is_max_filesize_abort(last_err):
@@ -981,6 +1024,16 @@ def _download_audio_sync(url: str, out_path: str,
 async def download_video(url: str, format_id: str, quality_label: str,
                          progress_callback: Callable = None,
                          play_url: str | None = None) -> str | None:
+    original_url = url
+    try:
+        url = await asyncio.get_running_loop().run_in_executor(get_executor(), normalize_url, url)
+    except Exception as e:
+        download_logger.info(f"Video URL normalization skipped for {url}: {e}")
+        url = clean_url(url)
+    fallback_urls = []
+    for candidate in (url, clean_url(original_url), original_url):
+        if candidate and candidate not in fallback_urls:
+            fallback_urls.append(candidate)
     safe_name = sanitize_filename(f"video_{hash(url) % 100000}_{quality_label}")
     out_path = os.path.join(TEMP_DIR, f"{safe_name}.%(ext)s")
     direct_path = os.path.join(TEMP_DIR, f"{safe_name}.mp4")
@@ -1085,17 +1138,19 @@ async def download_video(url: str, format_id: str, quality_label: str,
         except Exception as e:
             error_logger.error(f"Direct play_url failed: {e}")
 
-    # 2) yt-dlp
-    try:
-        file_path = await loop.run_in_executor(
-            get_executor(), _download_sync, url, format_id, out_path, hook
-        )
-        if file_path:
-            return _enforce_max_file_size(file_path)
-    except FileTooLargeError:
-        raise
-    except Exception as e:
-        error_logger.error(f"Download error {url}: {e}")
+    # 2) yt-dlp over normalized + original URL fallbacks
+    for candidate_url in fallback_urls:
+        try:
+            file_path = await loop.run_in_executor(
+                get_executor(), _download_sync, candidate_url, format_id, out_path, hook
+            )
+            if file_path:
+                return _enforce_max_file_size(file_path)
+        except FileTooLargeError:
+            raise
+        except Exception as e:
+            error_logger.error(f"Download error {candidate_url}: {e}")
+            continue
 
     # 3) TikTok last-resort after yt-dlp failure
     if is_tiktok:
@@ -1107,6 +1162,16 @@ async def download_video(url: str, format_id: str, quality_label: str,
 
 
 async def download_audio(url: str, progress_callback: Callable = None) -> str | None:
+    original_url = url
+    try:
+        url = await asyncio.get_running_loop().run_in_executor(get_executor(), normalize_url, url)
+    except Exception as e:
+        download_logger.info(f"Audio URL normalization skipped for {url}: {e}")
+        url = clean_url(url)
+    fallback_urls = []
+    for candidate in (url, clean_url(original_url), original_url):
+        if candidate and candidate not in fallback_urls:
+            fallback_urls.append(candidate)
     safe_name = sanitize_filename(f"audio_{hash(url) % 100000}")
     out_path = os.path.join(TEMP_DIR, f"{safe_name}.%(ext)s")
 
@@ -1136,16 +1201,18 @@ async def download_audio(url: str, progress_callback: Callable = None) -> str | 
                             loop
                         )
 
-    try:
-        file_path = await loop.run_in_executor(
-            get_executor(), _download_audio_sync, url, out_path, hook
-        )
-        return _enforce_max_file_size(file_path)
-    except FileTooLargeError:
-        raise
-    except Exception as e:
-        error_logger.error(f"Audio download error {url}: {e}")
-        return None
+    for candidate_url in fallback_urls:
+        try:
+            file_path = await loop.run_in_executor(
+                get_executor(), _download_audio_sync, candidate_url, out_path, hook
+            )
+            return _enforce_max_file_size(file_path)
+        except FileTooLargeError:
+            raise
+        except Exception as e:
+            error_logger.error(f"Audio download error {candidate_url}: {e}")
+            continue
+    return None
 
 
 async def download_album(
