@@ -3,11 +3,21 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-try:
-    with open("/home/user/app/token.txt", "r") as f:
-        BOT_TOKEN = f.read().strip()
-except:
-    BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
+# Prefer environment variables in production. Fall back to local token.txt only
+# for legacy/HuggingFace-style deployments. Never print or expose the token.
+BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
+if not BOT_TOKEN:
+    for token_path in (
+        os.path.join(os.getcwd(), "token.txt"),
+        "/home/user/app/token.txt",
+    ):
+        try:
+            with open(token_path, "r", encoding="utf-8") as f:
+                BOT_TOKEN = f.read().strip()
+                if BOT_TOKEN:
+                    break
+        except OSError:
+            continue
 
 ADMIN_IDS = [int(x) for x in os.getenv("ADMIN_IDS", "7631249810").split(",") if x.strip().isdigit()]
 OWNER_ID = int(os.getenv("OWNER_ID", "7631249810")) if os.getenv("OWNER_ID", "7631249810").isdigit() else 7631249810
