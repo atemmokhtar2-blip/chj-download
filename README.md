@@ -134,6 +134,14 @@ python3 app.py
 - يفلتر الجودات حسب حدود حجم البوت ويعرض tiers واضحة مثل HD وFull HD و4K مع `provider_candidates` للتشخيص.
 - يبقي تنزيل الفيديو والصوت على مسار yt-dlp العام لضمان دمج video/audio وتحويل MP3 بشكل موثوق.
 
+### SoundCloudEnginePro
+- يدعم `soundcloud.com` و`m.soundcloud.com` و`on.soundcloud.com` مع تطبيع روابط الموبايل والحفاظ على short-share tokens.
+- يستخدم yt-dlp profiles متعددة، منها profile خاص بالقوائم مع حد 10 عناصر لتفادي قوائم ضخمة داخل تيليجرام.
+- يرتب `audio_formats` حسب bitrate/protocol/size ويستبعد الملفات التي تتجاوز حد حجم البوت.
+- يميز track مقابل playlist ويضيف `album_items` للمجموعات مع metadata مثل artist وgenre وplay_count وthumbnail.
+- يضيف تشخيصًا واضحًا للحالات الخاصة: private/login required وregion blocked وremoved/not found.
+- يبقي تنزيل الصوت على مسار MP3 العام عبر yt-dlp + FFmpeg لضمان تحويل مستقر وprogress hooks موحدة.
+
 ## 📢 إرسال إعلان تحديث لكل المستخدمين
 من داخل تيليجرام، يستطيع الأدمن إرسال رسالة تحديث جاهزة لكل المستخدمين بإحدى الطريقتين:
 

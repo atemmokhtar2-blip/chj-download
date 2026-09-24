@@ -554,8 +554,34 @@ class RedditEngine(PlatformEngine):
 
 
 class SoundCloudEngine(PlatformEngine):
-    name = "SoundCloudEngine"
-    domains = ("soundcloud.com", "m.soundcloud.com")
+    name = "SoundCloudEnginePro"
+    domains = ("soundcloud.com", "m.soundcloud.com", "on.soundcloud.com")
+
+    async def analyze(self, url: str) -> dict | None:
+        """SoundCloud Pro analyzer: short-link normalization + audio ranking + playlist diagnostics."""
+        from services import downloader
+        from services.soundcloud_scraper import scrape_soundcloud
+        from middlewares.concurrency import get_executor
+        import asyncio
+
+        loop = asyncio.get_running_loop()
+        try:
+            sc = await loop.run_in_executor(get_executor(), scrape_soundcloud, url)
+            if sc and (sc.get("audio_formats") or sc.get("album_items") or sc.get("error_reason")):
+                sc.setdefault("platform", "SoundCloud")
+                sc["engine_profile"] = sc.get("engine_profile") or "yt-dlp-soundcloud-profiles+audio-ranking"
+                return self._tag(sc)
+        except Exception as exc:
+            error_logger.error("SoundCloudEnginePro scraper analyze failed: %s", exc)
+
+        fallback = await downloader._generic_analyze_url(url)
+        if fallback:
+            fallback["engine_profile"] = "yt-dlp-generic-fallback"
+        return self._tag(fallback)
+
+    async def download_audio(self, url: str, progress_callback: Callable | None = None) -> str | None:
+        from services import downloader
+        return await downloader._generic_download_audio(url, progress_callback)
 
 
 class GenericEngine(PlatformEngine):
