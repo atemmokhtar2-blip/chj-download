@@ -126,6 +126,14 @@ python3 app.py
 - يستخدم CDN probe لفحص الصور والفيديوهات قبل اختيارها، ويضيف `provider_score` و`provider_candidates` للتشخيص.
 - يبدأ تنزيل الفيديو من رابط MP4 المباشر عند توفره، ثم يرجع تلقائيًا إلى yt-dlp عند الحاجة.
 
+### YouTubeEnginePro
+- يدعم `youtube.com` و`youtu.be` و`m.youtube.com` و`music.youtube.com` و`youtube-nocookie.com` مع تطبيع shorts/live/embed إلى رابط watch موحد.
+- يستخدم عدة client profiles عبر yt-dlp (`android`, `web`, `ios`) لتقليل فشل استخراج البيانات عند تغييرات YouTube.
+- يولد selectors آمنة حسب الارتفاع (`bestvideo<=H + bestaudio`) بدل الاعتماد على format id واحد قد يفشل أو يكون بدون صوت.
+- يميز `shorts` و`live` ويضيف تشخيصًا واضحًا للحالات التي تحتاج cookies مثل age-restricted أو private أو members-only.
+- يفلتر الجودات حسب حدود حجم البوت ويعرض tiers واضحة مثل HD وFull HD و4K مع `provider_candidates` للتشخيص.
+- يبقي تنزيل الفيديو والصوت على مسار yt-dlp العام لضمان دمج video/audio وتحويل MP3 بشكل موثوق.
+
 ## 📢 إرسال إعلان تحديث لكل المستخدمين
 من داخل تيليجرام، يستطيع الأدمن إرسال رسالة تحديث جاهزة لكل المستخدمين بإحدى الطريقتين:
 
