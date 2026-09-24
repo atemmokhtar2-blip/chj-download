@@ -17,7 +17,8 @@ import json
 import logging
 import os
 import re
-from urllib.parse import quote
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from urllib.parse import quote, urlparse
 
 logger = logging.getLogger(__name__)
 
@@ -30,6 +31,99 @@ _GQL_QUERY_HASHES = (
     "2b0673e0dc4580674a88d32bac63519",
 )
 _GQL_DOC_IDS = ("10015918", "8845758582119845")
+_PROVIDER_TIMEOUT = 24
+_CDN_HOST_HINTS = ("cdninstagram", "fbcdn", "instagram", "scontent", "cdninstagram")
+
+
+def _is_private_or_login_html(html: str) -> bool:
+    text = (html or "").lower()
+    return any(x in text for x in (
+        "login_required", "please wait a few minutes", "this account is private",
+        "content is unavailable", "page isn't available", "checkpoint_required",
+        "temporarily blocked", "not-logged-in", "login • instagram",
+    ))
+
+
+def _probe_media_url(url: str | None, *, kind: str = "media") -> tuple[bool, int, str]:
+    """Lightweight CDN validation. Returns (ok, size_bytes, content_type)."""
+    if not url or not str(url).startswith("http"):
+        return False, 0, ""
+    try:
+        host = urlparse(url).netloc.lower()
+        if kind == "video" and not any(h in host for h in _CDN_HOST_HINTS):
+            # Still allow mirrors, but score lower later.
+            pass
+        r = _http_get(
+            url,
+            headers={"Range": "bytes=0-2048", "Accept": "video/*,image/*,*/*"},
+            timeout=10,
+        )
+        status = int(getattr(r, "status_code", 0) or 0)
+        ctype = (getattr(r, "headers", {}) or {}).get("Content-Type", "").lower()
+        clen = (getattr(r, "headers", {}) or {}).get("Content-Length", "0")
+        try:
+            size = int(clen or 0)
+        except Exception:
+            size = 0
+        if status not in (200, 206):
+            return False, size, ctype
+        if any(x in ctype for x in ("text/html", "application/json")):
+            return False, size, ctype
+        if kind == "video" and ctype and not any(x in ctype for x in ("video", "octet-stream", "binary")):
+            return False, size, ctype
+        if kind == "image" and ctype and not ctype.startswith("image/"):
+            return False, size, ctype
+        return True, size, ctype
+    except Exception as exc:
+        logger.debug("IG media probe failed %s: %s", str(url)[:80], exc)
+        return False, 0, ""
+
+
+def _score_result(result: dict | None) -> int:
+    if not result:
+        return 0
+    score = 0
+    source = result.get("source") or ""
+    media_type = result.get("media_type") or ""
+    source_bonus = {
+        "graphql": 100,
+        "graphql_doc": 95,
+        "embed": 82,
+        "gallery_dl": 76,
+        "instaloader": 70,
+    }.get(source, 40)
+    score += source_bonus
+    if result.get("play_url"):
+        ok, size, ctype = _probe_media_url(result.get("play_url"), kind="video")
+        result["cdn_probe_ok"] = ok
+        result["cdn_content_type"] = ctype
+        result["cdn_size_bytes"] = size
+        score += 90 if ok else -80
+        if size > 0:
+            score += min(size // 1_000_000, 25)
+    if result.get("image_url"):
+        ok, size, ctype = _probe_media_url(result.get("image_url"), kind="image")
+        result["image_probe_ok"] = ok
+        result["image_content_type"] = ctype
+        result["image_size_bytes"] = size
+        score += 55 if ok else -35
+    album_items = result.get("album_items") or []
+    if album_items:
+        score += 35 + min(len(album_items) * 12, 90)
+        valid = 0
+        for item in album_items[:4]:
+            kind = "video" if item.get("type") == "video" else "image"
+            ok, _, _ = _probe_media_url(item.get("play_url") or item.get("url") or item.get("image_url"), kind=kind)
+            if ok:
+                valid += 1
+        result["album_probe_valid"] = valid
+        score += valid * 22
+    if media_type == "album":
+        score += 20
+    if result.get("title") and result.get("title") not in ("Instagram Media", "Instagram Video", "Instagram Image"):
+        score += 10
+    result["provider_score"] = score
+    return score
 
 
 def extract_shortcode(url: str) -> str | None:
@@ -432,6 +526,7 @@ def _from_instaloader(url: str) -> dict | None:
 
 
 def scrape_instagram(url: str) -> dict | None:
+    """Instagram Pro resolver: race web GraphQL/embed/gallery-dl/instaloader and keep best CDN-valid result."""
     if not url or ("instagram." not in url and "instagr.am" not in url):
         return None
     url = _normalize_ig_url(url)
@@ -440,27 +535,91 @@ def scrape_instagram(url: str) -> dict | None:
         logger.warning("IG: cannot parse shortcode from %s", url)
         return None
 
-    g = _from_graphql(shortcode, url)
-    if g:
-        logger.info("Instagram GraphQL ok type=%s", g.get("media_type"))
-        return g
+    providers = [
+        ("graphql", lambda: _from_graphql(shortcode, url)),
+        ("embed", lambda: _from_embed(shortcode, url)),
+        ("gallery_dl", lambda: _from_gallery_dl(url)),
+        ("instaloader", lambda: _from_instaloader(url)),
+    ]
+    results: list[dict] = []
+    failures: list[str] = []
 
-    e = _from_embed(shortcode, url)
-    if e:
-        logger.info("Instagram embed ok type=%s", e.get("media_type"))
-        return e
+    def _run(name: str, fn):
+        try:
+            return name, fn()
+        except Exception as exc:
+            return name, {"_error": str(exc)}
 
-    gd = _from_gallery_dl(url)
-    if gd:
-        logger.info("Instagram gallery-dl ok type=%s", gd.get("media_type"))
-        return gd
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        futures = {pool.submit(_run, name, fn): name for name, fn in providers}
+        try:
+            for fut in as_completed(futures, timeout=_PROVIDER_TIMEOUT):
+                name = futures[fut]
+                try:
+                    provider_name, result = fut.result()
+                except Exception as exc:
+                    failures.append(f"{name}: {exc}")
+                    continue
+                if not result:
+                    failures.append(f"{provider_name}: empty")
+                    continue
+                if result.get("_error"):
+                    failures.append(f"{provider_name}: {result.get('_error')}")
+                    continue
+                if result.get("image_url") or result.get("play_url") or result.get("album_items"):
+                    result.setdefault("source", provider_name)
+                    result["provider_score"] = _score_result(result)
+                    results.append(result)
+                    logger.info(
+                        "Instagram provider=%s type=%s score=%s",
+                        provider_name, result.get("media_type"), result.get("provider_score"),
+                    )
+        except TimeoutError:
+            failures.append("resolver_timeout")
 
-    il = _from_instaloader(url)
-    if il:
-        logger.info("Instagram instaloader ok type=%s", il.get("media_type"))
-        return il
+    if results:
+        results.sort(key=lambda r: int(r.get("provider_score") or 0), reverse=True)
+        best = results[0]
+        best["provider_candidates"] = [
+            {
+                "source": r.get("source"),
+                "media_type": r.get("media_type"),
+                "score": r.get("provider_score"),
+                "cdn_ok": r.get("cdn_probe_ok") or r.get("image_probe_ok") or bool(r.get("album_probe_valid")),
+            }
+            for r in results[:5]
+        ]
+        logger.info(
+            "Instagram Pro selected source=%s type=%s score=%s candidates=%s",
+            best.get("source"), best.get("media_type"), best.get("provider_score"), len(results),
+        )
+        return best
+
+    # One cheap final page check gives the admin a better diagnosis in logs.
+    try:
+        page = _http_get(url, timeout=12)
+        html = getattr(page, "text", "") or ""
+        if _is_private_or_login_html(html):
+            logger.warning(
+                "Instagram extract needs login/cookies for %s. Set INSTAGRAM_SESSIONID or cookies.txt. failures=%s",
+                url, failures[:4],
+            )
+            return {
+                "platform": "Instagram",
+                "media_type": "unavailable",
+                "title": "Instagram media requires login or is unavailable",
+                "uploader": "Instagram User",
+                "url": url,
+                "webpage_url": url,
+                "requires_login": True,
+                "source": "diagnostic",
+                "diagnostic": "login_required_or_private",
+            }
+    except Exception:
+        pass
 
     logger.warning(
-        "Instagram extract failed for %s (set INSTAGRAM_SESSIONID or cookies.txt)", url
+        "Instagram Pro extract failed for %s (set INSTAGRAM_SESSIONID or cookies.txt). failures=%s",
+        url, failures[:6],
     )
     return None
