@@ -347,8 +347,100 @@ class TwitterEngine(PlatformEngine):
 
 
 class RedditEngine(PlatformEngine):
-    name = "RedditEngine"
-    domains = ("reddit.com", "redd.it", "v.redd.it", "old.reddit.com")
+    name = "RedditEnginePro"
+    domains = ("reddit.com", "redd.it", "v.redd.it", "old.reddit.com", "new.reddit.com", "np.reddit.com")
+
+    async def analyze(self, url: str) -> dict | None:
+        """Reddit Pro analyzer: JSON API + v.redd.it DASH + galleries + yt-dlp fallback."""
+        from services import downloader
+        from services.reddit_scraper import scrape_reddit
+        from middlewares.concurrency import get_executor
+        import asyncio
+
+        loop = asyncio.get_running_loop()
+        try:
+            rd = await loop.run_in_executor(get_executor(), scrape_reddit, url)
+            if rd and (rd.get("play_url") or rd.get("image_url") or rd.get("album_items")):
+                rd.setdefault("platform", "Reddit")
+                rd["engine_profile"] = rd.get("engine_profile") or "reddit-json+ytdlp+oembed+cdn-probe"
+                return self._tag(rd)
+            if rd and (rd.get("requires_login") or rd.get("error_reason")):
+                return self._tag(rd)
+        except Exception as exc:
+            error_logger.error("RedditEnginePro scraper analyze failed: %s", exc)
+
+        fallback = await downloader._generic_analyze_url(url)
+        if fallback:
+            fallback["engine_profile"] = "yt-dlp-generic-fallback"
+        return self._tag(fallback)
+
+    async def download_video(
+        self,
+        url: str,
+        format_id: str,
+        quality_label: str,
+        progress_callback: Callable | None = None,
+        play_url: str | None = None,
+    ) -> str | None:
+        from services import downloader
+        from services.reddit_scraper import scrape_reddit
+        from middlewares.concurrency import get_executor
+        import asyncio
+        import requests
+
+        loop = asyncio.get_running_loop()
+        candidate = play_url
+        if not candidate:
+            try:
+                meta = await loop.run_in_executor(get_executor(), scrape_reddit, url)
+                if meta:
+                    candidate = meta.get("play_url")
+                    download_logger.info(
+                        "RedditEnginePro selected source=%s score=%s",
+                        meta.get("source"), meta.get("provider_score"),
+                    )
+            except Exception as exc:
+                error_logger.error("RedditEnginePro resolve before download failed: %s", exc)
+
+        if candidate and ".mp4" in candidate:
+            safe_name = sanitize_filename(f"reddit_{hash(url) % 100000}_{quality_label}")
+            out_path = os.path.join(TEMP_DIR, safe_name + ".mp4")
+
+            def _download_direct() -> str | None:
+                headers = {
+                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131 Safari/537.36",
+                    "Referer": "https://www.reddit.com/",
+                    "Range": "bytes=0-",
+                }
+                with requests.get(candidate, headers=headers, stream=True, timeout=90) as r:
+                    if r.status_code not in (200, 206):
+                        return None
+                    ctype = (r.headers.get("Content-Type") or "").lower()
+                    if "text/html" in ctype or "application/json" in ctype:
+                        return None
+                    total = int(r.headers.get("Content-Length") or 0)
+                    done = 0
+                    with open(out_path, "wb") as f:
+                        for chunk in r.iter_content(chunk_size=1024 * 256):
+                            if not chunk:
+                                continue
+                            f.write(chunk)
+                            done += len(chunk)
+                            if progress_callback and total:
+                                try:
+                                    progress_callback(done, total)
+                                except Exception:
+                                    pass
+                    return out_path if os.path.exists(out_path) and os.path.getsize(out_path) > 2048 else None
+
+            try:
+                direct_path = await loop.run_in_executor(get_executor(), _download_direct)
+                if direct_path:
+                    return direct_path
+            except Exception as exc:
+                error_logger.error("RedditEnginePro direct download failed: %s", exc)
+
+        return await downloader._generic_download_video(url, format_id, quality_label, progress_callback)
 
 
 class SoundCloudEngine(PlatformEngine):

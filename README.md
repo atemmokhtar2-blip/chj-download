@@ -110,6 +110,14 @@ python3 app.py
 - يستخدم CDN probe لفحص روابط `twimg` قبل إرسالها للمستخدم أو بدء التنزيل المباشر.
 - يضيف `provider_score` و`provider_candidates` لتشخيص مصدر النجاح أو سبب الفشل بسرعة.
 
+### RedditEnginePro
+- يدعم `reddit.com` و`old.reddit.com` و`new.reddit.com` و`redd.it` و`v.redd.it` مع تطبيع الروابط قبل التحليل.
+- يستخدم Reddit JSON API (`.json?raw_json=1`) لاستخراج الفيديوهات والصور والـ galleries والـ crossposts بدون الاعتماد على صفحة HTML فقط.
+- يدعم فيديوهات `v.redd.it` وروابط DASH/HLS/fallback MP4، ويفضل MP4 المباشر عندما يكون مناسبًا لتليجرام.
+- يدعم صور `i.redd.it` و`preview.redd.it` وألبومات Reddit عبر `gallery_data` و`media_metadata`.
+- يشغّل fallback عبر yt-dlp و oEmbed، مع CDN probe للتحقق من روابط Reddit media قبل استخدامها.
+- يضيف `provider_score` و`provider_candidates` و`engine_profile` لتشخيص سريع لمصدر النجاح أو سبب الفشل.
+
 ## 📢 إرسال إعلان تحديث لكل المستخدمين
 من داخل تيليجرام، يستطيع الأدمن إرسال رسالة تحديث جاهزة لكل المستخدمين بإحدى الطريقتين:
 
