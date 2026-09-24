@@ -131,10 +131,11 @@ class InstagramEngine(PlatformEngine):
 
 
 class PinterestEngine(PlatformEngine):
-    name = "PinterestEngine"
+    name = "PinterestEnginePro"
     domains = ("pinterest.", "pin.it", "pinimg.com")
 
     async def analyze(self, url: str) -> dict | None:
+        """Pinterest Pro analyzer: pin.it expansion + PinResource + gallery-dl + HTML + CDN probe."""
         from services import downloader
         from services.pinterest_scraper import scrape_pinterest
         from middlewares.concurrency import get_executor
@@ -145,10 +146,82 @@ class PinterestEngine(PlatformEngine):
             pin = await loop.run_in_executor(get_executor(), scrape_pinterest, url)
             if pin and (pin.get("image_url") or pin.get("play_url") or pin.get("album_items")):
                 pin.setdefault("platform", "Pinterest")
+                pin["engine_profile"] = pin.get("engine_profile") or "pinterest-downloader+pin-resource+gallery-dl+html+cdn-probe"
                 return self._tag(pin)
         except Exception as exc:
-            error_logger.error("PinterestEngine scraper analyze failed: %s", exc)
-        return self._tag(await downloader._generic_analyze_url(url))
+            error_logger.error("PinterestEnginePro scraper analyze failed: %s", exc)
+        fallback = await downloader._generic_analyze_url(url)
+        if fallback:
+            fallback["engine_profile"] = "yt-dlp-generic-fallback"
+        return self._tag(fallback)
+
+    async def download_video(
+        self,
+        url: str,
+        format_id: str,
+        quality_label: str,
+        progress_callback: Callable | None = None,
+        play_url: str | None = None,
+    ) -> str | None:
+        from services import downloader
+        from services.pinterest_scraper import scrape_pinterest
+        from middlewares.concurrency import get_executor
+        import asyncio
+        import requests
+
+        loop = asyncio.get_running_loop()
+        candidate = play_url
+        if not candidate:
+            try:
+                meta = await loop.run_in_executor(get_executor(), scrape_pinterest, url)
+                if meta:
+                    candidate = meta.get("play_url")
+                    download_logger.info(
+                        "PinterestEnginePro selected source=%s score=%s",
+                        meta.get("source"), meta.get("provider_score"),
+                    )
+            except Exception as exc:
+                error_logger.error("PinterestEnginePro resolve before download failed: %s", exc)
+
+        if candidate and ".mp4" in candidate:
+            safe_name = sanitize_filename(f"pinterest_{hash(url) % 100000}_{quality_label}")
+            out_path = os.path.join(TEMP_DIR, safe_name + ".mp4")
+
+            def _download_direct() -> str | None:
+                headers = {
+                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131 Safari/537.36",
+                    "Referer": "https://www.pinterest.com/",
+                    "Range": "bytes=0-",
+                }
+                with requests.get(candidate, headers=headers, stream=True, timeout=60) as r:
+                    if r.status_code not in (200, 206):
+                        return None
+                    ctype = (r.headers.get("Content-Type") or "").lower()
+                    if "text/html" in ctype or "application/json" in ctype:
+                        return None
+                    total = int(r.headers.get("Content-Length") or 0)
+                    done = 0
+                    with open(out_path, "wb") as f:
+                        for chunk in r.iter_content(chunk_size=1024 * 256):
+                            if not chunk:
+                                continue
+                            f.write(chunk)
+                            done += len(chunk)
+                            if progress_callback and total:
+                                try:
+                                    progress_callback(done, total)
+                                except Exception:
+                                    pass
+                    return out_path if os.path.exists(out_path) and os.path.getsize(out_path) > 2048 else None
+
+            try:
+                direct_path = await loop.run_in_executor(get_executor(), _download_direct)
+                if direct_path:
+                    return direct_path
+            except Exception as exc:
+                error_logger.error("PinterestEnginePro direct download failed: %s", exc)
+
+        return await downloader._generic_download_video(url, format_id, quality_label, progress_callback)
 
 
 class FacebookEngine(PlatformEngine):

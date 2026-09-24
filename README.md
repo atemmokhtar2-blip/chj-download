@@ -118,6 +118,14 @@ python3 app.py
 - يشغّل fallback عبر yt-dlp و oEmbed، مع CDN probe للتحقق من روابط Reddit media قبل استخدامها.
 - يضيف `provider_score` و`provider_candidates` و`engine_profile` لتشخيص سريع لمصدر النجاح أو سبب الفشل.
 
+### PinterestEnginePro
+- يدعم `pin.it` redirects وروابط Pinterest الإقليمية والموبايل ويطبعها إلى `www.pinterest.com/pin/<id>/`.
+- يجمع المرشحين من `pinterest-downloader` وPinResource API وgallery-dl وHTML/PWS data بدل الاعتماد على أول نتيجة فقط.
+- يفضل صور `i.pinimg.com/originals/` عالية الدقة عندما تكون صالحة، مع fallback إلى أحجام `1200x/736x/564x`.
+- يدعم video pins وGIFs وstory/idea pins والـ carousel كألبومات متعددة العناصر.
+- يستخدم CDN probe لفحص الصور والفيديوهات قبل اختيارها، ويضيف `provider_score` و`provider_candidates` للتشخيص.
+- يبدأ تنزيل الفيديو من رابط MP4 المباشر عند توفره، ثم يرجع تلقائيًا إلى yt-dlp عند الحاجة.
+
 ## 📢 إرسال إعلان تحديث لكل المستخدمين
 من داخل تيليجرام، يستطيع الأدمن إرسال رسالة تحديث جاهزة لكل المستخدمين بإحدى الطريقتين:
 
