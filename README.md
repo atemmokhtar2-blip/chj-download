@@ -63,6 +63,11 @@ python3 app.py
 - retry أقوى للـ fragments والـ extractors والملفات.
 - Headers عالمية تدعم الإنجليزية والعربية لتقليل الحظر/الفشل الجغرافي.
 - fallback تلقائي بين الرابط الأصلي والرابط المنظف والرابط الموسع.
+- دعم Cookies اختياري عبر `YTDLP_COOKIES_FILE` أو `YTDLP_COOKIES_FROM_BROWSER` للمنصات الصعبة مثل Instagram/Facebook/YouTube restricted.
+- دعم Proxy اختياري عبر `DOWNLOAD_PROXY` عند حظر IP السيرفر في بعض الدول.
+- أمر أدمن `/engine_status` لعرض حالة المحرك.
+- أمر أدمن `/update_ytdlp` لتحديث yt-dlp بسرعة عند تغيير خوارزميات المنصات.
+- fallback مباشر للـ CDN/signed media URL إذا فشل الدمج العادي.
 
 ## 📢 إرسال إعلان تحديث لكل المستخدمين
 من داخل تيليجرام، يستطيع الأدمن إرسال رسالة تحديث جاهزة لكل المستخدمين بإحدى الطريقتين:

@@ -21,7 +21,8 @@ from handlers.start import (
 )
 from handlers.download import handle_url, download_callback
 from handlers.admin import (
-    admin_command, admin_callback, send_update_announcement
+    admin_command, admin_callback, send_update_announcement,
+    engine_status_command, update_ytdlp_command,
 )
 from workers.cleanup import cleanup_temp_files, cleanup_old_cache
 
@@ -107,6 +108,8 @@ def build_application() -> Application:
     app.add_handler(CommandHandler("system", admin_command))
     app.add_handler(CommandHandler("maintenance", admin_command))
     app.add_handler(CommandHandler("announce_update", send_update_announcement))
+    app.add_handler(CommandHandler("engine_status", engine_status_command))
+    app.add_handler(CommandHandler("update_ytdlp", update_ytdlp_command))
 
     app.add_handler(CallbackQueryHandler(admin_callback, pattern="^admin_"))
     app.add_handler(CallbackQueryHandler(language_callback,            pattern="^lang_"))

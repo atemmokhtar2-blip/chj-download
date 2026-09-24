@@ -19,6 +19,8 @@ from database.downloads import (
     get_downloads_by_platform, get_total_downloads, get_user_download_stats,
 )
 from database.cache import get_cache_count, get_cache_hits
+from services.engine_maintenance import get_ytdlp_version, update_ytdlp
+from config.settings import YTDLP_COOKIES_FILE, YTDLP_COOKIES_FROM_BROWSER, DOWNLOAD_PROXY
 
 logger = logging.getLogger(__name__)
 
@@ -61,6 +63,40 @@ async def send_update_announcement(update: Update, context: ContextTypes.DEFAULT
 
     status_message = await update.effective_message.reply_text("📢 جاري إرسال إعلان التحديث لكل المستخدمين...")
     await _broadcast_update_message(context, status_message=status_message)
+
+
+async def engine_status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    if not user or not is_admin(user.id):
+        await update.effective_message.reply_text("⛔ هذا الأمر متاح للمسؤولين فقط.")
+        return
+    cookies_ready = bool(YTDLP_COOKIES_FROM_BROWSER or (YTDLP_COOKIES_FILE and os.path.exists(YTDLP_COOKIES_FILE)))
+    text = (
+        "🧠 <b>حالة محرك التنزيل</b>\n\n"
+        f"yt-dlp: <code>{get_ytdlp_version()}</code>\n"
+        f"Cookies: <b>{'مفعلة' if cookies_ready else 'غير مفعلة'}</b>\n"
+        f"Proxy: <b>{'مفعل' if DOWNLOAD_PROXY else 'غير مفعل'}</b>\n\n"
+        "أوامر مهمة:\n"
+        "<code>/update_ytdlp</code> — تحديث yt-dlp عند فشل منصات مثل Instagram/Facebook/YouTube.\n"
+        "<code>/engine_status</code> — عرض هذه الحالة."
+    )
+    await update.effective_message.reply_text(text, parse_mode="HTML")
+
+
+async def update_ytdlp_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    if not user or not is_admin(user.id):
+        await update.effective_message.reply_text("⛔ هذا الأمر متاح للمسؤولين فقط.")
+        return
+    msg = await update.effective_message.reply_text("🔄 جاري تحديث yt-dlp... قد يستغرق دقيقة.")
+    loop = asyncio.get_running_loop()
+    result = await loop.run_in_executor(None, update_ytdlp)
+    text = "✅ <b>تم تحديث yt-dlp</b>" if result["ok"] else "❌ <b>فشل تحديث yt-dlp</b>"
+    text += f"\n\nقبل: <code>{result['before']}</code>\nبعد/الحالي: <code>{result['after']}</code>"
+    if not result["ok"]:
+        text += f"\n\n<pre>{(result.get('stderr') or result.get('stdout') or '')[:1000]}</pre>"
+    text += "\n\n⚠️ لو كان التحديث كبيرًا، أعد تشغيل السيرفر ليستخدم النسخة الجديدة داخل العملية الحالية."
+    await msg.edit_text(text, parse_mode="HTML")
 
 
 async def _broadcast_update_message(context: ContextTypes.DEFAULT_TYPE, status_message=None, query=None):
@@ -130,6 +166,10 @@ async def admin_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             InlineKeyboardButton("🚫 " + t(lang, "admin_ban_btn"), callback_data="admin_ban"),
         ],
         [
+            InlineKeyboardButton("🧠 حالة المحرك", callback_data="admin_engine_status"),
+            InlineKeyboardButton("🔄 تحديث yt-dlp", callback_data="admin_update_ytdlp"),
+        ],
+        [
             InlineKeyboardButton("🚧 " + t(lang, "admin_maintenance_btn"), callback_data="admin_maintenance"),
         ],
     ]
@@ -160,6 +200,24 @@ async def admin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif data == "admin_announce_update":
         await query.edit_message_text("📢 جاري إرسال إعلان التحديث لكل المستخدمين...", parse_mode="HTML")
         await _broadcast_update_message(context, query=query)
+    elif data == "admin_engine_status":
+        cookies_ready = bool(YTDLP_COOKIES_FROM_BROWSER or (YTDLP_COOKIES_FILE and os.path.exists(YTDLP_COOKIES_FILE)))
+        await query.edit_message_text(
+            "🧠 <b>حالة محرك التنزيل</b>\n\n"
+            f"yt-dlp: <code>{get_ytdlp_version()}</code>\n"
+            f"Cookies: <b>{'مفعلة' if cookies_ready else 'غير مفعلة'}</b>\n"
+            f"Proxy: <b>{'مفعل' if DOWNLOAD_PROXY else 'غير مفعل'}</b>",
+            parse_mode="HTML",
+        )
+    elif data == "admin_update_ytdlp":
+        await query.edit_message_text("🔄 جاري تحديث yt-dlp... قد يستغرق دقيقة.", parse_mode="HTML")
+        result = await asyncio.get_running_loop().run_in_executor(None, update_ytdlp)
+        text = "✅ <b>تم تحديث yt-dlp</b>" if result["ok"] else "❌ <b>فشل تحديث yt-dlp</b>"
+        text += f"\n\nقبل: <code>{result['before']}</code>\nبعد/الحالي: <code>{result['after']}</code>"
+        if not result["ok"]:
+            text += f"\n\n<pre>{(result.get('stderr') or result.get('stdout') or '')[:1000]}</pre>"
+        text += "\n\n⚠️ لو كان التحديث كبيرًا، أعد تشغيل السيرفر ليستخدم النسخة الجديدة داخل العملية الحالية."
+        await query.edit_message_text(text, parse_mode="HTML")
     elif data == "admin_search":
         ADMIN_CONVERSATION_STATES[user.id] = "search"
         keyboard = [[InlineKeyboardButton("🔙 رجوع", callback_data="admin_panel")]]
