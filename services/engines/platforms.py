@@ -11,8 +11,45 @@ from utils.logger import download_logger, error_logger
 
 
 class YouTubeEngine(PlatformEngine):
-    name = "YouTubeEngine"
-    domains = ("youtube.com", "youtu.be", "youtube-nocookie.com", "music.youtube.com")
+    name = "YouTubeEnginePro"
+    domains = ("youtube.com", "youtu.be", "youtube-nocookie.com", "music.youtube.com", "m.youtube.com")
+
+    async def analyze(self, url: str) -> dict | None:
+        """YouTube Pro analyzer: normalized URLs + yt-dlp client profiles + safe quality selectors."""
+        from services import downloader
+        from services.youtube_scraper import scrape_youtube
+        from middlewares.concurrency import get_executor
+        import asyncio
+
+        loop = asyncio.get_running_loop()
+        try:
+            yt = await loop.run_in_executor(get_executor(), scrape_youtube, url)
+            if yt and (yt.get("qualities") or yt.get("requires_login") or yt.get("error_reason")):
+                yt.setdefault("platform", "YouTube")
+                yt["engine_profile"] = yt.get("engine_profile") or "yt-dlp-youtube-profiles+safe-quality-selectors"
+                return self._tag(yt)
+        except Exception as exc:
+            error_logger.error("YouTubeEnginePro scraper analyze failed: %s", exc)
+
+        fallback = await downloader._generic_analyze_url(url)
+        if fallback:
+            fallback["engine_profile"] = "yt-dlp-generic-fallback"
+        return self._tag(fallback)
+
+    async def download_video(
+        self,
+        url: str,
+        format_id: str,
+        quality_label: str,
+        progress_callback: Callable | None = None,
+        play_url: str | None = None,
+    ) -> str | None:
+        from services import downloader
+        return await downloader._generic_download_video(url, format_id, quality_label, progress_callback, play_url)
+
+    async def download_audio(self, url: str, progress_callback: Callable | None = None) -> str | None:
+        from services import downloader
+        return await downloader._generic_download_audio(url, progress_callback)
 
 
 class TikTokEngine(PlatformEngine):
