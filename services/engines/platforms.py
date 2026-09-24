@@ -103,7 +103,7 @@ class TikTokEngine(PlatformEngine):
 
 
 class InstagramEngine(PlatformEngine):
-    name = "InstagramEngine"
+    name = "InstagramEnginePro"
     domains = ("instagram.com", "instagr.am", "cdninstagram.com")
 
     async def analyze(self, url: str) -> dict | None:
@@ -117,10 +117,17 @@ class InstagramEngine(PlatformEngine):
             ig = await loop.run_in_executor(get_executor(), scrape_instagram, url)
             if ig and (ig.get("image_url") or ig.get("play_url") or ig.get("album_items")):
                 ig.setdefault("platform", "Instagram")
+                ig["engine_profile"] = "graphql+embed+gallery-dl+instaloader+cdn-probe"
+                return self._tag(ig)
+            if ig and ig.get("requires_login"):
                 return self._tag(ig)
         except Exception as exc:
-            error_logger.error("InstagramEngine scraper analyze failed: %s", exc)
-        return self._tag(await downloader._generic_analyze_url(url))
+            error_logger.error("InstagramEnginePro scraper analyze failed: %s", exc)
+
+        fallback = await downloader._generic_analyze_url(url)
+        if fallback:
+            fallback["engine_profile"] = "yt-dlp-generic-fallback"
+        return self._tag(fallback)
 
 
 class PinterestEngine(PlatformEngine):
