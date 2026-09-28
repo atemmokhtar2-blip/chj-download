@@ -90,6 +90,15 @@ async def engine_status_command(update: Update, context: ContextTypes.DEFAULT_TY
     await update.effective_message.reply_text(text, parse_mode="HTML")
 
 
+async def health_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    if not user or not is_admin(user.id):
+        await update.effective_message.reply_text("⛔ هذا الأمر متاح للمسؤولين فقط.")
+        return
+    from services.runtime_diagnostics import render_diagnostics_html
+    await update.effective_message.reply_text(render_diagnostics_html(), parse_mode="HTML")
+
+
 async def update_ytdlp_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     if not user or not is_admin(user.id):
