@@ -9,7 +9,7 @@ from urllib.parse import urlparse
 
 import yt_dlp
 
-from config.settings import MAX_FILE_SIZE_BYTES, TEMP_DIR, DOWNLOAD_TIMEOUT, DOWNLOAD_PROXY, YTDLP_COOKIES_FILE, YTDLP_COOKIES_FROM_BROWSER
+from config.settings import MAX_FILE_SIZE_BYTES, TEMP_DIR, DOWNLOAD_TIMEOUT, DOWNLOAD_PROXY, YTDLP_COOKIES_FILE, YTDLP_COOKIES_FROM_BROWSER, YTDLP_CLIENT
 from services.content_intelligence import build_content_intelligence
 
 ALBUM_MAX_ITEMS = 10
@@ -35,6 +35,20 @@ def _platform(url: str) -> str:
     return host or "Generic"
 
 
+YOUTUBE_PLAYER_CLIENTS = {"android", "web", "ios", "mweb", "tv", "tv_embedded", "web_creator"}
+
+
+def _safe_youtube_clients() -> list[str]:
+    """Filter env config to valid yt-dlp YouTube player_client values only."""
+    candidates = [YTDLP_CLIENT, "android", "web", "ios", "mweb"]
+    out: list[str] = []
+    for raw in candidates:
+        item = str(raw or "").strip()
+        if item in YOUTUBE_PLAYER_CLIENTS and item not in out:
+            out.append(item)
+    return out or ["android", "web"]
+
+
 def _base_opts(progress=None, loop: asyncio.AbstractEventLoop | None = None) -> dict:
     opts = {
         "quiet": True,
@@ -46,7 +60,14 @@ def _base_opts(progress=None, loop: asyncio.AbstractEventLoop | None = None) -> 
         "socket_timeout": DOWNLOAD_TIMEOUT,
         "continuedl": True,
         "merge_output_format": "mp4",
-        "http_headers": {"User-Agent": "Mozilla/5.0 XDownloader/1.0"},
+        "http_headers": {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36",
+            "Accept-Language": "en-US,en;q=0.9,ar;q=0.8",
+        },
+        "extractor_args": {
+            "youtube": {"player_client": _safe_youtube_clients()},
+            "tiktok": {"api_hostname": ["api16-normal-c-useast1a.tiktokv.com"]},
+        },
     }
     if DOWNLOAD_PROXY:
         opts["proxy"] = DOWNLOAD_PROXY
@@ -84,7 +105,7 @@ def _extract_info_sync(url: str) -> dict | None:
         return ydl.extract_info(url, download=False)
 
 
-async def analyze_url(url: str) -> dict | None:
+async def _generic_analyze_url(url: str) -> dict | None:
     try:
         info = await _run_sync(_extract_info_sync, url)
         if not info:
@@ -170,20 +191,63 @@ def _download_sync(url: str, opts: dict) -> str | None:
                 filename = mp4
         # audio postprocessors can change extension
         base = os.path.splitext(filename)[0]
-        for candidate in (base + ".mp3", base + ".m4a", filename):
+        for candidate in (base + ".mp3", base + ".m4a", base + ".mp4", filename):
             if os.path.exists(candidate):
                 return _check_size(candidate)
     return None
 
 
-async def download_video(url: str, format_id: str = "best", quality_label: str = "best", progress=None, play_url: str | None = None) -> str | None:
-    fmt = "bestvideo+bestaudio/best" if format_id in {"best", "best_quality"} else f"{format_id}+bestaudio/{format_id}/best"
+def _video_format_candidates(format_id: str = "best") -> list[str]:
+    """Return robust yt-dlp format fallbacks for YouTube/TikTok failures."""
+    requested = str(format_id or "best").strip()
+    best_mp4 = "bestvideo[ext=mp4]+bestaudio[ext=m4a]/bestvideo+bestaudio/best[ext=mp4]/best"
+    safe_small = "best[height<=720][ext=mp4]/best[height<=720]/worst[ext=mp4]/worst"
+    if requested in {"best", "best_quality"}:
+        return [best_mp4, "best[ext=mp4]/best", safe_small]
+    return [
+        f"{requested}+bestaudio[ext=m4a]/{requested}+bestaudio/{requested}",
+        f"bestvideo[height<=720][ext=mp4]+bestaudio[ext=m4a]/best[height<=720][ext=mp4]/best[height<=720]",
+        "best[ext=mp4]/best",
+        safe_small,
+    ]
+
+
+def _youtube_client_candidates() -> list[str]:
+    return _safe_youtube_clients()
+
+
+async def _generic_download_video(url: str, format_id: str = "best", quality_label: str = "best", progress=None, play_url: str | None = None) -> str | None:
     loop = asyncio.get_running_loop() if progress else None
-    opts = {**_base_opts(progress, loop), "format": fmt, "merge_output_format": "mp4"}
-    return await _run_sync(_download_sync, play_url or url, opts)
+    target = play_url or url
+    host = urlparse(url).netloc.lower()
+    formats = _video_format_candidates(format_id)
+    clients = _youtube_client_candidates() if "youtu" in host and not play_url else [YTDLP_CLIENT]
+    last_error: Exception | None = None
+
+    for client in clients:
+        for fmt in formats:
+            opts = {**_base_opts(progress, loop), "format": fmt, "merge_output_format": "mp4"}
+            if client:
+                opts.setdefault("extractor_args", {}).setdefault("youtube", {})["player_client"] = [client]
+            try:
+                path = await _run_sync(_download_sync, target, opts)
+                if path:
+                    if fmt != formats[0] or client != clients[0]:
+                        logger.info("Download fallback succeeded: client=%s format=%s url=%s", client, fmt, url[:100])
+                    return path
+            except FileTooLargeError:
+                raise
+            except Exception as exc:
+                last_error = exc
+                logger.warning("Download attempt failed client=%s format=%s url=%s error=%s", client, fmt, url[:100], exc)
+                continue
+
+    if last_error:
+        raise last_error
+    return None
 
 
-async def download_audio(url: str, progress=None) -> str | None:
+async def _generic_download_audio(url: str, progress=None) -> str | None:
     loop = asyncio.get_running_loop() if progress else None
     opts = {
         **_base_opts(progress, loop),
@@ -191,6 +255,76 @@ async def download_audio(url: str, progress=None) -> str | None:
         "postprocessors": [{"key": "FFmpegExtractAudio", "preferredcodec": "mp3", "preferredquality": "192"}],
     }
     return await _run_sync(_download_sync, url, opts)
+
+
+def _normalize_tiktok_info(raw: dict, original_url: str) -> dict:
+    """Normalize TikTok scraper output into the downloader contract."""
+    images = raw.get("images") or []
+    album_items = raw.get("album_items") or []
+    image_url = raw.get("image_url") or (images[0] if images else None)
+    play_url = raw.get("play_url") or raw.get("video_url") or raw.get("download_url")
+    media_type = "album" if album_items or len(images) > 1 else ("image" if image_url and not play_url else "video")
+    normalized = {
+        "url": raw.get("webpage_url") or original_url,
+        "title": raw.get("title") or raw.get("desc") or "TikTok media",
+        "uploader": raw.get("uploader") or raw.get("author") or "TikTok",
+        "duration": _format_duration(raw.get("duration")),
+        "platform": "TikTok",
+        "media_type": media_type,
+        "thumbnail": raw.get("thumbnail") or image_url,
+        "qualities": [{"label": "best", "format_id": "best"}] if play_url or media_type == "video" else [],
+        "media_id": raw.get("id") or raw.get("aweme_id"),
+        "downloadable": bool(play_url or image_url or album_items or images),
+        "play_url": play_url,
+        "image_url": image_url,
+        "album_items": album_items or [{"url": img, "title": raw.get("title") or "TikTok image", "type": "image"} for img in images],
+    }
+    normalized["intelligence"] = build_content_intelligence(normalized, raw)
+    return normalized
+
+
+def _select_engine(url: str):
+    """Choose a platform-specific engine lazily to avoid import cycles."""
+    from services.engines.base import PlatformEngine, first_match
+    from services.engines.platforms import YouTubeEngine, TikTokEngine
+
+    engines = [YouTubeEngine(), TikTokEngine()]
+    return first_match(url, engines, PlatformEngine())
+
+
+async def analyze_url(url: str) -> dict | None:
+    engine = _select_engine(url)
+    try:
+        return await engine.analyze(url)
+    except Exception as exc:
+        logger.warning("Engine analyze failed (%s) for %s: %s", getattr(engine, "name", "unknown"), url[:120], exc)
+        return await _generic_analyze_url(url)
+
+
+async def download_video(url: str, format_id: str = "best", quality_label: str = "best", progress=None, play_url: str | None = None) -> str | None:
+    engine = _select_engine(url)
+    try:
+        return await engine.download_video(url, format_id, quality_label, progress, play_url)
+    except FileTooLargeError:
+        raise
+    except Exception as exc:
+        logger.warning("Engine video download failed (%s) for %s: %s", getattr(engine, "name", "unknown"), url[:120], exc)
+        return await _generic_download_video(url, format_id, quality_label, progress, play_url)
+
+
+async def download_audio(url: str, progress=None) -> str | None:
+    engine = _select_engine(url)
+    try:
+        return await engine.download_audio(url, progress)
+    except FileTooLargeError:
+        raise
+    except Exception as exc:
+        logger.warning("Engine audio download failed (%s) for %s: %s", getattr(engine, "name", "unknown"), url[:120], exc)
+        return await _generic_download_audio(url, progress)
+
+
+# Compatibility aliases used by platform engines.
+_enforce_max_file_size = _check_size
 
 
 async def download_image(url: str, image_url: str | None = None) -> str | None:
@@ -211,7 +345,12 @@ async def download_album(items: list[dict], progress=None) -> list[dict]:
     for idx, item in enumerate(items[:ALBUM_MAX_ITEMS], start=1):
         if progress:
             await progress({"album_index": idx, "album_total": min(len(items), ALBUM_MAX_ITEMS)})
-        path = await download_video(item.get("url"), "best", "best")
+        if item.get("type") == "image":
+            path = await download_image(item.get("url"), item.get("url"))
+            item_type = "image"
+        else:
+            path = await download_video(item.get("url"), "best", "best")
+            item_type = "video"
         if path:
-            downloaded.append({"path": path, "title": item.get("title") or f"item-{idx}", "type": "video"})
+            downloaded.append({"path": path, "title": item.get("title") or f"item-{idx}", "type": item_type})
     return downloaded

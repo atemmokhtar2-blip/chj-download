@@ -48,7 +48,7 @@ MAX_CONCURRENT_DOWNLOADS = int(os.getenv("MAX_CONCURRENT_DOWNLOADS", "5"))
 YTDLP_COOKIES_FILE = os.getenv("YTDLP_COOKIES_FILE", "cookies.txt").strip()
 YTDLP_COOKIES_FROM_BROWSER = os.getenv("YTDLP_COOKIES_FROM_BROWSER", "").strip()
 DOWNLOAD_PROXY = os.getenv("DOWNLOAD_PROXY", "").strip()
-YTDLP_CLIENT = os.getenv("YTDLP_CLIENT", "curl_cffi").strip()
+YTDLP_CLIENT = os.getenv("YTDLP_CLIENT", "android").strip()
 
 CACHE_TTL_SECONDS = int(os.getenv("CACHE_TTL_SECONDS", "86400"))
 CACHE_MAX_SIZE = int(os.getenv("CACHE_MAX_SIZE", "1000"))
