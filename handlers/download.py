@@ -25,13 +25,13 @@ from services.downloader import (
 from services.content_intelligence import render_intelligence_html
 from middlewares.rate_limiter import check_rate_limit_detailed, mark_download
 from middlewares.concurrency import download_slot, active_global_slots
+from middlewares.user_locks import is_user_busy, try_acquire_user_download, release_user_download
 from middlewares.auth import is_banned
 from locales import t
 from utils.helpers import is_valid_url, is_supported_url, truncate_title, make_progress_bar, format_size, get_platform_emoji
 from config.settings import MAX_FILE_SIZE_MB, HOURLY_DOWNLOAD_LIMIT, DAILY_DOWNLOAD_LIMIT
 
 logger = logging.getLogger(__name__)
-active_downloads: dict[int, bool] = {}
 
 UPLOAD_RETRIES = 3
 UPLOAD_RETRY_DELAY = 2
@@ -78,7 +78,7 @@ async def handle_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
         return
 
-    if active_downloads.get(user.id):
+    if is_user_busy(user.id):
         await update.message.reply_text(t(lang, "queue_full"))
         return
 
@@ -251,7 +251,7 @@ async def download_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await edit_fn(_friendly_error(lang, info), parse_mode="HTML")
         return
 
-    if active_downloads.get(user.id):
+    if not try_acquire_user_download(user.id):
         await query.answer(t(lang, "queue_full"), show_alert=True)
         return
 
@@ -263,15 +263,18 @@ async def download_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.answer(t(lang, "rate_limit_hourly", limit=HOURLY_DOWNLOAD_LIMIT), show_alert=True)
         else:
             await query.answer(t(lang, "rate_limit", seconds=rl.wait_seconds), show_alert=True)
+        release_user_download(user.id)
         return
 
     allowed_prefixes = ("dl_video_",)
     allowed_exact = {"dl_smart", "dl_audio", "dl_image", "dl_album", "dl_unavailable"}
     if data not in allowed_exact and not data.startswith(allowed_prefixes):
         await query.answer(t(lang, "session_expired"), show_alert=True)
+        release_user_download(user.id)
         return
     if not _callback_matches_media(data, info):
         await query.answer(t(lang, "session_expired"), show_alert=True)
+        release_user_download(user.id)
         return
 
     await query.answer()
@@ -307,6 +310,7 @@ async def download_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         media_group.append(InputMediaPhoto(media=it["file_id"], caption=caption, parse_mode="HTML" if caption else None))
                 await _upload_with_retry(query.message.reply_media_group(media=media_group))
                 increment_downloads(user.id)
+                release_user_download(user.id)
                 return
             except TelegramError as e:
                 logger.warning("Stale album cache for %s: %s", info["url"][:80], e)
@@ -342,6 +346,7 @@ async def download_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 else:
                     await query.message.reply_video(video=fid)
             increment_downloads(user.id)
+            release_user_download(user.id)
             return
         except TelegramError as e:
             logger.warning("Stale cache for %s (%s): %s", info["url"][:80], quality_label, e)
@@ -351,9 +356,9 @@ async def download_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # (cache hits do not consume). Closes double-click races.
     if not mark_download(user.id):
         await query.answer(t(lang, "rate_limit", seconds=1), show_alert=True)
+        release_user_download(user.id)
         return
 
-    active_downloads[user.id] = True
     progress_msg = query.message
     file_path = None
     edit_fn = query.edit_message_caption if progress_msg.caption else progress_msg.edit_text
@@ -400,7 +405,7 @@ async def download_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.exception("Download error for user=%s url=%s: %s", user.id, str(info.get("url", ""))[:120], e)
         await edit_fn(t(lang, "download_failed"))
     finally:
-        active_downloads.pop(user.id, None)
+        release_user_download(user.id)
         if file_path and os.path.exists(file_path):
             try: os.remove(file_path)
             except: pass
