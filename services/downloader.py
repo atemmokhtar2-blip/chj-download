@@ -9,6 +9,7 @@ from urllib.parse import urlparse
 import yt_dlp
 
 from config.settings import MAX_FILE_SIZE_BYTES, TEMP_DIR, DOWNLOAD_TIMEOUT, DOWNLOAD_PROXY, YTDLP_COOKIES_FILE, YTDLP_COOKIES_FROM_BROWSER
+from services.content_intelligence import build_content_intelligence
 
 ALBUM_MAX_ITEMS = 10
 
@@ -88,7 +89,7 @@ async def analyze_url(url: str) -> dict | None:
         if entries and isinstance(entries, list):
             items = [e for e in entries[:ALBUM_MAX_ITEMS] if e]
             if len(items) > 1:
-                return {
+                result = {
                     "url": url,
                     "title": info.get("title") or "Album",
                     "uploader": info.get("uploader") or info.get("channel") or "Unknown",
@@ -99,6 +100,8 @@ async def analyze_url(url: str) -> dict | None:
                     "album_items": [{"url": e.get("webpage_url") or e.get("url"), "title": e.get("title"), "type": "video"} for e in items],
                     "downloadable": True,
                 }
+                result["intelligence"] = build_content_intelligence(result, info)
+                return result
             if items:
                 info = items[0]
         formats = info.get("formats") or []
@@ -116,7 +119,7 @@ async def analyze_url(url: str) -> dict | None:
         media_type = "audio" if info.get("vcodec") == "none" or ext in {"mp3", "m4a", "opus"} else "video"
         if not qualities and media_type == "video":
             qualities = [{"label": "best", "format_id": "best"}]
-        return {
+        result = {
             "url": info.get("webpage_url") or url,
             "title": info.get("title") or "Untitled",
             "uploader": info.get("uploader") or info.get("channel") or "Unknown",
@@ -128,6 +131,8 @@ async def analyze_url(url: str) -> dict | None:
             "media_id": info.get("id"),
             "downloadable": True,
         }
+        result["intelligence"] = build_content_intelligence(result, info)
+        return result
     except Exception:
         return None
 

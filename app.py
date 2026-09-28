@@ -203,6 +203,29 @@ def render_engine_arsenal():
 """
 
 
+def render_content_intelligence():
+    return """
+## 🧠 Smart Content Intelligence
+
+ميزة جديدة تجعل البوت لا يكتفي بإظهار زر تحميل فقط، بل يحلل الرابط قبل التحميل ويعرض للمستخدم بطاقة ذكية:
+
+- **Content Score /99** لتقييم جاهزية الرابط وجودته.
+- **أفضل جودة متاحة** بناءً على metadata من yt-dlp.
+- **تقدير الحجم المتوقع** عندما توفره المنصة.
+- **Size Risk** لتجنب فشل Telegram بسبب الملفات الكبيرة.
+- **Badges ذكية** مثل Viral / Short-form / HD / Album-ready / Audio optimized.
+
+### لماذا هذه ميزة عالمية؟
+بدل تجربة تنزيل عمياء، المستخدم يعرف قبل الضغط هل الأفضل تحميل فيديو، جودة أقل، أو MP3. هذا يقلل الفشل، يسرّع الاختيار، ويعطي إحساس Premium لا تقدمه معظم بوتات التحميل.
+
+### المرحلة القادمة
+- توصية تلقائية بزر واحد: “Smart Download”.
+- تحليل احتمالية Watermark حسب المنصة.
+- تقدير زمن التحميل بناءً على حجم الملف وحالة السيرفر.
+- تنبيه أدمن عندما تزيد نسبة فشل منصة معينة.
+"""
+
+
 def render_development_plan():
     return """
 ## 🚀 خطة تحويل X Downloader لمنتج عالمي
@@ -212,6 +235,7 @@ def render_development_plan():
 - زر **MP3 / صوت فقط** يظهر مع الفيديوهات مباشرة من أزرار Telegram.
 - لوحة Live metrics لعدد المستخدمين، التحميلات، الكاش، وأحدث العمليات.
 - تنبيه أمان واضح يمنع تسريب التوكنات داخل الواجهة أو السجلات.
+- **Smart Content Intelligence**: تقييم الرابط، أفضل جودة، تقدير الحجم، ومخاطرة Telegram قبل التحميل.
 
 ### Bot UX — الأولوية القادمة
 1. اختيار واضح: فيديو أفضل جودة / جودة محددة / MP3 فقط / صورة / ألبوم.
@@ -348,6 +372,9 @@ with gr.Blocks(css=CUSTOM_CSS, title="X Downloader Control Center") as demo:
     with gr.Tab("🧠 Engine Arsenal"):
         engine_refresh_btn = gr.Button("🔄 Refresh Engine Status", variant="primary")
         engine_md = gr.Markdown(render_engine_arsenal(), elem_classes=["xd-card"])
+
+    with gr.Tab("✨ Content Intelligence"):
+        gr.Markdown(render_content_intelligence(), elem_classes=["xd-card"])
 
     with gr.Tab("🚀 Global Growth Plan"):
         gr.Markdown(render_development_plan(), elem_classes=["xd-card"])
