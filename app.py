@@ -175,30 +175,31 @@ def render_overview():
 
 def render_development_plan():
     return """
-## 🚀 خطة التطوير التنفيذية المقترحة
+## 🚀 خطة تحويل X Downloader لمنتج عالمي
 
-### المرحلة الحالية — تم البدء
-- لوحة مراقبة احترافية بدل صفحة status بسيطة.
-- قراءة live metrics من SQLite.
-- عرض حالة التوكن، Redis، Media Vault، والكاش.
+### تم تنفيذه الآن
+- واجهة Control Center جديدة بتصميم احترافي ومناسب للإطلاق.
+- زر **MP3 / صوت فقط** يظهر مع الفيديوهات مباشرة من أزرار Telegram.
+- لوحة Live metrics لعدد المستخدمين، التحميلات، الكاش، وأحدث العمليات.
+- تنبيه أمان واضح يمنع تسريب التوكنات داخل الواجهة أو السجلات.
 
-### المرحلة التالية — Bot Engine
-1. Queue حقيقي للتحميلات الثقيلة مع أولوية Premium.
-2. اختيار الجودة والصيغة من Telegram قبل التحميل.
-3. Progress messages دقيقة: فحص → تحميل → معالجة → رفع.
-4. إعادة استخدام الملفات من Media Vault بدل إعادة التحميل.
+### Bot UX — الأولوية القادمة
+1. اختيار واضح: فيديو أفضل جودة / جودة محددة / MP3 فقط / صورة / ألبوم.
+2. رسائل تقدم مفهومة: تحليل الرابط → اختيار الصيغة → تحميل → معالجة → رفع.
+3. زر إلغاء للتحميلات الطويلة، ورسائل فشل بشرح قابل للتنفيذ.
+4. قوالب عربية وإنجليزية قصيرة وقوية لكل المنصات.
 
-### مرحلة المنتج
-1. نظام نقاط واشتراكات.
-2. Referral rewards.
-3. لوحة Admin Web كاملة مع ban/broadcast/settings.
-4. تنبيهات أعطال للأدمن داخل Telegram.
+### Scale & Reliability
+1. Redis queue للتحميلات الثقيلة وحدود استخدام دقيقة لكل مستخدم.
+2. Media Vault دائم لتسليم الملفات من الكاش بدل إعادة التنزيل.
+3. تحديث yt-dlp تلقائي/مراقب مع fallback engines لكل منصة.
+4. مراقبة أخطاء فورية للأدمن عبر Telegram.
 
-### مرحلة الإنتاج
-1. نقل الأسرار بالكامل إلى Environment Variables.
-2. Redis إلزامي للـ rate limiting في الإنتاج.
-3. PostgreSQL بدل SQLite عند التوسع الكبير.
-4. Docker + CI/CD + مراقبة uptime.
+### Monetization & Growth
+1. خطط مجانية/مدفوعة ونقاط يومية وإحالات.
+2. صفحة هبوط عامة تعرض المنصات المدعومة والمزايا.
+3. لوحة Admin لإدارة الحظر، البث، الإعدادات، والاشتراكات.
+4. تجهيز Docker + CI/CD + قاعدة بيانات PostgreSQL عند التوسع.
 """
 
 
@@ -228,16 +229,42 @@ def start_bot():
 threading.Thread(target=start_bot, daemon=True, name="telegram-bot-thread").start()
 
 CUSTOM_CSS = """
+:root {
+    --xd-bg: #07110d;
+    --xd-panel: rgba(12, 28, 21, 0.78);
+    --xd-panel-strong: rgba(18, 44, 34, 0.94);
+    --xd-border: rgba(144, 238, 188, 0.18);
+    --xd-accent: #24d18f;
+    --xd-accent-2: #67e8f9;
+    --xd-text: #eefcf5;
+    --xd-muted: #a8c7ba;
+}
 .gradio-container {
-    max-width: 1180px !important;
+    max-width: 1240px !important;
     margin: auto !important;
+    font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif !important;
+    background:
+        radial-gradient(circle at 15% 5%, rgba(36, 209, 143, 0.18), transparent 34%),
+        radial-gradient(circle at 85% 0%, rgba(103, 232, 249, 0.16), transparent 30%),
+        var(--xd-bg) !important;
+    color: var(--xd-text) !important;
 }
-.dashboard-hero {
-    border: 1px solid rgba(120, 120, 120, 0.22);
-    border-radius: 24px;
+.dashboard-hero, .xd-card {
+    border: 1px solid var(--xd-border);
+    border-radius: 28px;
     padding: 28px;
-    background: linear-gradient(135deg, rgba(22, 163, 74, 0.12), rgba(14, 116, 144, 0.10));
+    background: linear-gradient(145deg, var(--xd-panel-strong), rgba(7, 17, 13, 0.72));
+    box-shadow: 0 24px 70px rgba(0, 0, 0, 0.28);
 }
+.dashboard-hero h1 { letter-spacing: -0.04em; font-size: 42px !important; }
+.dashboard-hero p, .xd-card p, .xd-card li { color: var(--xd-muted); font-size: 16px; line-height: 1.75; }
+.xd-badges { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 18px; }
+.xd-badge { border: 1px solid var(--xd-border); color: var(--xd-text); background: rgba(36, 209, 143, 0.10); padding: 8px 12px; border-radius: 999px; font-size: 13px; }
+.xd-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; margin: 18px 0 8px; }
+.xd-mini { border: 1px solid var(--xd-border); border-radius: 20px; padding: 16px; background: rgba(255,255,255,0.04); }
+.xd-mini strong { display: block; font-size: 22px; color: var(--xd-accent); }
+button.primary { background: var(--xd-accent) !important; color: #03100b !important; border-radius: 14px !important; font-weight: 800 !important; }
+@media (max-width: 780px) { .xd-grid { grid-template-columns: 1fr; } .dashboard-hero h1 { font-size: 30px !important; } }
 """
 
 with gr.Blocks(css=CUSTOM_CSS, title="X Downloader Control Center") as demo:
@@ -245,31 +272,51 @@ with gr.Blocks(css=CUSTOM_CSS, title="X Downloader Control Center") as demo:
         """
 <div class="dashboard-hero">
 
-# 🤖 X Downloader Control Center
-لوحة مراقبة وتشغيل للبوت: حالة السيرفر، بيانات الاستخدام، الكاش، الإعدادات، وخطة التطوير.
+# X Downloader Control Center
+لوحة قيادة عالمية لبوت تحميل الوسائط: فيديو، صور، ألبومات، و **MP3 صوت فقط** من المنصات الكبرى مع كاش ذكي ومراقبة مباشرة.
+
+<div class="xd-badges">
+  <span class="xd-badge">YouTube / Shorts</span>
+  <span class="xd-badge">TikTok No Watermark</span>
+  <span class="xd-badge">Instagram Reels</span>
+  <span class="xd-badge">SoundCloud Audio</span>
+  <span class="xd-badge">MP3 Audio Only</span>
+  <span class="xd-badge">Smart Cache</span>
+</div>
+
+<div class="xd-grid">
+  <div class="xd-mini"><strong>13+</strong>Supported global platforms</div>
+  <div class="xd-mini"><strong>MP3</strong>زر صوت فقط يظهر مع كل فيديو</div>
+  <div class="xd-mini"><strong>Live</strong>Metrics, cache, limits and health</div>
+</div>
 
 </div>
         """
     )
 
-    with gr.Tab("📊 Live Overview"):
+    with gr.Tab("📊 Live Command Center"):
         refresh_btn = gr.Button("🔄 Refresh Dashboard", variant="primary")
-        overview_md = gr.Markdown()
-        error_md = gr.Markdown()
+        overview_md = gr.Markdown(elem_classes=["xd-card"])
+        error_md = gr.Markdown(elem_classes=["xd-card"])
         with gr.Row():
             top_platforms_df = gr.Dataframe(label="Top Platforms", interactive=False)
             recent_downloads_df = gr.Dataframe(label="Recent Downloads", interactive=False)
 
-    with gr.Tab("⚙️ Runtime Config"):
-        config_md = gr.Markdown()
+    with gr.Tab("⚙️ Runtime & Security"):
+        config_md = gr.Markdown(elem_classes=["xd-card"])
         gr.Markdown(
             """
-> ملاحظة أمان: لا تعرض هذه اللوحة قيمة التوكن نفسها. الأفضل وضع `TELEGRAM_BOT_TOKEN` في متغيرات البيئة وعدم الاعتماد على `token.txt` في الإنتاج.
+<div class="xd-card">
+
+### Security note
+لا تعرض هذه اللوحة قيمة التوكن نفسها. استخدم `TELEGRAM_BOT_TOKEN` كمتغير بيئة، ولا تلصق أي GitHub أو Telegram token في الشات أو الكود.
+
+</div>
             """
         )
 
-    with gr.Tab("🧭 Development Plan"):
-        gr.Markdown(render_development_plan())
+    with gr.Tab("🚀 Global Growth Plan"):
+        gr.Markdown(render_development_plan(), elem_classes=["xd-card"])
 
     refresh_btn.click(
         render_overview,

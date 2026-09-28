@@ -136,17 +136,21 @@ def _friendly_error(lang: str, info: dict) -> str:
 def _build_action_keyboard(
     media_type: str, qualities: list, lang: str, album_count: int = 0, info: dict | None = None
 ) -> list:
-    """Video: best + quality buttons only (audio is always included in the video file)."""
+    """Build clear download actions, including MP3/audio-only for videos."""
     keyboard = []
     if info and info.get("downloadable") is False:
         keyboard.append([InlineKeyboardButton(t(lang, "why_no_download"), callback_data="dl_unavailable")])
         return keyboard
     if media_type == "video":
-        keyboard.append([InlineKeyboardButton(t(lang, "best_quality"), callback_data="dl_video_best")])
+        keyboard.append([
+            InlineKeyboardButton(t(lang, "best_quality"), callback_data="dl_video_best"),
+            InlineKeyboardButton("🎧 MP3 / صوت فقط", callback_data="dl_audio"),
+        ])
         if qualities:
             for q in qualities[-3:]:
                 keyboard.append([
-                    InlineKeyboardButton(f"📹 {q['label']}", callback_data=f"dl_video_{q['label']}")
+                    InlineKeyboardButton(f"📹 {q['label']}", callback_data=f"dl_video_{q['label']}"),
+                    InlineKeyboardButton(f"🎧 {q['label']} Audio", callback_data="dl_audio"),
                 ])
     elif media_type == "audio":
         keyboard.append([InlineKeyboardButton(t(lang, "download_audio"), callback_data="dl_audio")])
