@@ -380,17 +380,18 @@ def _set_maintenance(enabled: bool):
     from utils.maintenance import set_maintenance_mode
     set_maintenance_mode(enabled)
 
-async def admin_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def admin_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
+    """Handle pending admin text input. Returns True when the message was consumed."""
     user_id = update.effective_user.id
     if not is_admin(user_id) or user_id not in ADMIN_CONVERSATION_STATES:
-        return
+        return False
     state = ADMIN_CONVERSATION_STATES.pop(user_id)
     text = update.message.text.strip()
     if state == "search":
         results = search_users(text)
         if not results:
             await update.message.reply_text("❌ لم يتم العثور على مستخدمين.")
-            return
+            return True
         await update.message.reply_text(f"🔍 تم العثور على {len(results)} مستخدمين. استخدم /admin لعرضهم.")
     elif state == "broadcast":
         all_ids = get_all_user_ids()
@@ -406,7 +407,8 @@ async def admin_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
         results = search_users(text)
         if not results:
             await update.message.reply_text("❌ لم يتم العثور على المستخدم.")
-            return
+            return True
         target = results[0]['user_id']
         ban_user(target)
         await update.message.reply_text(f"🚫 تم حظر المستخدم {target} بنجاح.")
+    return True

@@ -54,7 +54,8 @@ async def message_router(update: Update, context):
 
     # --- Admin text handler ---
     from handlers.admin import admin_text_handler
-    await admin_text_handler(update, context)
+    if await admin_text_handler(update, context):
+        return
 
     # --- URL detection ---
     if text.startswith(("http://", "https://")):
@@ -123,7 +124,6 @@ def build_application() -> Application:
     app.add_handler(CallbackQueryHandler(language_callback,            pattern="^lang_"))
     app.add_handler(CallbackQueryHandler(settings_callback,            pattern="^settings_"))
     app.add_handler(CallbackQueryHandler(download_callback,            pattern="^dl_"))
-    app.add_handler(CallbackQueryHandler(download_callback,            pattern="^fav_"))
 
     app.add_handler(MessageHandler(
         filters.TEXT & ~filters.COMMAND,
