@@ -197,7 +197,6 @@ def _build_action_keyboard(
             for q in qualities[-3:]:
                 keyboard.append([
                     InlineKeyboardButton(f"📹 {q['label']}", callback_data=f"dl_video_{q['label']}"),
-                    InlineKeyboardButton(f"🎧 {q['label']} Audio", callback_data="dl_audio"),
                 ])
     elif media_type == "audio":
         keyboard.append([InlineKeyboardButton(t(lang, "download_audio"), callback_data="dl_audio")])
@@ -248,6 +247,12 @@ async def download_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.answer(t(lang, "rate_limit", seconds=rl.wait_seconds), show_alert=True)
         return
 
+    allowed_prefixes = ("dl_video_",)
+    allowed_exact = {"dl_smart", "dl_audio", "dl_image", "dl_album"}
+    if data not in allowed_exact and not data.startswith(allowed_prefixes):
+        await query.answer(t(lang, "session_expired"), show_alert=True)
+        return
+
     await query.answer()
     smart_mode = data == "dl_smart"
     if smart_mode:
@@ -258,10 +263,10 @@ async def download_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         is_album = data == "dl_album"
         quality_label = "audio" if is_audio else ("image" if is_image else data.replace("dl_video_", ""))
 
-    if smart_mode:
+    if smart_mode and not is_audio:
         try:
             edit_fn = query.edit_message_caption if query.message.caption else query.edit_message_text
-            chosen = "MP3 audio" if is_audio else ("image" if is_image else ("album" if is_album else f"video {quality_label}"))
+            chosen = "image" if is_image else ("album" if is_album else f"video {quality_label}")
             await edit_fn(f"⚡ <b>Smart Download selected:</b> {chosen}", parse_mode="HTML")
         except Exception:
             pass
