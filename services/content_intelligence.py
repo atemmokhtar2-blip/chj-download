@@ -6,7 +6,7 @@ from typing import Any
 from config.settings import MAX_FILE_SIZE_BYTES
 
 
-@dataclass(slots=True)
+@dataclass
 class ContentIntelligence:
     score: int
     recommendation: str

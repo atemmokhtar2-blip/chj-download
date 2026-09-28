@@ -173,6 +173,14 @@ def render_overview():
     return overview, top_platforms, recent_downloads, config_md, error_md
 
 
+def render_health_center():
+    try:
+        from services.runtime_diagnostics import render_diagnostics_html
+        return render_diagnostics_html().replace("\n", "  \n")
+    except Exception as exc:
+        return f"❌ Health diagnostics unavailable: `{exc}`"
+
+
 def render_engine_arsenal():
     try:
         from services.engine_maintenance import get_ytdlp_version
@@ -369,6 +377,10 @@ with gr.Blocks(css=CUSTOM_CSS, title="X Downloader Control Center") as demo:
             """
         )
 
+    with gr.Tab("🩺 Health Center"):
+        health_refresh_btn = gr.Button("🔄 Run Healthcheck", variant="primary")
+        health_md = gr.Markdown(render_health_center(), elem_classes=["xd-card"])
+
     with gr.Tab("🧠 Engine Arsenal"):
         engine_refresh_btn = gr.Button("🔄 Refresh Engine Status", variant="primary")
         engine_md = gr.Markdown(render_engine_arsenal(), elem_classes=["xd-card"])
@@ -380,6 +392,7 @@ with gr.Blocks(css=CUSTOM_CSS, title="X Downloader Control Center") as demo:
         gr.Markdown(render_development_plan(), elem_classes=["xd-card"])
 
     engine_refresh_btn.click(render_engine_arsenal, outputs=[engine_md])
+    health_refresh_btn.click(render_health_center, outputs=[health_md])
 
     refresh_btn.click(
         render_overview,

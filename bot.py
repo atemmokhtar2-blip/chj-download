@@ -22,7 +22,7 @@ from handlers.start import (
 from handlers.download import handle_url, download_callback
 from handlers.admin import (
     admin_command, admin_callback, send_update_announcement,
-    engine_status_command, update_ytdlp_command,
+    engine_status_command, update_ytdlp_command, health_command,
 )
 from workers.cleanup import cleanup_temp_files, cleanup_old_cache
 
@@ -30,6 +30,12 @@ from workers.cleanup import cleanup_temp_files, cleanup_old_cache
 MENU_BUTTONS = {
     "📥 Download",    "📥 تحميل",
 }
+
+
+async def ping_command(update: Update, context):
+    """Lightweight liveness check for every user."""
+    await update.effective_message.reply_text("🏓 Pong — X Downloader is online.")
+
 
 async def message_router(update: Update, context):
     """Route text messages — handle menu buttons and URLs."""
@@ -96,6 +102,7 @@ def build_application() -> Application:
     app.add_handler(start_conv)
     app.add_handler(CommandHandler("help",     help_command))
     app.add_handler(CommandHandler("settings", settings_command))
+    app.add_handler(CommandHandler("ping", ping_command))
 
     # Admin handlers
     app.add_handler(CommandHandler("admin", admin_command))
@@ -110,6 +117,7 @@ def build_application() -> Application:
     app.add_handler(CommandHandler("announce_update", send_update_announcement))
     app.add_handler(CommandHandler("engine_status", engine_status_command))
     app.add_handler(CommandHandler("update_ytdlp", update_ytdlp_command))
+    app.add_handler(CommandHandler("health", health_command))
 
     app.add_handler(CallbackQueryHandler(admin_callback, pattern="^admin_"))
     app.add_handler(CallbackQueryHandler(language_callback,            pattern="^lang_"))
