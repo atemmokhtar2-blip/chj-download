@@ -1,162 +1,64 @@
+from __future__ import annotations
+
 import re
-import os
-import hashlib
 from urllib.parse import urlparse
+
 from config.settings import SUPPORTED_DOMAINS
 
 
 def is_valid_url(url: str) -> bool:
     try:
-        result = urlparse(url)
-        return all([result.scheme in ("http", "https"), result.netloc])
+        parsed = urlparse(url.strip())
+        return parsed.scheme in {"http", "https"} and bool(parsed.netloc)
     except Exception:
         return False
 
 
 def is_supported_url(url: str) -> bool:
-    try:
-        netloc = urlparse(url).netloc.lower().lstrip("www.")
-        return any(domain in netloc for domain in SUPPORTED_DOMAINS)
-    except Exception:
+    if not is_valid_url(url):
         return False
+    host = urlparse(url).netloc.lower().replace("www.", "")
+    return any(host == d.replace("www.", "") or host.endswith("." + d.replace("www.", "")) for d in SUPPORTED_DOMAINS)
 
 
-def get_platform(url: str) -> str:
-    # Strip the leading "www." and trailing TLD-agnostic part for robust matching.
-    # We must compare full hostnames because naive substring checks are fragile:
-    #   "t.co" is a substring of "pinterest.com" (in the ".com" suffix),
-    #   "fb.com" could clash with other domains, etc.
-    netloc = urlparse(url).netloc.lower().lstrip("www.")
+def truncate_title(title: str, max_len: int = 90) -> str:
+    title = re.sub(r"\s+", " ", str(title or "Untitled")).strip()
+    return title if len(title) <= max_len else title[: max_len - 1].rstrip() + "…"
 
-    # Most-specific / multi-TLD platforms first
-    if netloc in ("pinterest.com", "pin.it") or netloc.endswith(
-        (".pinterest.com", "pinterest.fr", "pinterest.co.uk", "pinterest.de",
-         "pinterest.jp", "pinterest.ca", "pinterest.es", "pinterest.it",
-         "pinterest.com.au", "pinterest.com.mx", "pinterest.nz",
-         ".pinterest.fr", ".pinterest.co.uk", ".pinterest.de",
-         ".pinterest.jp", ".pinterest.ca", ".pinterest.es", ".pinterest.it",
-         ".pinterest.com.au", ".pinterest.com.mx", ".pinterest.nz")
-    ) or "pinterest." in netloc:
-        return "Pinterest"
-    if netloc == "youtu.be" or "youtube" in netloc or netloc.endswith(".youtube.com"):
-        return "YouTube"
-    if "tiktok" in netloc:
-        return "TikTok"
-    if netloc == "instagr.am" or "instagram" in netloc:
-        return "Instagram"
-    if netloc in ("fb.watch", "fb.com") or "facebook" in netloc:
-        return "Facebook"
-    # Twitter / X: match exact short domains only, not substrings
-    if netloc in ("x.com", "t.co", "fixupx.com", "fxtwitter.com") or "twitter" in netloc:
-        return "Twitter/X"
-    if "threads.net" in netloc:
-        return "Threads"
-    if "reddit" in netloc or netloc == "redd.it" or netloc.endswith(".redd.it"):
-        return "Reddit"
-    if "snapchat" in netloc:
-        return "Snapchat"
-    if "vimeo" in netloc:
-        return "Vimeo"
-    if "dailymotion" in netloc or "dai.ly" in netloc:
-        return "Dailymotion"
-    if "soundcloud" in netloc:
-        return "SoundCloud"
-    if "spotify" in netloc:
-        return "Spotify"
-    if "t.me" in netloc or "telegram.me" in netloc:
-        return "Telegram"
-    if "likee" in netloc:
-        return "Likee"
-    return "Unknown"
+
+def make_progress_bar(percent: float, width: int = 10) -> str:
+    pct = max(0, min(100, int(percent or 0)))
+    filled = round(width * pct / 100)
+    return "[" + "█" * filled + "░" * (width - filled) + "]"
+
+
+def format_size(size: int | float | None) -> str:
+    if not size:
+        return "0 B"
+    size = float(size)
+    for unit in ("B", "KB", "MB", "GB"):
+        if size < 1024:
+            return f"{size:.1f} {unit}" if unit != "B" else f"{int(size)} {unit}"
+        size /= 1024
+    return f"{size:.1f} TB"
 
 
 def get_platform_emoji(platform: str) -> str:
-    emojis = {
-        "YouTube":     "🎬",
-        "TikTok":      "🎵",
-        "Instagram":   "📸",
-        "Facebook":    "📘",
-        "Twitter/X":   "🐦",
-        "Threads":     "🧵",
-        "Reddit":      "🤖",
-        "Pinterest":   "📌",
-        "Snapchat":    "👻",
-        "Vimeo":       "🎥",
-        "Dailymotion": "📹",
-        "SoundCloud":  "🎧",
-        "Spotify":     "🎶",
-        "Telegram":    "✈️",
-        "Likee":       "🎤",
-    }
-    return emojis.get(platform, "🌐")
-
-
-def format_duration(seconds: int) -> str:
-    if not seconds:
-        return "Unknown"
-    h = seconds // 3600
-    m = (seconds % 3600) // 60
-    s = seconds % 60
-    if h:
-        return f"{h}:{m:02d}:{s:02d}"
-    return f"{m}:{s:02d}"
-
-
-def format_size(bytes_val: int) -> str:
-    if not bytes_val:
-        return "Unknown"
-    for unit in ["B", "KB", "MB", "GB"]:
-        if bytes_val < 1024:
-            return f"{bytes_val:.1f} {unit}"
-        bytes_val /= 1024
-    return f"{bytes_val:.1f} TB"
-
-
-def sanitize_filename(name: str) -> str:
-    name = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "_", name)
-    name = name.strip(". ")
-    return name[:200] or "download"
+    p = (platform or "").lower()
+    if "youtube" in p: return "▶️"
+    if "tiktok" in p: return "🎵"
+    if "instagram" in p: return "📸"
+    if "facebook" in p: return "📘"
+    if p in {"twitter", "x"} or "twitter" in p: return "𝕏"
+    if "soundcloud" in p: return "☁️"
+    if "reddit" in p: return "👽"
+    if "pinterest" in p: return "📌"
+    return "🌐"
 
 
 def get_display_name(user) -> str:
-    if user.first_name and user.last_name:
-        return f"{user.first_name} {user.last_name}"
-    return user.first_name or user.username or str(user.id)
-
-
-def truncate_title(title: str, max_len: int = 50) -> str:
-    if len(title) <= max_len:
-        return title
-    return title[:max_len - 3] + "..."
-
-
-def make_progress_bar(percent: int, length: int = 10) -> str:
-    percent = max(0, min(100, percent))
-    filled = int(percent / 100 * length)
-    empty = length - filled
-    return "█" * filled + "░" * empty
-
-
-def get_level(points: int, lang: str = "en") -> str:
-    if lang == "ar":
-        if points >= 1000:
-            return "🔱 أسطوري"
-        elif points >= 500:
-            return "💎 الماس"
-        elif points >= 250:
-            return "🥇 ذهبي"
-        elif points >= 100:
-            return "🥈 فضي"
-        else:
-            return "🥉 برونزي"
-    else:
-        if points >= 1000:
-            return "🔱 Legend"
-        elif points >= 500:
-            return "💎 Diamond"
-        elif points >= 250:
-            return "🥇 Gold"
-        elif points >= 100:
-            return "🥈 Silver"
-        else:
-            return "🥉 Bronze"
+    first = getattr(user, "first_name", "") or ""
+    last = getattr(user, "last_name", "") or ""
+    username = getattr(user, "username", "") or ""
+    full = (first + " " + last).strip()
+    return full or ("@" + username if username else str(getattr(user, "id", "User")))

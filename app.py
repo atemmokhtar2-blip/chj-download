@@ -173,6 +173,36 @@ def render_overview():
     return overview, top_platforms, recent_downloads, config_md, error_md
 
 
+def render_engine_arsenal():
+    try:
+        from services.engine_maintenance import get_ytdlp_version
+        from services.engines import list_engines
+        version = get_ytdlp_version()
+        engines = list_engines()
+    except Exception as exc:
+        return f"⚠️ Engine diagnostics unavailable: `{exc}`"
+
+    engine_lines = "\n".join(f"- ✅ **{engine['name']}** — ready" for engine in engines)
+    return f"""
+## 🧠 Engine Arsenal
+
+- **yt-dlp version:** `{version}`
+- **Active engines:** `{len(engines)}`
+- **Audio-only pipeline:** MP3 extraction via FFmpeg post-processing.
+- **Video pipeline:** best quality + selectable qualities when available.
+- **Reliability:** retry, fragment retry, cache delivery, concurrency guard, rate limits.
+
+### Engines
+{engine_lines}
+
+### Recommended production switches
+- Add `TELEGRAM_BOT_TOKEN` as an environment variable.
+- Add `STORAGE_CHANNEL_ID` for durable Telegram Media Vault cache.
+- Add `REDIS_URL` for distributed rate limits when scaling.
+- Add cookies/proxy only for platforms that require them.
+"""
+
+
 def render_development_plan():
     return """
 ## 🚀 خطة تحويل X Downloader لمنتج عالمي
@@ -315,8 +345,14 @@ with gr.Blocks(css=CUSTOM_CSS, title="X Downloader Control Center") as demo:
             """
         )
 
+    with gr.Tab("🧠 Engine Arsenal"):
+        engine_refresh_btn = gr.Button("🔄 Refresh Engine Status", variant="primary")
+        engine_md = gr.Markdown(render_engine_arsenal(), elem_classes=["xd-card"])
+
     with gr.Tab("🚀 Global Growth Plan"):
         gr.Markdown(render_development_plan(), elem_classes=["xd-card"])
+
+    engine_refresh_btn.click(render_engine_arsenal, outputs=[engine_md])
 
     refresh_btn.click(
         render_overview,
