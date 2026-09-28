@@ -137,6 +137,46 @@ def _friendly_error(lang: str, info: dict) -> str:
     return t(lang, "analysis_failed")
 
 
+def _quality_height(label: str) -> int:
+    try:
+        return int(str(label).lower().replace("p", "").strip())
+    except Exception:
+        return 0
+
+
+def _pick_smart_download(info: dict) -> tuple[bool, bool, bool, str]:
+    """Return (is_audio, is_image, is_album, quality_label) for one-tap smart mode."""
+    media_type = info.get("media_type", "video")
+    if media_type == "audio":
+        return True, False, False, "audio"
+    if media_type == "image":
+        return False, True, False, "image"
+    if media_type == "album":
+        return False, False, True, "album"
+
+    intel = info.get("intelligence") or {}
+    risk = str(intel.get("risk") or "unknown").lower()
+    qualities = info.get("qualities") or []
+
+    if risk == "high" or "Long video" in " • ".join(intel.get("badges") or []):
+        return True, False, False, "audio"
+
+    if risk == "medium" and qualities:
+        safe_quality = None
+        for q in sorted(qualities, key=lambda item: _quality_height(item.get("label", "0p")), reverse=True):
+            label = q.get("label", "")
+            if _quality_height(label) <= 720:
+                safe_quality = label
+                break
+        if safe_quality:
+            return False, False, False, safe_quality
+
+    best_quality = intel.get("best_quality") or "best"
+    if not best_quality or best_quality == "best":
+        return False, False, False, "best"
+    return False, False, False, str(best_quality)
+
+
 def _build_action_keyboard(
     media_type: str, qualities: list, lang: str, album_count: int = 0, info: dict | None = None
 ) -> list:
@@ -146,6 +186,9 @@ def _build_action_keyboard(
         keyboard.append([InlineKeyboardButton(t(lang, "why_no_download"), callback_data="dl_unavailable")])
         return keyboard
     if media_type == "video":
+        keyboard.append([
+            InlineKeyboardButton("⚡ Smart Download", callback_data="dl_smart"),
+        ])
         keyboard.append([
             InlineKeyboardButton(t(lang, "best_quality"), callback_data="dl_video_best"),
             InlineKeyboardButton("🎧 MP3 / صوت فقط", callback_data="dl_audio"),
@@ -206,10 +249,22 @@ async def download_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     await query.answer()
-    is_audio = data == "dl_audio"
-    is_image = data == "dl_image"
-    is_album = data == "dl_album"
-    quality_label = "audio" if is_audio else ("image" if is_image else data.replace("dl_video_", ""))
+    smart_mode = data == "dl_smart"
+    if smart_mode:
+        is_audio, is_image, is_album, quality_label = _pick_smart_download(info)
+    else:
+        is_audio = data == "dl_audio"
+        is_image = data == "dl_image"
+        is_album = data == "dl_album"
+        quality_label = "audio" if is_audio else ("image" if is_image else data.replace("dl_video_", ""))
+
+    if smart_mode:
+        try:
+            edit_fn = query.edit_message_caption if query.message.caption else query.edit_message_text
+            chosen = "MP3 audio" if is_audio else ("image" if is_image else ("album" if is_album else f"video {quality_label}"))
+            await edit_fn(f"⚡ <b>Smart Download selected:</b> {chosen}", parse_mode="HTML")
+        except Exception:
+            pass
 
     if is_album:
         cached_album = get_cached_album(info["url"])
