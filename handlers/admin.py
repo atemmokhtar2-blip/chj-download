@@ -28,6 +28,12 @@ from config.settings import YTDLP_COOKIES_FILE, YTDLP_COOKIES_FROM_BROWSER, DOWN
 logger = logging.getLogger(__name__)
 
 ADMIN_CONVERSATION_STATES = {}
+_ADMIN_TEXT_STATES = {"search", "ban", "broadcast"}
+
+
+def _clear_admin_state(user_id: int) -> None:
+    ADMIN_CONVERSATION_STATES.pop(user_id, None)
+
 
 UPDATE_ANNOUNCEMENT_TEXT = """
 🚀 <b>تم تحديث البوت بنجاح</b>
@@ -205,18 +211,26 @@ async def admin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     db_user = get_user(user.id)
     lang = db_user.get("language", "en") if db_user else "en"
     data = query.data
+    if _invalid_admin_callback(data):
+        await query.answer(t(lang, "session_expired"), show_alert=True)
+        return
     await query.answer()
 
     if data == "admin_panel":
+        _clear_admin_state(user.id)
         await _show_admin_panel(query, lang)
     elif data == "admin_users":
+        _clear_admin_state(user.id)
         await _show_users_page(query, lang, page=0)
     elif data == "admin_broadcast":
+        _clear_admin_state(user.id)
         await _show_broadcast_form(query, lang)
     elif data == "admin_announce_update":
+        _clear_admin_state(user.id)
         await query.edit_message_text("📢 جاري إرسال إعلان التحديث لكل المستخدمين...", parse_mode="HTML")
         await _broadcast_update_message(context, query=query)
     elif data == "admin_engine_status":
+        _clear_admin_state(user.id)
         cookies_ready = bool(YTDLP_COOKIES_FROM_BROWSER or (YTDLP_COOKIES_FILE and os.path.exists(YTDLP_COOKIES_FILE)))
         engines = list_engines()
         engine_lines = "\n".join(f"• <code>{e['name']}</code>" for e in engines)
@@ -230,6 +244,7 @@ async def admin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             parse_mode="HTML",
         )
     elif data == "admin_update_ytdlp":
+        _clear_admin_state(user.id)
         await query.edit_message_text("🔄 جاري تحديث yt-dlp... قد يستغرق دقيقة.", parse_mode="HTML")
         result = await asyncio.get_running_loop().run_in_executor(None, update_ytdlp)
         text = "✅ <b>تم تحديث yt-dlp</b>" if result["ok"] else "❌ <b>فشل تحديث yt-dlp</b>"
@@ -243,51 +258,44 @@ async def admin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         keyboard = [[InlineKeyboardButton("🔙 رجوع", callback_data="admin_panel")]]
         await query.edit_message_text(t(lang, "admin_search_prompt"), reply_markup=InlineKeyboardMarkup(keyboard))
     elif data == "admin_maintenance":
+        _clear_admin_state(user.id)
         await _show_maintenance_toggle(query, lang)
     elif data == "admin_ban":
         ADMIN_CONVERSATION_STATES[user.id] = "ban"
         keyboard = [[InlineKeyboardButton("🔙 رجوع", callback_data="admin_panel")]]
         await query.edit_message_text(t(lang, "admin_ban_prompt"), reply_markup=InlineKeyboardMarkup(keyboard))
     elif data.startswith("admin_users_page_"):
+        _clear_admin_state(user.id)
         page = _callback_int_suffix(data)
-        if page is None or page < 0:
-            await query.answer(t(lang, "session_expired"), show_alert=True)
-            return
         await _show_users_page(query, lang, page=page)
     elif data.startswith("admin_user_detail_"):
+        _clear_admin_state(user.id)
         target_id = _callback_int_suffix(data)
-        if target_id is None:
-            await query.answer(t(lang, "session_expired"), show_alert=True)
-            return
         await _show_user_detail(query, lang, target_id)
     elif data == "admin_maintenance_on":
+        _clear_admin_state(user.id)
         _set_maintenance(True)
         await query.edit_message_text(t(lang, "maintenance_on"))
     elif data == "admin_maintenance_off":
+        _clear_admin_state(user.id)
         _set_maintenance(False)
         await query.edit_message_text(t(lang, "maintenance_off"))
     elif data.startswith("admin_unban_"):
+        _clear_admin_state(user.id)
         target_id = _callback_int_suffix(data)
-        if target_id is None:
-            await query.answer(t(lang, "session_expired"), show_alert=True)
-            return
         unban_user(target_id)
-        await query.answer(t(lang, "admin_unbanned"))
         await _show_user_detail(query, lang, target_id)
     elif data.startswith("admin_ban_confirm_"):
+        _clear_admin_state(user.id)
         target_id = _callback_int_suffix(data)
-        if target_id is None:
-            await query.answer(t(lang, "session_expired"), show_alert=True)
-            return
         ban_user(target_id)
-        await query.answer(t(lang, "admin_banned"))
         await _show_user_detail(query, lang, target_id)
     elif data == "admin_send_broadcast":
         ADMIN_CONVERSATION_STATES[user.id] = "broadcast"
         keyboard = [[InlineKeyboardButton("🔙 رجوع", callback_data="admin_panel")]]
         await query.edit_message_text(t(lang, "admin_broadcast_message_prompt"), reply_markup=InlineKeyboardMarkup(keyboard))
     else:
-        await query.answer(t(lang, "session_expired"), show_alert=True)
+        logger.warning("Unhandled admin callback after validation: %s", data)
 
 async def _show_admin_panel(query, lang: str):
     total_users = get_total_users()
@@ -402,12 +410,29 @@ def _callback_int_suffix(data: str) -> int | None:
         return None
 
 
+def _invalid_admin_callback(data: str) -> bool:
+    if data.startswith("admin_users_page_"):
+        page = _callback_int_suffix(data)
+        return page is None or page < 0
+    if data.startswith(("admin_user_detail_", "admin_unban_", "admin_ban_confirm_")):
+        return _callback_int_suffix(data) is None
+    known = {
+        "admin_panel", "admin_users", "admin_broadcast", "admin_announce_update",
+        "admin_engine_status", "admin_update_ytdlp", "admin_search", "admin_maintenance",
+        "admin_ban", "admin_maintenance_on", "admin_maintenance_off", "admin_send_broadcast",
+    }
+    return data not in known
+
+
 async def admin_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
     """Handle pending admin text input. Returns True when the message was consumed."""
     user_id = update.effective_user.id
     if not is_admin(user_id) or user_id not in ADMIN_CONVERSATION_STATES:
         return False
     state = ADMIN_CONVERSATION_STATES.pop(user_id)
+    if state not in _ADMIN_TEXT_STATES:
+        logger.warning("Dropped unknown admin text state for user=%s: %s", user_id, state)
+        return False
     text = update.message.text.strip()
     if state == "search":
         results = search_users(text)
