@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from .db import db_cursor
 
 def get_user(user_id: int) -> dict | None:

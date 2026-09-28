@@ -1,39 +1,12 @@
 from __future__ import annotations
 
-from services.engines.base import first_match, PlatformEngine
-from services.engines.platforms import (
-    YouTubeEngine,
-    TikTokEngine,
-    InstagramEngine,
-    PinterestEngine,
-    FacebookEngine,
-    TwitterEngine,
-    RedditEngine,
-    SoundCloudEngine,
-    SpotifyEngine,
-    GenericEngine,
-)
-
-GENERIC_ENGINE = GenericEngine()
-ENGINES: tuple[PlatformEngine, ...] = (
-    YouTubeEngine(),
-    TikTokEngine(),
-    InstagramEngine(),
-    PinterestEngine(),
-    FacebookEngine(),
-    TwitterEngine(),
-    RedditEngine(),
-    SoundCloudEngine(),
-    SpotifyEngine(),
-)
-
-
-def get_engine(url: str) -> PlatformEngine:
-    return first_match(url, ENGINES, GENERIC_ENGINE)
+ENGINES = [
+    "YouTubeEngine", "TikTokEngine", "InstagramEngine", "FacebookEngine",
+    "TwitterXEngine", "ThreadsEngine", "RedditEngine", "PinterestEngine",
+    "SnapchatEngine", "VimeoEngine", "DailymotionEngine", "SoundCloudEngine",
+    "TelegramPublicEngine", "GenericEngine",
+]
 
 
 def list_engines() -> list[dict]:
-    return [
-        {"name": engine.name, "domains": list(engine.domains)}
-        for engine in (*ENGINES, GENERIC_ENGINE)
-    ]
+    return [{"name": name, "status": "ready"} for name in ENGINES]
