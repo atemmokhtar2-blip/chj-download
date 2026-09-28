@@ -249,10 +249,16 @@ async def admin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         keyboard = [[InlineKeyboardButton("🔙 رجوع", callback_data="admin_panel")]]
         await query.edit_message_text(t(lang, "admin_ban_prompt"), reply_markup=InlineKeyboardMarkup(keyboard))
     elif data.startswith("admin_users_page_"):
-        page = int(data.split("_")[-1])
+        page = _callback_int_suffix(data)
+        if page is None or page < 0:
+            await query.answer(t(lang, "session_expired"), show_alert=True)
+            return
         await _show_users_page(query, lang, page=page)
     elif data.startswith("admin_user_detail_"):
-        target_id = int(data.split("_")[-1])
+        target_id = _callback_int_suffix(data)
+        if target_id is None:
+            await query.answer(t(lang, "session_expired"), show_alert=True)
+            return
         await _show_user_detail(query, lang, target_id)
     elif data == "admin_maintenance_on":
         _set_maintenance(True)
@@ -261,12 +267,18 @@ async def admin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         _set_maintenance(False)
         await query.edit_message_text(t(lang, "maintenance_off"))
     elif data.startswith("admin_unban_"):
-        target_id = int(data.split("_")[-1])
+        target_id = _callback_int_suffix(data)
+        if target_id is None:
+            await query.answer(t(lang, "session_expired"), show_alert=True)
+            return
         unban_user(target_id)
         await query.answer(t(lang, "admin_unbanned"))
         await _show_user_detail(query, lang, target_id)
     elif data.startswith("admin_ban_confirm_"):
-        target_id = int(data.split("_")[-1])
+        target_id = _callback_int_suffix(data)
+        if target_id is None:
+            await query.answer(t(lang, "session_expired"), show_alert=True)
+            return
         ban_user(target_id)
         await query.answer(t(lang, "admin_banned"))
         await _show_user_detail(query, lang, target_id)
@@ -274,6 +286,8 @@ async def admin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ADMIN_CONVERSATION_STATES[user.id] = "broadcast"
         keyboard = [[InlineKeyboardButton("🔙 رجوع", callback_data="admin_panel")]]
         await query.edit_message_text(t(lang, "admin_broadcast_message_prompt"), reply_markup=InlineKeyboardMarkup(keyboard))
+    else:
+        await query.answer(t(lang, "session_expired"), show_alert=True)
 
 async def _show_admin_panel(query, lang: str):
     total_users = get_total_users()
@@ -379,6 +393,14 @@ async def _show_maintenance_toggle(query, lang: str):
 def _set_maintenance(enabled: bool):
     from utils.maintenance import set_maintenance_mode
     set_maintenance_mode(enabled)
+
+
+def _callback_int_suffix(data: str) -> int | None:
+    try:
+        return int(data.rsplit("_", 1)[-1])
+    except (TypeError, ValueError):
+        return None
+
 
 async def admin_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
     """Handle pending admin text input. Returns True when the message was consumed."""

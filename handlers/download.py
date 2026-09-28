@@ -249,7 +249,7 @@ async def download_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     allowed_prefixes = ("dl_video_",)
-    allowed_exact = {"dl_smart", "dl_audio", "dl_image", "dl_album"}
+    allowed_exact = {"dl_smart", "dl_audio", "dl_image", "dl_album", "dl_unavailable"}
     if data not in allowed_exact and not data.startswith(allowed_prefixes):
         await query.answer(t(lang, "session_expired"), show_alert=True)
         return
