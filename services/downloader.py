@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 import tempfile
 from pathlib import Path
@@ -12,6 +13,7 @@ from config.settings import MAX_FILE_SIZE_BYTES, TEMP_DIR, DOWNLOAD_TIMEOUT, DOW
 from services.content_intelligence import build_content_intelligence
 
 ALBUM_MAX_ITEMS = 10
+logger = logging.getLogger(__name__)
 
 
 class FileTooLargeError(Exception):
@@ -33,7 +35,7 @@ def _platform(url: str) -> str:
     return host or "Generic"
 
 
-def _base_opts(progress=None) -> dict:
+def _base_opts(progress=None, loop: asyncio.AbstractEventLoop | None = None) -> dict:
     opts = {
         "quiet": True,
         "no_warnings": True,
@@ -52,22 +54,24 @@ def _base_opts(progress=None) -> dict:
         opts["cookiesfrombrowser"] = (YTDLP_COOKIES_FROM_BROWSER,)
     elif YTDLP_COOKIES_FILE and os.path.exists(YTDLP_COOKIES_FILE):
         opts["cookiefile"] = YTDLP_COOKIES_FILE
-    if progress:
+    if progress and loop:
         def hook(d):
-            if d.get("status") == "downloading":
-                total = d.get("total_bytes") or d.get("total_bytes_estimate") or 0
-                downloaded = d.get("downloaded_bytes") or 0
-                pct = int(downloaded * 100 / total) if total else 0
+            if d.get("status") != "downloading":
+                return
+            total = d.get("total_bytes") or d.get("total_bytes_estimate") or 0
+            downloaded = d.get("downloaded_bytes") or 0
+            pct = int(downloaded * 100 / total) if total else 0
+            try:
                 asyncio.run_coroutine_threadsafe(progress({
                     "pct": pct,
                     "downloaded": downloaded,
                     "total": total,
                     "speed": d.get("speed") or 0,
                     "eta": d.get("eta") or 0,
-                }), asyncio.get_event_loop())
-        # Hooks from executor cannot reliably access the running loop in all environments;
-        # the download still works if progress dispatch fails.
-        opts["progress_hooks"] = []
+                }), loop)
+            except RuntimeError as exc:
+                logger.debug("Progress hook skipped: %s", exc)
+        opts["progress_hooks"] = [hook]
     return opts
 
 
@@ -133,7 +137,8 @@ async def analyze_url(url: str) -> dict | None:
         }
         result["intelligence"] = build_content_intelligence(result, info)
         return result
-    except Exception:
+    except Exception as exc:
+        logger.warning("URL analysis failed for %s: %s", url[:120], exc)
         return None
 
 
@@ -173,13 +178,15 @@ def _download_sync(url: str, opts: dict) -> str | None:
 
 async def download_video(url: str, format_id: str = "best", quality_label: str = "best", progress=None, play_url: str | None = None) -> str | None:
     fmt = "bestvideo+bestaudio/best" if format_id in {"best", "best_quality"} else f"{format_id}+bestaudio/{format_id}/best"
-    opts = {**_base_opts(progress), "format": fmt, "merge_output_format": "mp4"}
+    loop = asyncio.get_running_loop() if progress else None
+    opts = {**_base_opts(progress, loop), "format": fmt, "merge_output_format": "mp4"}
     return await _run_sync(_download_sync, play_url or url, opts)
 
 
 async def download_audio(url: str, progress=None) -> str | None:
+    loop = asyncio.get_running_loop() if progress else None
     opts = {
-        **_base_opts(progress),
+        **_base_opts(progress, loop),
         "format": "bestaudio/best",
         "postprocessors": [{"key": "FFmpegExtractAudio", "preferredcodec": "mp3", "preferredquality": "192"}],
     }
@@ -188,6 +195,7 @@ async def download_audio(url: str, progress=None) -> str | None:
 
 async def download_image(url: str, image_url: str | None = None) -> str | None:
     import requests
+    Path(TEMP_DIR).mkdir(parents=True, exist_ok=True)
     target = image_url or url
     fd, path = tempfile.mkstemp(prefix="xdl-img-", suffix=".jpg", dir=TEMP_DIR)
     os.close(fd)

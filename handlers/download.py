@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import os
 import logging
+import time
 from telegram import (
     Update, InlineKeyboardButton, InlineKeyboardMarkup, InputFile,
     InputMediaPhoto, InputMediaVideo,
@@ -345,16 +346,27 @@ async def download_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception:
         pass
 
+    progress_state = {"last_ts": 0.0, "last_pct": -1}
+
     async def update_progress(prog):
         try:
             if isinstance(prog, dict):
                 pct, dl, tot, spd, eta = prog.get("pct", 0), prog.get("downloaded", 0), prog.get("total", 0), prog.get("speed", 0), prog.get("eta", 0)
-            else: pct, dl, tot, spd, eta = prog, 0, 0, 0, 0
+            else:
+                pct, dl, tot, spd, eta = prog, 0, 0, 0, 0
+            now = time.monotonic()
+            if pct < 100 and (now - progress_state["last_ts"] < 2) and abs(int(pct) - int(progress_state["last_pct"])) < 8:
+                return
+            progress_state["last_ts"] = now
+            progress_state["last_pct"] = int(pct)
             bar = make_progress_bar(pct)
             txt = t(lang, "downloading", bar=bar, percent=pct, downloaded=format_size(dl), total=format_size(tot), speed=f"{format_size(int(spd))}/s", eta=f"{int(eta)}s")
-            if progress_msg.caption: await progress_msg.edit_caption(txt, parse_mode="HTML")
-            else: await progress_msg.edit_text(txt, parse_mode="HTML")
-        except Exception: pass
+            if progress_msg.caption:
+                await progress_msg.edit_caption(txt, parse_mode="HTML")
+            else:
+                await progress_msg.edit_text(txt, parse_mode="HTML")
+        except Exception:
+            pass
 
     try:
         async with download_slot(timeout=180):
@@ -365,7 +377,7 @@ async def download_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except FileTooLargeError:
         await edit_fn(t(lang, "file_too_large", max_size=f"{MAX_FILE_SIZE_MB}MB"))
     except Exception as e:
-        logger.error(f"Download error: {e}")
+        logger.exception("Download error for user=%s url=%s: %s", user.id, str(info.get("url", ""))[:120], e)
         await edit_fn(t(lang, "download_failed"))
     finally:
         active_downloads.pop(user.id, None)
