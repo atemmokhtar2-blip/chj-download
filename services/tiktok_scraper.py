@@ -927,6 +927,12 @@ def download_tiktok_direct(play_url: str, out_path: str) -> Optional[str]:
                     time.sleep(0.5 * (attempt + 1))
                     continue
 
+                ctype = (r.headers.get("Content-Type") or "").lower()
+                if "text/html" in ctype or "application/json" in ctype:
+                    logger.debug(f"direct non-video content-type {ctype} attempt {attempt}")
+                    time.sleep(0.5 * (attempt + 1))
+                    continue
+
                 # Pre-abort when CDN advertises an oversize body.
                 cl = r.headers.get("Content-Length")
                 if cl:

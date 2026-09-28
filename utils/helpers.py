@@ -26,6 +26,13 @@ def truncate_title(title: str, max_len: int = 90) -> str:
     return title if len(title) <= max_len else title[: max_len - 1].rstrip() + "…"
 
 
+def sanitize_filename(name: str, max_len: int = 80) -> str:
+    """Return a filesystem-safe filename stem."""
+    cleaned = re.sub(r"[^\w.()\- ا-ي]+", "_", str(name or "media"), flags=re.UNICODE)
+    cleaned = re.sub(r"_+", "_", cleaned).strip("._ ")
+    return (cleaned or "media")[:max_len]
+
+
 def make_progress_bar(percent: float, width: int = 10) -> str:
     pct = max(0, min(100, int(percent or 0)))
     filled = round(width * pct / 100)

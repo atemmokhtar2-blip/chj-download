@@ -82,7 +82,9 @@ def _base_opts(extra: dict | None = None) -> dict:
         opts["cookiesfrombrowser"] = (YTDLP_COOKIES_FROM_BROWSER,)
     if DOWNLOAD_PROXY:
         opts["proxy"] = DOWNLOAD_PROXY
-    if YTDLP_CLIENT:
+    # YTDLP_CLIENT is a YouTube player profile (android/web/ios), not always a yt-dlp http backend.
+    # Only pass real network backends here; invalid values make YouTube extraction fail.
+    if YTDLP_CLIENT in {"curl_cffi", "requests", "urllib"}:
         opts["http_client"] = YTDLP_CLIENT
     if extra:
         opts.update(extra)

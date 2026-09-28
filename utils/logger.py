@@ -8,3 +8,5 @@ logging.basicConfig(
 )
 
 system_logger = logging.getLogger("x_downloader")
+download_logger = logging.getLogger("x_downloader.download")
+error_logger = logging.getLogger("x_downloader.error")
