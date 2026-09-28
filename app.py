@@ -405,4 +405,12 @@ with gr.Blocks(css=CUSTOM_CSS, title="X Downloader Control Center") as demo:
 
 if __name__ == "__main__":
     logger.info("Launching Gradio app...")
-    demo.launch(server_name="0.0.0.0", server_port=7860)
+    # Railway assigns the listening port through PORT. Keep 7860 as the
+    # development default so the app remains easy to run locally.
+    try:
+        server_port = int(os.getenv("PORT", "7860"))
+    except ValueError:
+        logger.warning("Invalid PORT value; falling back to 7860")
+        server_port = 7860
+    logger.info("Starting Gradio server on 0.0.0.0:%s", server_port)
+    demo.launch(server_name="0.0.0.0", server_port=server_port)
