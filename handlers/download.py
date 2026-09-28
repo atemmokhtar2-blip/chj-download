@@ -21,6 +21,7 @@ from services.downloader import (
     analyze_url, download_video, download_audio, download_image,
     download_album, FileTooLargeError, ALBUM_MAX_ITEMS,
 )
+from services.content_intelligence import render_intelligence_html
 from middlewares.rate_limiter import check_rate_limit_detailed, mark_download
 from middlewares.concurrency import download_slot, active_global_slots
 from middlewares.auth import is_banned
@@ -105,6 +106,7 @@ async def handle_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 title=title, uploader=uploader,
                 duration=duration,
                 platform=f"{platform_emoji} {platform}")
+    caption += render_intelligence_html(info.get("intelligence"), lang)
     if media_type == "album" and album_count:
         caption += f"\n📂 <b>Items:</b> {album_count}"
 
