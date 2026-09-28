@@ -23,6 +23,7 @@ from handlers.download import handle_url, download_callback
 from handlers.admin import (
     admin_command, admin_callback, send_update_announcement,
     engine_status_command, update_ytdlp_command, health_command,
+    callbacks_health_command, commands_command,
 )
 from workers.cleanup import cleanup_temp_files, cleanup_old_cache
 
@@ -41,6 +42,17 @@ async def noop_callback(update: Update, context):
     """Acknowledge decorative/disabled inline buttons without side effects."""
     if update.callback_query:
         await update.callback_query.answer()
+
+
+async def unknown_callback(update: Update, context):
+    """Final safety net: no inline button should ever spin forever."""
+    query = update.callback_query
+    if not query:
+        return
+    data = query.data or ""
+    user_id = query.from_user.id if query.from_user else "unknown"
+    system_logger.warning("Unknown callback received: user=%s data=%r", user_id, data)
+    await query.answer("Session expired. Please use /start again.", show_alert=True)
 
 
 async def message_router(update: Update, context):
@@ -125,12 +137,15 @@ def build_application() -> Application:
     app.add_handler(CommandHandler("engine_status", engine_status_command))
     app.add_handler(CommandHandler("update_ytdlp", update_ytdlp_command))
     app.add_handler(CommandHandler("health", health_command))
+    app.add_handler(CommandHandler("callbacks_health", callbacks_health_command))
+    app.add_handler(CommandHandler("commands", commands_command))
 
     app.add_handler(CallbackQueryHandler(noop_callback, pattern="^noop$"))
     app.add_handler(CallbackQueryHandler(admin_callback, pattern="^admin_"))
     app.add_handler(CallbackQueryHandler(language_callback,            pattern="^lang_"))
     app.add_handler(CallbackQueryHandler(settings_callback,            pattern="^settings_"))
     app.add_handler(CallbackQueryHandler(download_callback,            pattern="^dl_"))
+    app.add_handler(CallbackQueryHandler(unknown_callback))
 
     app.add_handler(MessageHandler(
         filters.TEXT & ~filters.COMMAND,

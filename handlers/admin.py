@@ -105,6 +105,43 @@ async def health_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.effective_message.reply_text(render_diagnostics_html(), parse_mode="HTML")
 
 
+async def callbacks_health_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    if not user or not is_admin(user.id):
+        await update.effective_message.reply_text("⛔ هذا الأمر متاح للمسؤولين فقط.")
+        return
+    from services.callback_audit import render_callback_audit_html
+    await update.effective_message.reply_text(render_callback_audit_html(), parse_mode="HTML")
+
+
+async def commands_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    if not user or not is_admin(user.id):
+        await update.effective_message.reply_text("⛔ هذا الأمر متاح للمسؤولين فقط.")
+        return
+    text = """
+🛠 <b>أوامر إدارة X Downloader</b>
+
+<b>التشغيل العام</b>
+<code>/ping</code> — اختبار سريع أن البوت شغال.
+<code>/health</code> — تقرير صحة النظام.
+<code>/callbacks_health</code> — تدقيق أزرار inline callbacks.
+
+<b>محرك التحميل</b>
+<code>/engine_status</code> — حالة yt-dlp والكوكيز والبروكسي.
+<code>/update_ytdlp</code> — تحديث yt-dlp عند فشل منصات السوشيال.
+
+<b>الأدمن</b>
+<code>/admin</code> — لوحة التحكم.
+<code>/stats</code> — نفس لوحة التحكم السريعة.
+<code>/announce_update</code> — إرسال إعلان التحديث لكل المستخدمين.
+
+<b>قاعدة ذهبية</b>
+لو زر قديم أو غريب ظهر للمستخدم، النظام الآن يرد عليه فورًا ولا يترك spinner.
+""".strip()
+    await update.effective_message.reply_text(text, parse_mode="HTML")
+
+
 async def update_ytdlp_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     if not user or not is_admin(user.id):
