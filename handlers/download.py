@@ -178,6 +178,23 @@ def _pick_smart_download(info: dict) -> tuple[bool, bool, bool, str]:
     return False, False, False, str(best_quality)
 
 
+def _callback_matches_media(data: str, info: dict) -> bool:
+    media_type = info.get("media_type", "video")
+    if data in {"dl_unavailable", "dl_cancel"}:
+        return True
+    if data == "dl_smart":
+        return media_type in {"video", "audio", "image", "album"}
+    if media_type == "video":
+        return data == "dl_audio" or data.startswith("dl_video_")
+    if media_type == "audio":
+        return data == "dl_audio"
+    if media_type == "image":
+        return data == "dl_image"
+    if media_type == "album":
+        return data == "dl_album"
+    return False
+
+
 def _build_action_keyboard(
     media_type: str, qualities: list, lang: str, album_count: int = 0, info: dict | None = None
 ) -> list:
@@ -251,6 +268,9 @@ async def download_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     allowed_prefixes = ("dl_video_",)
     allowed_exact = {"dl_smart", "dl_audio", "dl_image", "dl_album", "dl_unavailable"}
     if data not in allowed_exact and not data.startswith(allowed_prefixes):
+        await query.answer(t(lang, "session_expired"), show_alert=True)
+        return
+    if not _callback_matches_media(data, info):
         await query.answer(t(lang, "session_expired"), show_alert=True)
         return
 
