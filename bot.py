@@ -37,6 +37,12 @@ async def ping_command(update: Update, context):
     await update.effective_message.reply_text("🏓 Pong — X Downloader is online.")
 
 
+async def noop_callback(update: Update, context):
+    """Acknowledge decorative/disabled inline buttons without side effects."""
+    if update.callback_query:
+        await update.callback_query.answer()
+
+
 async def message_router(update: Update, context):
     """Route text messages — handle menu buttons and URLs."""
     text = (update.message.text or "").strip()
@@ -120,6 +126,7 @@ def build_application() -> Application:
     app.add_handler(CommandHandler("update_ytdlp", update_ytdlp_command))
     app.add_handler(CommandHandler("health", health_command))
 
+    app.add_handler(CallbackQueryHandler(noop_callback, pattern="^noop$"))
     app.add_handler(CallbackQueryHandler(admin_callback, pattern="^admin_"))
     app.add_handler(CallbackQueryHandler(language_callback,            pattern="^lang_"))
     app.add_handler(CallbackQueryHandler(settings_callback,            pattern="^settings_"))

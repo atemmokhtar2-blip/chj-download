@@ -61,6 +61,9 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def language_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     user = query.from_user
+    if query.data not in {"lang_en", "lang_ar"}:
+        await query.answer("This button is no longer available.", show_alert=True)
+        return ConversationHandler.END
     lang = "ar" if query.data == "lang_ar" else "en"
 
     db_user = get_user(user.id)
@@ -116,4 +119,6 @@ async def settings_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup=InlineKeyboardMarkup(keyboard),
             parse_mode="HTML"
         )
-    await query.answer()
+        await query.answer()
+        return
+    await query.answer("This button is no longer available.", show_alert=True)
