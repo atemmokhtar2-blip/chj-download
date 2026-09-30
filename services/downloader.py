@@ -286,9 +286,29 @@ def _normalize_tiktok_info(raw: dict, original_url: str) -> dict:
 def _select_engine(url: str):
     """Choose a platform-specific engine lazily to avoid import cycles."""
     from services.engines.base import PlatformEngine, first_match
-    from services.engines.platforms import YouTubeEngine, TikTokEngine
+    from services.engines.platforms import (
+        FacebookEngine,
+        InstagramEngine,
+        PinterestEngine,
+        RedditEngine,
+        SoundCloudEngine,
+        SpotifyEngine,
+        TikTokEngine,
+        TwitterEngine,
+        YouTubeEngine,
+    )
 
-    engines = [YouTubeEngine(), TikTokEngine()]
+    engines = [
+        YouTubeEngine(),
+        TikTokEngine(),
+        InstagramEngine(),
+        FacebookEngine(),
+        TwitterEngine(),
+        RedditEngine(),
+        PinterestEngine(),
+        SoundCloudEngine(),
+        SpotifyEngine(),
+    ]
     return first_match(url, engines, PlatformEngine())
 
 
