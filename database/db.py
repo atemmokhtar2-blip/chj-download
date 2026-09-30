@@ -103,6 +103,12 @@ def ensure_cache_schema():
         c.execute(
             "CREATE INDEX IF NOT EXISTS idx_cache_fingerprint ON file_cache(fingerprint)"
         )
+        c.execute(
+            "CREATE INDEX IF NOT EXISTS idx_cache_lookup ON file_cache(url_hash, quality, media_type)"
+        )
+        c.execute(
+            "CREATE INDEX IF NOT EXISTS idx_cache_created_hits ON file_cache(created_at, hits)"
+        )
         c.execute("""
             CREATE TABLE IF NOT EXISTS media_fingerprint_index (
                 fingerprint TEXT NOT NULL,
@@ -116,4 +122,10 @@ def ensure_cache_schema():
                 PRIMARY KEY (fingerprint, quality, media_type)
             )
         """)
+        c.execute(
+            "CREATE INDEX IF NOT EXISTS idx_fp_url_hash ON media_fingerprint_index(url_hash)"
+        )
+        c.execute(
+            "CREATE INDEX IF NOT EXISTS idx_fp_updated ON media_fingerprint_index(updated_at)"
+        )
 

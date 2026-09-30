@@ -150,6 +150,16 @@ def _safe_upload_name(value: str, limit: int = 50) -> str:
     return (cleaned or "media")[:limit]
 
 
+def _cleanup_file(path: str | None) -> None:
+    if not path:
+        return
+    try:
+        if os.path.exists(path):
+            os.remove(path)
+    except OSError as exc:
+        logger.debug("Temp cleanup failed for %s: %s", path, exc)
+
+
 def _quality_height(label: str) -> int:
     try:
         return int(str(label).lower().replace("p", "").strip())
@@ -419,8 +429,7 @@ async def download_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     finally:
         release_user_download(user.id)
         if file_path and os.path.exists(file_path):
-            try: os.remove(file_path)
-            except: pass
+            _cleanup_file(file_path)
 
 
 async def _run_download(query, context, info, user, lang, quality_label,
@@ -541,10 +550,7 @@ async def _run_download(query, context, info, user, lang, quality_label,
                 for item in downloaded:
                     p = item.get("path")
                     if p and os.path.exists(p):
-                        try:
-                            os.remove(p)
-                        except Exception:
-                            pass
+                        _cleanup_file(p)
                 file_path = None
 
         elif is_image:
@@ -641,5 +647,4 @@ async def _run_download(query, context, info, user, lang, quality_label,
         log_download(user.id, info["url"], title, platform, quality_label, "audio" if is_audio else ("image" if is_image else "video"))
     finally:
         if file_path and os.path.exists(file_path):
-            try: os.remove(file_path)
-            except: pass
+            _cleanup_file(file_path)

@@ -258,8 +258,8 @@ def get_cached(url: str, quality: str, media_type: str) -> str | None:
             if raw:
                 _l1_set(key, raw)
                 return raw
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("Redis cache operation failed: %s", e)
 
     # L3
     try:
@@ -276,8 +276,8 @@ def get_cached(url: str, quality: str, media_type: str) -> str | None:
     if r is not None:
         try:
             r.setex(_redis_key(h, quality, media_type), max(60, CACHE_TTL_SECONDS), file_id)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("Redis cache operation failed: %s", e)
     return file_id
 
 
@@ -300,8 +300,8 @@ def set_cache(
         if r is not None:
             try:
                 r.setex(_redis_key(h, quality, media_type), max(60, CACHE_TTL_SECONDS), file_id)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug("Redis cache operation failed: %s", e)
         try:
             _sqlite_set(h, quality, media_type, file_id, title, platform)
         except Exception as e:
@@ -330,8 +330,8 @@ def invalidate_cache(
             else:
                 for rk in r.scan_iter(match=f"tgcache:v2:{h}:*"):
                     r.delete(rk)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("Redis cache operation failed: %s", e)
 
     try:
         deleted = _sqlite_delete(h, quality, media_type)
@@ -357,7 +357,8 @@ def get_cached_album(url: str) -> list[dict] | None:
         data = json.loads(raw)
         if isinstance(data, list) and data:
             return data
-    except Exception:
+    except Exception as e:
+        logger.debug("Invalid cached album payload for hash=%s: %s", url_hash(url)[:12], e)
         invalidate_cache(url, "album", "album")
     return None
 
@@ -470,8 +471,8 @@ def get_cached_by_fingerprint(fingerprint: str, quality: str, media_type: str) -
                 data = json.loads(raw)
                 _l1_set(l1k, data)
                 return data
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("Redis cache operation failed: %s", e)
 
     # L3 index table
     try:
@@ -537,8 +538,8 @@ def index_fingerprint(
                 max(60, CACHE_TTL_SECONDS),
                 json.dumps(data),
             )
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("Redis cache operation failed: %s", e)
     try:
         with db_cursor() as c:
             c.execute(
