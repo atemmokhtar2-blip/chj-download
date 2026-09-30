@@ -246,7 +246,13 @@ class PinterestEngine(PlatformEngine):
                             done += len(chunk)
                             if progress_callback and total:
                                 try:
-                                    progress_callback(done, total)
+                                    asyncio.run_coroutine_threadsafe(progress_callback({
+                                        "pct": int(done * 100 / total),
+                                        "downloaded": done,
+                                        "total": total,
+                                        "speed": 0,
+                                        "eta": 0,
+                                    }), loop)
                                 except Exception:
                                     pass
                     return out_path if os.path.exists(out_path) and os.path.getsize(out_path) > 2048 else None
@@ -344,7 +350,13 @@ class FacebookEngine(PlatformEngine):
                             done += len(chunk)
                             if progress_callback and total:
                                 try:
-                                    progress_callback(done, total)
+                                    asyncio.run_coroutine_threadsafe(progress_callback({
+                                        "pct": int(done * 100 / total),
+                                        "downloaded": done,
+                                        "total": total,
+                                        "speed": 0,
+                                        "eta": 0,
+                                    }), loop)
                                 except Exception:
                                     pass
                     return out_path if os.path.exists(out_path) and os.path.getsize(out_path) > 2048 else None
@@ -441,7 +453,13 @@ class TwitterEngine(PlatformEngine):
                             done += len(chunk)
                             if progress_callback and total:
                                 try:
-                                    progress_callback(done, total)
+                                    asyncio.run_coroutine_threadsafe(progress_callback({
+                                        "pct": int(done * 100 / total),
+                                        "downloaded": done,
+                                        "total": total,
+                                        "speed": 0,
+                                        "eta": 0,
+                                    }), loop)
                                 except Exception:
                                     pass
                     return out_path if os.path.exists(out_path) and os.path.getsize(out_path) > 2048 else None
@@ -538,7 +556,13 @@ class RedditEngine(PlatformEngine):
                             done += len(chunk)
                             if progress_callback and total:
                                 try:
-                                    progress_callback(done, total)
+                                    asyncio.run_coroutine_threadsafe(progress_callback({
+                                        "pct": int(done * 100 / total),
+                                        "downloaded": done,
+                                        "total": total,
+                                        "speed": 0,
+                                        "eta": 0,
+                                    }), loop)
                                 except Exception:
                                     pass
                     return out_path if os.path.exists(out_path) and os.path.getsize(out_path) > 2048 else None

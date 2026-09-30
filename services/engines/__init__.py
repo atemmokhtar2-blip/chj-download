@@ -13,8 +13,12 @@ from services.engines.platforms import (
 )
 
 
-def _registered_engines():
-    """Return the real platform engines enabled by the downloader router."""
+def registered_engines():
+    """Return the real platform engines enabled by the downloader router.
+
+    Keep this as the single source of truth for platform routing, dashboard
+    engine status, and future smoke tests.
+    """
     return [
         YouTubeEngine(),
         TikTokEngine(),
@@ -26,6 +30,10 @@ def _registered_engines():
         SoundCloudEngine(),
         SpotifyEngine(),
     ]
+
+
+# Backward-compatible private alias for any older internal imports.
+_registered_engines = registered_engines
 
 
 def list_engines() -> list[dict]:
