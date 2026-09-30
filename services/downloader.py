@@ -7,6 +7,7 @@ import os
 import shutil
 import subprocess
 import tempfile
+import time
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -20,7 +21,10 @@ logger = logging.getLogger(__name__)
 
 
 class FileTooLargeError(Exception):
-    pass
+    def __init__(self, size_bytes: int | None = None, limit_bytes: int | None = None):
+        self.size_bytes = size_bytes
+        self.limit_bytes = limit_bytes
+        super().__init__("Media file exceeds the configured size limit.")
 
 
 def _platform(url: str) -> str:
@@ -193,6 +197,123 @@ def _check_size(path: str) -> str:
         _safe_remove(path)
         raise FileTooLargeError()
     return path
+
+
+def _download_direct_sync(
+    url: str,
+    headers: dict | None = None,
+    timeout: int = 60,
+    progress=None,
+    loop: asyncio.AbstractEventLoop | None = None,
+    prefix: str = "xdl-direct",
+    retries: int = 2,
+) -> str | None:
+    """Stream a direct CDN video with bounded size, transient retries, and cleanup."""
+    import requests
+
+    parsed = urlparse(str(url or ""))
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        return None
+
+    Path(TEMP_DIR).mkdir(parents=True, exist_ok=True)
+    fd, out_path = tempfile.mkstemp(prefix=f"{prefix}-", suffix=".mp4", dir=TEMP_DIR)
+    os.close(fd)
+    request_headers = {
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131 Safari/537.36"
+        ),
+        "Accept": "video/*,application/octet-stream,*/*;q=0.8",
+    }
+    request_headers.update(headers or {})
+    attempts = max(1, int(retries) + 1)
+
+    for attempt in range(attempts):
+        _safe_remove(out_path)
+        try:
+            with requests.get(
+                url, headers=request_headers, stream=True, timeout=timeout
+            ) as response:
+                status = response.status_code
+                if status not in (200, 206):
+                    if status in (408, 425, 429) or status >= 500:
+                        if attempt + 1 < attempts:
+                            time.sleep(0.5 * (2 ** attempt))
+                            continue
+                    _safe_remove(out_path)
+                    return None
+
+                content_type = (response.headers.get("Content-Type") or "").lower()
+                if content_type and not (
+                    content_type.startswith("video/")
+                    or content_type in {
+                        "application/octet-stream",
+                        "application/mp4",
+                        "binary/octet-stream",
+                    }
+                ):
+                    _safe_remove(out_path)
+                    return None
+
+                total = 0
+                try:
+                    total = max(0, int(response.headers.get("Content-Length") or 0))
+                except (TypeError, ValueError):
+                    pass
+                if total > MAX_FILE_SIZE_BYTES:
+                    raise FileTooLargeError(
+                        size_bytes=total, limit_bytes=MAX_FILE_SIZE_BYTES
+                    )
+
+                downloaded = 0
+                with open(out_path, "wb") as output:
+                    for chunk in response.iter_content(chunk_size=256 * 1024):
+                        if not chunk:
+                            continue
+                        if downloaded + len(chunk) > MAX_FILE_SIZE_BYTES:
+                            raise FileTooLargeError(
+                                size_bytes=downloaded + len(chunk),
+                                limit_bytes=MAX_FILE_SIZE_BYTES,
+                            )
+                        if downloaded == 0:
+                            sample = chunk.lstrip().lower()
+                            if sample.startswith((b"<!doctype html", b"<html", b"{", b"[")):
+                                _safe_remove(out_path)
+                                return None
+                        output.write(chunk)
+                        downloaded += len(chunk)
+                        if progress and loop:
+                            try:
+                                asyncio.run_coroutine_threadsafe(progress({
+                                    "pct": int(downloaded * 100 / total) if total else 0,
+                                    "downloaded": downloaded,
+                                    "total": total,
+                                    "speed": 0,
+                                    "eta": 0,
+                                }), loop)
+                            except RuntimeError as exc:
+                                logger.debug("Direct-download progress skipped: %s", exc)
+
+                if downloaded > 2048:
+                    return out_path
+                _safe_remove(out_path)
+                return None
+        except FileTooLargeError:
+            _safe_remove(out_path)
+            raise
+        except requests.RequestException as exc:
+            _safe_remove(out_path)
+            if attempt + 1 < attempts:
+                time.sleep(0.5 * (2 ** attempt))
+                continue
+            logger.warning("Direct CDN download failed after retries: %s", exc)
+            return None
+        except OSError:
+            _safe_remove(out_path)
+            raise
+
+    _safe_remove(out_path)
+    return None
 
 
 def _has_audio_stream(path: str) -> bool | None:
