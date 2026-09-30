@@ -36,10 +36,16 @@ logger = logging.getLogger(__name__)
 UPLOAD_RETRIES = 3
 UPLOAD_RETRY_DELAY = 2
 
-async def _upload_with_retry(coro):
+async def _upload_with_retry(operation):
+    """Run a Telegram upload with retries.
+
+    ``operation`` must be a zero-argument callable returning a fresh awaitable.
+    Reusing the same coroutine after a failed await raises runtime errors, so we
+    recreate the Telegram request on every retry.
+    """
     for attempt in range(UPLOAD_RETRIES):
         try:
-            return await coro
+            return await operation()
         except (NetworkError, asyncio.TimeoutError) as e:
             if attempt < UPLOAD_RETRIES - 1:
                 await asyncio.sleep(UPLOAD_RETRY_DELAY * (attempt + 1))
@@ -136,6 +142,12 @@ def _friendly_error(lang: str, info: dict) -> str:
     if reason == "removed_or_not_found":
         return t(lang, "removed_or_not_found")
     return t(lang, "analysis_failed")
+
+
+def _safe_upload_name(value: str, limit: int = 50) -> str:
+    cleaned = "".join(ch if ch.isalnum() or ch in " ._-" else "_" for ch in str(value or "media"))
+    cleaned = "_".join(cleaned.split()).strip("._-")
+    return (cleaned or "media")[:limit]
 
 
 def _quality_height(label: str) -> int:
@@ -308,7 +320,7 @@ async def download_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         media_group.append(InputMediaVideo(media=it["file_id"], caption=caption, parse_mode="HTML" if caption else None, supports_streaming=True))
                     else:
                         media_group.append(InputMediaPhoto(media=it["file_id"], caption=caption, parse_mode="HTML" if caption else None))
-                await _upload_with_retry(query.message.reply_media_group(media=media_group))
+                await _upload_with_retry(lambda: query.message.reply_media_group(media=media_group))
                 increment_downloads(user.id)
                 release_user_download(user.id)
                 return
@@ -443,63 +455,74 @@ async def _run_download(query, context, info, user, lang, quality_label,
             )
 
             # Telegram media groups require 2–10 items. Single item → normal send.
-            open_handles = []
             try:
                 if len(downloaded) == 1:
                     item = downloaded[0]
-                    safe_title = (item.get("title") or title or "media")[:40]
-                    with open(item["path"], "rb") as fh:
-                        if item["type"] == "image":
-                            sent = await _upload_with_retry(
-                                query.message.reply_photo(
+                    safe_title = _safe_upload_name(item.get("title") or title or "media", 40)
+
+                    if item["type"] == "image":
+                        async def _send_single_photo():
+                            with open(item["path"], "rb") as fh:
+                                return await query.message.reply_photo(
                                     photo=InputFile(fh, filename=f"{safe_title}.jpg"),
                                     caption=t(lang, "completed"),
                                 )
-                            )
-                            set_cache(
-                                info["url"], quality_label, "image",
-                                sent.photo[-1].file_id, title, platform,
-                            )
-                        else:
-                            sent = await _upload_with_retry(
-                                query.message.reply_video(
+
+                        sent = await _upload_with_retry(_send_single_photo)
+                        set_cache(
+                            info["url"], quality_label, "image",
+                            sent.photo[-1].file_id, title, platform,
+                        )
+                    else:
+                        async def _send_single_video():
+                            with open(item["path"], "rb") as fh:
+                                return await query.message.reply_video(
                                     video=InputFile(fh, filename=f"{safe_title}.mp4"),
                                     caption=t(lang, "completed"),
                                     supports_streaming=True,
                                 )
-                            )
-                            set_cache(
-                                info["url"], quality_label, "video",
-                                sent.video.file_id, title, platform,
-                            )
-                else:
-                    media_group = []
-                    for i, item in enumerate(downloaded[:ALBUM_MAX_ITEMS]):
-                        fh = open(item["path"], "rb")
-                        open_handles.append(fh)
-                        caption = t(lang, "completed") if i == 0 else None
-                        safe_title = (item.get("title") or title or "media")[:40]
-                        if item["type"] == "image":
-                            media_group.append(
-                                InputMediaPhoto(
-                                    media=InputFile(fh, filename=f"{safe_title}_{i + 1}.jpg"),
-                                    caption=caption,
-                                    parse_mode="HTML" if caption else None,
-                                )
-                            )
-                        else:
-                            media_group.append(
-                                InputMediaVideo(
-                                    media=InputFile(fh, filename=f"{safe_title}_{i + 1}.mp4"),
-                                    caption=caption,
-                                    parse_mode="HTML" if caption else None,
-                                    supports_streaming=True,
-                                )
-                            )
 
-                    sent_msgs = await _upload_with_retry(
-                        query.message.reply_media_group(media=media_group)
-                    )
+                        sent = await _upload_with_retry(_send_single_video)
+                        set_cache(
+                            info["url"], quality_label, "video",
+                            sent.video.file_id, title, platform,
+                        )
+                else:
+                    async def _send_album_group():
+                        open_handles = []
+                        try:
+                            media_group = []
+                            for i, item in enumerate(downloaded[:ALBUM_MAX_ITEMS]):
+                                fh = open(item["path"], "rb")
+                                open_handles.append(fh)
+                                caption = t(lang, "completed") if i == 0 else None
+                                safe_title = _safe_upload_name(item.get("title") or title or "media", 40)
+                                if item["type"] == "image":
+                                    media_group.append(
+                                        InputMediaPhoto(
+                                            media=InputFile(fh, filename=f"{safe_title}_{i + 1}.jpg"),
+                                            caption=caption,
+                                            parse_mode="HTML" if caption else None,
+                                        )
+                                    )
+                                else:
+                                    media_group.append(
+                                        InputMediaVideo(
+                                            media=InputFile(fh, filename=f"{safe_title}_{i + 1}.mp4"),
+                                            caption=caption,
+                                            parse_mode="HTML" if caption else None,
+                                            supports_streaming=True,
+                                        )
+                                    )
+                            return await query.message.reply_media_group(media=media_group)
+                        finally:
+                            for fh in open_handles:
+                                try:
+                                    fh.close()
+                                except Exception:
+                                    pass
+
+                    sent_msgs = await _upload_with_retry(_send_album_group)
                     if sent_msgs:
                         album_entries = []
                         for msg in sent_msgs:
@@ -515,11 +538,6 @@ async def _run_download(query, context, info, user, lang, quality_label,
                                 album_entries[0]["file_id"], title, platform,
                             )
             finally:
-                for fh in open_handles:
-                    try:
-                        fh.close()
-                    except Exception:
-                        pass
                 for item in downloaded:
                     p = item.get("path")
                     if p and os.path.exists(p):
@@ -534,8 +552,16 @@ async def _run_download(query, context, info, user, lang, quality_label,
             file_path = await download_image(info["url"], info.get("image_url"))
             if not file_path: raise Exception("Download failed")
             await edit_fn(t(lang, "uploading"), parse_mode="HTML")
-            with open(file_path, "rb") as f:
-                sent = await _upload_with_retry(query.message.reply_photo(photo=InputFile(f, filename=f"{title[:50]}.jpg"), caption=t(lang, "completed")))
+            safe_title = _safe_upload_name(title)
+
+            async def _send_photo():
+                with open(file_path, "rb") as f:
+                    return await query.message.reply_photo(
+                        photo=InputFile(f, filename=f"{safe_title}.jpg"),
+                        caption=t(lang, "completed"),
+                    )
+
+            sent = await _upload_with_retry(_send_photo)
             _fid = sent.photo[-1].file_id
             _vault = await archive_to_vault(context.bot, sent)
             set_cache_with_meta(
@@ -551,8 +577,16 @@ async def _run_download(query, context, info, user, lang, quality_label,
             file_path = await download_audio(info["url"], update_progress)
             if not file_path: raise Exception("Download failed")
             await edit_fn(t(lang, "uploading"), parse_mode="HTML")
-            with open(file_path, "rb") as f:
-                sent = await _upload_with_retry(query.message.reply_audio(audio=InputFile(f, filename=f"{title[:50]}.mp3"), caption=t(lang, "completed")))
+            safe_title = _safe_upload_name(title)
+
+            async def _send_audio():
+                with open(file_path, "rb") as f:
+                    return await query.message.reply_audio(
+                        audio=InputFile(f, filename=f"{safe_title}.mp3"),
+                        caption=t(lang, "completed"),
+                    )
+
+            sent = await _upload_with_retry(_send_audio)
             _fid = sent.audio.file_id
             _vault = await archive_to_vault(context.bot, sent)
             set_cache_with_meta(
@@ -582,14 +616,17 @@ async def _run_download(query, context, info, user, lang, quality_label,
             if not file_path:
                 raise Exception("Download failed")
             await edit_fn(t(lang, "uploading"), parse_mode="HTML")
-            with open(file_path, "rb") as f:
-                sent = await _upload_with_retry(
-                    query.message.reply_video(
-                        video=InputFile(f, filename=f"{title[:50]}.mp4"),
+            safe_title = _safe_upload_name(title)
+
+            async def _send_video():
+                with open(file_path, "rb") as f:
+                    return await query.message.reply_video(
+                        video=InputFile(f, filename=f"{safe_title}.mp4"),
                         caption=t(lang, "completed"),
                         supports_streaming=True,
                     )
-                )
+
+            sent = await _upload_with_retry(_send_video)
             _fid = sent.video.file_id
             _vault = await archive_to_vault(context.bot, sent)
             set_cache_with_meta(
