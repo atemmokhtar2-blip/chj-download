@@ -351,7 +351,7 @@ with gr.Blocks(css=CUSTOM_CSS, title="X Downloader Control Center") as demo:
 </div>
 
 <div class="xd-grid">
-  <div class="xd-mini"><strong>13+</strong>Supported global platforms</div>
+  <div class="xd-mini"><strong>14</strong>Active platform engines</div>
   <div class="xd-mini"><strong>MP3</strong>زر صوت فقط يظهر مع كل فيديو</div>
   <div class="xd-mini"><strong>Live</strong>Metrics, cache, limits and health</div>
 </div>
