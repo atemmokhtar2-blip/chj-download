@@ -175,10 +175,19 @@ def _format_duration(seconds) -> str:
     return f"{h}:{m:02d}:{s:02d}" if h else f"{m}:{s:02d}"
 
 
+def _safe_remove(path: str | None) -> None:
+    if not path:
+        return
+    try:
+        if os.path.exists(path):
+            os.remove(path)
+    except OSError as exc:
+        logger.debug("Temp cleanup failed for %s: %s", path, exc)
+
+
 def _check_size(path: str) -> str:
     if os.path.getsize(path) > MAX_FILE_SIZE_BYTES:
-        try: os.remove(path)
-        except OSError: pass
+        _safe_remove(path)
         raise FileTooLargeError()
     return path
 
