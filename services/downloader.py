@@ -398,30 +398,46 @@ def _youtube_client_candidates() -> list[str]:
 
 async def _generic_download_video(url: str, format_id: str = "best", quality_label: str = "best", progress=None, play_url: str | None = None) -> str | None:
     loop = asyncio.get_running_loop() if progress else None
-    target = play_url or url
     host = urlparse(url).netloc.lower()
     formats = _video_format_candidates(format_id)
-    clients = _youtube_client_candidates() if "youtu" in host and not play_url else [YTDLP_CLIENT]
+    targets: list[tuple[str, str]] = []
+    if play_url and play_url != url:
+        # Direct CDN URLs are often video-only. Try them first for speed, but if
+        # audio verification fails, fall back to the canonical page URL so yt-dlp
+        # can locate and merge bestaudio.
+        targets.append((play_url, "direct-play-url"))
+    targets.append((url, "page-url"))
     last_error: Exception | None = None
 
-    for client in clients:
-        for fmt in formats:
-            opts = {**_base_opts(progress, loop), "format": fmt, "merge_output_format": "mp4"}
-            if client:
-                opts.setdefault("extractor_args", {}).setdefault("youtube", {})["player_client"] = [client]
-            try:
-                path = await _run_sync(_download_sync, target, opts)
-                path = _require_audio_or_none(path, source="yt-dlp")
-                if path:
-                    if fmt != formats[0] or client != clients[0]:
-                        logger.info("Download fallback succeeded: client=%s format=%s url=%s", client, fmt, url[:100])
-                    return path
-            except FileTooLargeError:
-                raise
-            except Exception as exc:
-                last_error = exc
-                logger.warning("Download attempt failed client=%s format=%s url=%s error=%s", client, fmt, url[:100], exc)
-                continue
+    for target, target_kind in targets:
+        clients = _youtube_client_candidates() if "youtu" in host and target_kind == "page-url" else [YTDLP_CLIENT]
+        for client in clients:
+            for fmt in formats:
+                opts = {**_base_opts(progress, loop), "format": fmt, "merge_output_format": "mp4"}
+                if client:
+                    opts.setdefault("extractor_args", {}).setdefault("youtube", {})["player_client"] = [client]
+                try:
+                    path = await _run_sync(_download_sync, target, opts)
+                    path = _require_audio_or_none(path, source=f"yt-dlp:{target_kind}")
+                    if path:
+                        if target_kind != "page-url" or fmt != formats[0] or client != clients[0]:
+                            logger.info(
+                                "Download fallback succeeded: target=%s client=%s format=%s url=%s",
+                                target_kind, client, fmt, url[:100],
+                            )
+                        return path
+                    if target_kind == "direct-play-url":
+                        logger.info("Direct play_url produced no verified audio; trying page URL for merge: %s", url[:100])
+                        break
+                except FileTooLargeError:
+                    raise
+                except Exception as exc:
+                    last_error = exc
+                    logger.warning(
+                        "Download attempt failed target=%s client=%s format=%s url=%s error=%s",
+                        target_kind, client, fmt, url[:100], exc,
+                    )
+                    continue
 
     if last_error:
         raise last_error
