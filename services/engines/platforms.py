@@ -118,12 +118,14 @@ class TikTokEngine(PlatformEngine):
                     get_executor(), download_tiktok_direct, candidate_play, direct_out
                 )
                 if path:
-                    if progress_callback:
-                        try:
-                            await progress_callback({"pct": 100, "downloaded": 1, "total": 1, "speed": 0, "eta": 0})
-                        except Exception:
-                            pass
-                    return downloader._enforce_max_file_size(path)
+                    path = downloader._require_audio_or_none(path, source="tiktok-direct")
+                    if path:
+                        if progress_callback:
+                            try:
+                                await progress_callback({"pct": 100, "downloaded": 1, "total": 1, "speed": 0, "eta": 0})
+                            except Exception:
+                                pass
+                        return downloader._enforce_max_file_size(path)
             except downloader.FileTooLargeError:
                 raise
             except Exception as exc:
@@ -259,6 +261,7 @@ class PinterestEngine(PlatformEngine):
 
             try:
                 direct_path = await loop.run_in_executor(get_executor(), _download_direct)
+                direct_path = downloader._require_audio_or_none(direct_path, source="direct-cdn")
                 if direct_path:
                     return direct_path
             except Exception as exc:
@@ -363,6 +366,7 @@ class FacebookEngine(PlatformEngine):
 
             try:
                 direct_path = await loop.run_in_executor(get_executor(), _download_direct)
+                direct_path = downloader._require_audio_or_none(direct_path, source="direct-cdn")
                 if direct_path:
                     return direct_path
             except Exception as exc:
@@ -466,6 +470,7 @@ class TwitterEngine(PlatformEngine):
 
             try:
                 direct_path = await loop.run_in_executor(get_executor(), _download_direct)
+                direct_path = downloader._require_audio_or_none(direct_path, source="direct-cdn")
                 if direct_path:
                     return direct_path
             except Exception as exc:
@@ -569,6 +574,7 @@ class RedditEngine(PlatformEngine):
 
             try:
                 direct_path = await loop.run_in_executor(get_executor(), _download_direct)
+                direct_path = downloader._require_audio_or_none(direct_path, source="direct-cdn")
                 if direct_path:
                     return direct_path
             except Exception as exc:

@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
+import shutil
+import subprocess
 import tempfile
 from pathlib import Path
 from urllib.parse import urlparse
@@ -192,6 +195,49 @@ def _check_size(path: str) -> str:
     return path
 
 
+def _has_audio_stream(path: str) -> bool | None:
+    """Return True/False when ffprobe is available, None when audio cannot be verified."""
+    ffprobe = shutil.which("ffprobe")
+    if not ffprobe or not path or not os.path.exists(path):
+        return None
+    try:
+        proc = subprocess.run(
+            [
+                ffprobe,
+                "-v", "error",
+                "-select_streams", "a",
+                "-show_entries", "stream=index",
+                "-of", "json",
+                path,
+            ],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=20,
+            check=False,
+        )
+        if proc.returncode != 0:
+            logger.debug("ffprobe audio check failed for %s: %s", path, proc.stderr[:200])
+            return None
+        payload = json.loads(proc.stdout or "{}")
+        return bool(payload.get("streams"))
+    except Exception as exc:
+        logger.debug("ffprobe audio check skipped for %s: %s", path, exc)
+        return None
+
+
+def _require_audio_or_none(path: str | None, *, source: str = "direct") -> str | None:
+    """Reject verified silent/video-only files so callers can fall back to yt-dlp merge."""
+    if not path:
+        return None
+    has_audio = _has_audio_stream(path)
+    if has_audio is False:
+        logger.warning("Rejected %s download without audio stream: %s", source, path)
+        _safe_remove(path)
+        return None
+    return path
+
+
 def _download_sync(url: str, opts: dict) -> str | None:
     Path(TEMP_DIR).mkdir(parents=True, exist_ok=True)
     with yt_dlp.YoutubeDL(opts) as ydl:
@@ -210,16 +256,17 @@ def _download_sync(url: str, opts: dict) -> str | None:
 
 
 def _video_format_candidates(format_id: str = "best") -> list[str]:
-    """Return robust yt-dlp format fallbacks for YouTube/TikTok failures."""
+    """Return yt-dlp format fallbacks that strongly prefer video+audio merged output."""
     requested = str(format_id or "best").strip()
-    best_mp4 = "bestvideo[ext=mp4]+bestaudio[ext=m4a]/bestvideo+bestaudio/best[ext=mp4]/best"
-    safe_small = "best[height<=720][ext=mp4]/best[height<=720]/worst[ext=mp4]/worst"
+    merged_best = "bestvideo[ext=mp4]+bestaudio[ext=m4a]/bestvideo+bestaudio/best[acodec!=none][vcodec!=none]/best"
+    merged_720 = "bestvideo[height<=720][ext=mp4]+bestaudio[ext=m4a]/bestvideo[height<=720]+bestaudio/best[height<=720][acodec!=none][vcodec!=none]/best[height<=720]"
+    safe_small = "best[height<=720][acodec!=none][vcodec!=none]/best[acodec!=none][vcodec!=none]/worst[acodec!=none][vcodec!=none]/worst"
     if requested in {"best", "best_quality"}:
-        return [best_mp4, "best[ext=mp4]/best", safe_small]
+        return [merged_best, merged_720, safe_small]
     return [
-        f"{requested}+bestaudio[ext=m4a]/{requested}+bestaudio/{requested}",
-        f"bestvideo[height<=720][ext=mp4]+bestaudio[ext=m4a]/best[height<=720][ext=mp4]/best[height<=720]",
-        "best[ext=mp4]/best",
+        f"{requested}+bestaudio[ext=m4a]/{requested}+bestaudio/bestvideo[format_id={requested}]+bestaudio",
+        merged_720,
+        merged_best,
         safe_small,
     ]
 
@@ -243,6 +290,7 @@ async def _generic_download_video(url: str, format_id: str = "best", quality_lab
                 opts.setdefault("extractor_args", {}).setdefault("youtube", {})["player_client"] = [client]
             try:
                 path = await _run_sync(_download_sync, target, opts)
+                path = _require_audio_or_none(path, source="yt-dlp")
                 if path:
                     if fmt != formats[0] or client != clients[0]:
                         logger.info("Download fallback succeeded: client=%s format=%s url=%s", client, fmt, url[:100])
