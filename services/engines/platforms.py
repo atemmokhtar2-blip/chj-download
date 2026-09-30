@@ -206,7 +206,6 @@ class PinterestEngine(PlatformEngine):
         from services.pinterest_scraper import scrape_pinterest
         from middlewares.concurrency import get_executor
         import asyncio
-        import requests
 
         loop = asyncio.get_running_loop()
         candidate = play_url
@@ -223,44 +222,17 @@ class PinterestEngine(PlatformEngine):
                 error_logger.error("PinterestEnginePro resolve before download failed: %s", exc)
 
         if candidate and ".mp4" in candidate:
-            safe_name = sanitize_filename(f"pinterest_{hash(url) % 100000}_{quality_label}")
-            out_path = os.path.join(TEMP_DIR, safe_name + ".mp4")
-
-            def _download_direct() -> str | None:
-                headers = {
-                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131 Safari/537.36",
-                    "Referer": "https://www.pinterest.com/",
-                    "Range": "bytes=0-",
-                }
-                with requests.get(candidate, headers=headers, stream=True, timeout=60) as r:
-                    if r.status_code not in (200, 206):
-                        return None
-                    ctype = (r.headers.get("Content-Type") or "").lower()
-                    if "text/html" in ctype or "application/json" in ctype:
-                        return None
-                    total = int(r.headers.get("Content-Length") or 0)
-                    done = 0
-                    with open(out_path, "wb") as f:
-                        for chunk in r.iter_content(chunk_size=1024 * 256):
-                            if not chunk:
-                                continue
-                            f.write(chunk)
-                            done += len(chunk)
-                            if progress_callback and total:
-                                try:
-                                    asyncio.run_coroutine_threadsafe(progress_callback({
-                                        "pct": int(done * 100 / total),
-                                        "downloaded": done,
-                                        "total": total,
-                                        "speed": 0,
-                                        "eta": 0,
-                                    }), loop)
-                                except Exception:
-                                    pass
-                    return out_path if os.path.exists(out_path) and os.path.getsize(out_path) > 2048 else None
-
             try:
-                direct_path = await loop.run_in_executor(get_executor(), _download_direct)
+                direct_path = await loop.run_in_executor(
+                    get_executor(),
+                    downloader._download_direct_sync,
+                    candidate,
+                    {"Referer": "https://www.pinterest.com/"},
+                    60,
+                    progress_callback,
+                    loop,
+                    "xdl-pinterest",
+                )
                 direct_path = downloader._require_audio_or_none(direct_path, source="direct-cdn")
                 if direct_path:
                     return direct_path
@@ -310,7 +282,6 @@ class FacebookEngine(PlatformEngine):
         from services.facebook_scraper import scrape_facebook
         from middlewares.concurrency import get_executor
         import asyncio
-        import requests
 
         loop = asyncio.get_running_loop()
         candidate = play_url
@@ -328,44 +299,17 @@ class FacebookEngine(PlatformEngine):
                 error_logger.error("FacebookEnginePro resolve before download failed: %s", exc)
 
         if candidate:
-            safe_name = sanitize_filename(f"facebook_{hash(url) % 100000}_{quality_label}")
-            out_path = os.path.join(TEMP_DIR, safe_name + ".mp4")
-
-            def _download_direct() -> str | None:
-                headers = {
-                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131 Safari/537.36",
-                    "Referer": "https://www.facebook.com/",
-                    "Range": "bytes=0-",
-                }
-                with requests.get(candidate, headers=headers, stream=True, timeout=60) as r:
-                    if r.status_code not in (200, 206):
-                        return None
-                    ctype = (r.headers.get("Content-Type") or "").lower()
-                    if "text/html" in ctype or "application/json" in ctype:
-                        return None
-                    total = int(r.headers.get("Content-Length") or 0)
-                    done = 0
-                    with open(out_path, "wb") as f:
-                        for chunk in r.iter_content(chunk_size=1024 * 256):
-                            if not chunk:
-                                continue
-                            f.write(chunk)
-                            done += len(chunk)
-                            if progress_callback and total:
-                                try:
-                                    asyncio.run_coroutine_threadsafe(progress_callback({
-                                        "pct": int(done * 100 / total),
-                                        "downloaded": done,
-                                        "total": total,
-                                        "speed": 0,
-                                        "eta": 0,
-                                    }), loop)
-                                except Exception:
-                                    pass
-                    return out_path if os.path.exists(out_path) and os.path.getsize(out_path) > 2048 else None
-
             try:
-                direct_path = await loop.run_in_executor(get_executor(), _download_direct)
+                direct_path = await loop.run_in_executor(
+                    get_executor(),
+                    downloader._download_direct_sync,
+                    candidate,
+                    {"Referer": "https://www.facebook.com/"},
+                    60,
+                    progress_callback,
+                    loop,
+                    "xdl-facebook",
+                )
                 direct_path = downloader._require_audio_or_none(direct_path, source="direct-cdn")
                 if direct_path:
                     return direct_path
@@ -415,7 +359,6 @@ class TwitterEngine(PlatformEngine):
         from services.twitter_scraper import scrape_twitter
         from middlewares.concurrency import get_executor
         import asyncio
-        import requests
 
         loop = asyncio.get_running_loop()
         candidate = play_url
@@ -432,44 +375,17 @@ class TwitterEngine(PlatformEngine):
                 error_logger.error("TwitterEnginePro resolve before download failed: %s", exc)
 
         if candidate and ".mp4" in candidate:
-            safe_name = sanitize_filename(f"twitter_{hash(url) % 100000}_{quality_label}")
-            out_path = os.path.join(TEMP_DIR, safe_name + ".mp4")
-
-            def _download_direct() -> str | None:
-                headers = {
-                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131 Safari/537.36",
-                    "Referer": "https://twitter.com/",
-                    "Range": "bytes=0-",
-                }
-                with requests.get(candidate, headers=headers, stream=True, timeout=60) as r:
-                    if r.status_code not in (200, 206):
-                        return None
-                    ctype = (r.headers.get("Content-Type") or "").lower()
-                    if "text/html" in ctype or "application/json" in ctype:
-                        return None
-                    total = int(r.headers.get("Content-Length") or 0)
-                    done = 0
-                    with open(out_path, "wb") as f:
-                        for chunk in r.iter_content(chunk_size=1024 * 256):
-                            if not chunk:
-                                continue
-                            f.write(chunk)
-                            done += len(chunk)
-                            if progress_callback and total:
-                                try:
-                                    asyncio.run_coroutine_threadsafe(progress_callback({
-                                        "pct": int(done * 100 / total),
-                                        "downloaded": done,
-                                        "total": total,
-                                        "speed": 0,
-                                        "eta": 0,
-                                    }), loop)
-                                except Exception:
-                                    pass
-                    return out_path if os.path.exists(out_path) and os.path.getsize(out_path) > 2048 else None
-
             try:
-                direct_path = await loop.run_in_executor(get_executor(), _download_direct)
+                direct_path = await loop.run_in_executor(
+                    get_executor(),
+                    downloader._download_direct_sync,
+                    candidate,
+                    {"Referer": "https://twitter.com/"},
+                    60,
+                    progress_callback,
+                    loop,
+                    "xdl-twitter",
+                )
                 direct_path = downloader._require_audio_or_none(direct_path, source="direct-cdn")
                 if direct_path:
                     return direct_path
@@ -519,7 +435,6 @@ class RedditEngine(PlatformEngine):
         from services.reddit_scraper import scrape_reddit
         from middlewares.concurrency import get_executor
         import asyncio
-        import requests
 
         loop = asyncio.get_running_loop()
         candidate = play_url
@@ -536,44 +451,17 @@ class RedditEngine(PlatformEngine):
                 error_logger.error("RedditEnginePro resolve before download failed: %s", exc)
 
         if candidate and ".mp4" in candidate:
-            safe_name = sanitize_filename(f"reddit_{hash(url) % 100000}_{quality_label}")
-            out_path = os.path.join(TEMP_DIR, safe_name + ".mp4")
-
-            def _download_direct() -> str | None:
-                headers = {
-                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131 Safari/537.36",
-                    "Referer": "https://www.reddit.com/",
-                    "Range": "bytes=0-",
-                }
-                with requests.get(candidate, headers=headers, stream=True, timeout=90) as r:
-                    if r.status_code not in (200, 206):
-                        return None
-                    ctype = (r.headers.get("Content-Type") or "").lower()
-                    if "text/html" in ctype or "application/json" in ctype:
-                        return None
-                    total = int(r.headers.get("Content-Length") or 0)
-                    done = 0
-                    with open(out_path, "wb") as f:
-                        for chunk in r.iter_content(chunk_size=1024 * 256):
-                            if not chunk:
-                                continue
-                            f.write(chunk)
-                            done += len(chunk)
-                            if progress_callback and total:
-                                try:
-                                    asyncio.run_coroutine_threadsafe(progress_callback({
-                                        "pct": int(done * 100 / total),
-                                        "downloaded": done,
-                                        "total": total,
-                                        "speed": 0,
-                                        "eta": 0,
-                                    }), loop)
-                                except Exception:
-                                    pass
-                    return out_path if os.path.exists(out_path) and os.path.getsize(out_path) > 2048 else None
-
             try:
-                direct_path = await loop.run_in_executor(get_executor(), _download_direct)
+                direct_path = await loop.run_in_executor(
+                    get_executor(),
+                    downloader._download_direct_sync,
+                    candidate,
+                    {"Referer": "https://www.reddit.com/"},
+                    90,
+                    progress_callback,
+                    loop,
+                    "xdl-reddit",
+                )
                 direct_path = downloader._require_audio_or_none(direct_path, source="direct-cdn")
                 if direct_path:
                     return direct_path
