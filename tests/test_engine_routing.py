@@ -27,6 +27,12 @@ def test_platform_routing() -> None:
         "https://v.redd.it/abc123": "RedditEnginePro",
         "https://www.pinterest.com/pin/123/": "PinterestEnginePro",
         "https://pin.it/abc123": "PinterestEnginePro",
+        "https://www.threads.net/@user/post/123": "ThreadsEnginePro",
+        "https://www.snapchat.com/spotlight/123": "SnapchatEnginePro",
+        "https://vimeo.com/123456": "VimeoEnginePro",
+        "https://www.dailymotion.com/video/x123": "DailymotionEnginePro",
+        "https://dai.ly/x123": "DailymotionEnginePro",
+        "https://t.me/channel/123": "TelegramPublicEnginePro",
         "https://soundcloud.com/artist/track": "SoundCloudEnginePro",
         "https://open.spotify.com/track/123": "SpotifyEnginePro",
     }
@@ -37,7 +43,7 @@ def test_platform_routing() -> None:
 def test_engine_registry_matches_dashboard() -> None:
     engines = registered_engines()
     dashboard_names = [item["name"] for item in list_engines()]
-    assert len(engines) == 9
+    assert len(engines) == 14
     assert dashboard_names == [engine.name for engine in engines]
     assert all(item["status"] == "ready" for item in list_engines())
     assert all(item["domains"] > 0 for item in list_engines())

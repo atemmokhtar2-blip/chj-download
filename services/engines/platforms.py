@@ -633,6 +633,58 @@ class SpotifyEngine(PlatformEngine):
         raise RuntimeError("spotify_metadata_only")
 
 
-class GenericEngine(PlatformEngine):
+class YtDlpFallbackEngine(PlatformEngine):
+    """Lightweight named engine for platforms handled through yt-dlp fallback.
+
+    Some supported platforms do not need a bespoke scraper yet, but routing them
+    through a named engine improves diagnostics, dashboard visibility, and future
+    extension points while preserving the robust generic yt-dlp path.
+    """
+
+    platform_label = "Generic"
+    engine_profile = "yt-dlp-platform-fallback"
+
+    async def analyze(self, url: str) -> dict | None:
+        from services import downloader
+
+        fallback = await downloader._generic_analyze_url(url)
+        if fallback:
+            fallback["platform"] = self.platform_label
+            fallback["engine_profile"] = self.engine_profile
+        return self._tag(fallback)
+
+
+class ThreadsEngine(YtDlpFallbackEngine):
+    name = "ThreadsEnginePro"
+    platform_label = "Threads"
+    domains = ("threads.net", "www.threads.net")
+
+
+class VimeoEngine(YtDlpFallbackEngine):
+    name = "VimeoEnginePro"
+    platform_label = "Vimeo"
+    domains = ("vimeo.com", "player.vimeo.com")
+
+
+class DailymotionEngine(YtDlpFallbackEngine):
+    name = "DailymotionEnginePro"
+    platform_label = "Dailymotion"
+    domains = ("dailymotion.com", "dai.ly")
+
+
+class SnapchatEngine(YtDlpFallbackEngine):
+    name = "SnapchatEnginePro"
+    platform_label = "Snapchat"
+    domains = ("snapchat.com", "story.snapchat.com")
+
+
+class TelegramPublicEngine(YtDlpFallbackEngine):
+    name = "TelegramPublicEnginePro"
+    platform_label = "Telegram"
+    domains = ("t.me", "telegram.me", "telegram.dog")
+
+
+class GenericEngine(YtDlpFallbackEngine):
     name = "GenericEngine"
     domains = ()
+    platform_label = "Generic"
