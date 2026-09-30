@@ -28,10 +28,13 @@ def _platform(url: str) -> str:
     if "facebook" in host or "fb.watch" in host: return "Facebook"
     if "twitter" in host or host == "x.com": return "X"
     if "soundcloud" in host: return "SoundCloud"
-    if "reddit" in host: return "Reddit"
+    if "reddit" in host or host == "redd.it" or "v.redd.it" in host: return "Reddit"
     if "pinterest" in host or "pin.it" in host: return "Pinterest"
+    if "threads.net" in host: return "Threads"
+    if "snapchat" in host: return "Snapchat"
     if "vimeo" in host: return "Vimeo"
     if "dailymotion" in host or "dai.ly" in host: return "Dailymotion"
+    if host in {"t.me", "telegram.me", "telegram.dog"}: return "Telegram"
     return host or "Generic"
 
 
