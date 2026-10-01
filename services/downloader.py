@@ -45,18 +45,46 @@ def _platform(url: str) -> str:
     return host or "Generic"
 
 
-YOUTUBE_PLAYER_CLIENTS = {"android", "web", "ios", "mweb", "tv", "tv_embedded", "web_creator"}
+YOUTUBE_PLAYER_CLIENTS = {"android", "web", "ios", "mweb", "tv", "tv_embedded", "web_creator", "web_safari"}
 
 
 def _safe_youtube_clients() -> list[str]:
     """Filter env config to valid yt-dlp YouTube player_client values only."""
-    candidates = [YTDLP_CLIENT, "android", "ios", "web", "mweb", "tv_embedded", "web_creator"]
+    candidates = [YTDLP_CLIENT, "android", "ios", "web", "mweb", "tv_embedded", "web_creator", "web_safari"]
     out: list[str] = []
     for raw in candidates:
         item = str(raw or "").strip()
         if item in YOUTUBE_PLAYER_CLIENTS and item not in out:
             out.append(item)
-    return out or ["android", "web"]
+    return out or ["android", "ios", "web"]
+
+
+def _youtube_client_profiles() -> list[tuple[str, list[str]]]:
+    """World-class YouTube fallback matrix: mobile, web, TV, creator surfaces.
+
+    yt-dlp frequently succeeds or fails based on the player surface, not the URL.
+    Trying profile groups gives the extractor more player JSON options per pass,
+    while still keeping attempts bounded.
+    """
+    preferred = _safe_youtube_clients()
+    profiles: list[tuple[str, list[str]]] = [
+        ("env-preferred", preferred[:4]),
+        ("android-ios", ["android", "ios"]),
+        ("web-mweb", ["web", "mweb"]),
+        ("tv-embedded", ["tv_embedded", "web"]),
+        ("creator-web", ["web_creator", "web"]),
+        ("safari-web", ["web_safari", "web"]),
+        ("full-matrix", ["android", "ios", "web", "mweb", "tv_embedded", "web_creator"]),
+    ]
+    seen: set[tuple[str, ...]] = set()
+    out: list[tuple[str, list[str]]] = []
+    for name, clients in profiles:
+        filtered = [c for c in clients if c in YOUTUBE_PLAYER_CLIENTS]
+        key = tuple(filtered)
+        if filtered and key not in seen:
+            seen.add(key)
+            out.append((name, filtered))
+    return out
 
 
 def _base_opts(progress=None, loop: asyncio.AbstractEventLoop | None = None) -> dict:
@@ -85,6 +113,12 @@ def _base_opts(progress=None, loop: asyncio.AbstractEventLoop | None = None) -> 
         opts["cookiesfrombrowser"] = (YTDLP_COOKIES_FROM_BROWSER,)
     elif YTDLP_COOKIES_FILE and os.path.exists(YTDLP_COOKIES_FILE):
         opts["cookiefile"] = YTDLP_COOKIES_FILE
+    yt_po_token = (os.getenv("YOUTUBE_PO_TOKEN") or os.getenv("YT_PO_TOKEN") or "").strip()
+    yt_visitor_data = (os.getenv("YOUTUBE_VISITOR_DATA") or os.getenv("YT_VISITOR_DATA") or "").strip()
+    if yt_po_token:
+        opts.setdefault("extractor_args", {}).setdefault("youtube", {})["po_token"] = [yt_po_token]
+    if yt_visitor_data:
+        opts.setdefault("extractor_args", {}).setdefault("youtube", {})["visitor_data"] = [yt_visitor_data]
     if progress and loop:
         def hook(d):
             if d.get("status") != "downloading":
@@ -469,20 +503,23 @@ async def _generic_download_video(url: str, format_id: str = "best", quality_lab
     last_error: Exception | None = None
 
     for target, target_kind in targets:
-        clients = _youtube_client_candidates() if "youtu" in host and target_kind == "page-url" else [YTDLP_CLIENT]
-        for client in clients:
+        if "youtu" in host and target_kind == "page-url":
+            client_profiles = _youtube_client_profiles()
+        else:
+            client_profiles = [("default", [YTDLP_CLIENT] if YTDLP_CLIENT else [])]
+        for profile_name, clients in client_profiles:
             for fmt in formats:
-                opts = {**_base_opts(progress, loop), "format": fmt, "merge_output_format": "mp4"}
-                if client:
-                    opts.setdefault("extractor_args", {}).setdefault("youtube", {})["player_client"] = [client]
+                opts = {**_base_opts(progress, loop), "format": fmt, "merge_output_format": "mp4", "noplaylist": True}
+                if clients:
+                    opts.setdefault("extractor_args", {}).setdefault("youtube", {})["player_client"] = clients
                 try:
                     path = await _run_sync(_download_sync, target, opts)
                     path = _prepare_video_for_delivery(path, source=f"yt-dlp:{target_kind}")
                     if path:
-                        if target_kind != "page-url" or fmt != formats[0] or client != clients[0]:
+                        if target_kind != "page-url" or fmt != formats[0] or profile_name != client_profiles[0][0]:
                             logger.info(
-                                "Download fallback succeeded: target=%s client=%s format=%s url=%s",
-                                target_kind, client, fmt, url[:100],
+                                "Download fallback succeeded: target=%s profile=%s clients=%s format=%s url=%s",
+                                target_kind, profile_name, clients, fmt, url[:100],
                             )
                         return path
                     if target_kind == "direct-play-url":
@@ -493,8 +530,8 @@ async def _generic_download_video(url: str, format_id: str = "best", quality_lab
                 except Exception as exc:
                     last_error = exc
                     logger.warning(
-                        "Download attempt failed target=%s client=%s format=%s url=%s error=%s",
-                        target_kind, client, fmt, url[:100], exc,
+                        "Download attempt failed target=%s profile=%s clients=%s format=%s url=%s error=%s",
+                        target_kind, profile_name, clients, fmt, url[:100], exc,
                     )
                     continue
 

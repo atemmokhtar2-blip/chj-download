@@ -6,6 +6,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from services.youtube_scraper import _safe_selector
 from services.facebook_scraper import _from_ytdlp
+from services.downloader import _youtube_client_profiles
+from services.tiktok_scraper import resolve_tiktok
 
 
 class FakeYDL:
@@ -51,6 +53,16 @@ def test_youtube_selector_prefers_audio_merge_not_video_only() -> None:
     assert "best[ext=mp4]/best" not in selector
 
 
+def test_youtube_uses_multi_surface_client_profiles() -> None:
+    profiles = _youtube_client_profiles()
+    flat = {client for _name, clients in profiles for client in clients}
+    assert "android" in flat
+    assert "ios" in flat
+    assert "tv_embedded" in flat
+    assert "web_creator" in flat
+    assert any(len(clients) > 1 for _name, clients in profiles)
+
+
 def test_facebook_ytdlp_prefers_progressive_with_audio() -> None:
     with patch("yt_dlp.YoutubeDL", FakeYDL):
         result = _from_ytdlp("https://www.facebook.com/watch/?v=123")
@@ -87,8 +99,29 @@ def test_facebook_ytdlp_marks_video_only_for_page_fallback() -> None:
     assert result["prefer_page_download"] is True
 
 
+def test_tiktok_resolver_keeps_ranked_download_candidates() -> None:
+    def low(_url):
+        return {"play_url": "https://cdn.example/low.mp4", "source": "low", "height": 360, "title": "t"}
+
+    def high(_url):
+        return {"play_url": "https://cdn.example/high.mp4", "source": "high", "height": 1080, "title": "t"}
+
+    providers = [("low", low), ("high", high)]
+    with patch("services.tiktok_scraper.expand_tiktok_url", return_value="https://www.tiktok.com/@u/video/1234567890123456789"), \
+         patch("services.tiktok_scraper.PROVIDERS", providers), \
+         patch("services.tiktok_scraper._probe_media_url", return_value=(True, 2_000_000, "video/mp4")):
+        result = resolve_tiktok("https://vm.tiktok.com/x")
+    assert result is not None
+    urls = [c["play_url"] for c in result["download_candidates"]]
+    assert "https://cdn.example/high.mp4" in urls
+    assert "https://cdn.example/low.mp4" in urls
+    assert len(urls) == 2
+
+
 if __name__ == "__main__":
     test_youtube_selector_prefers_audio_merge_not_video_only()
+    test_youtube_uses_multi_surface_client_profiles()
     test_facebook_ytdlp_prefers_progressive_with_audio()
     test_facebook_ytdlp_marks_video_only_for_page_fallback()
-    print("youtube/facebook hardening tests passed")
+    test_tiktok_resolver_keeps_ranked_download_candidates()
+    print("youtube/facebook/tiktok hardening tests passed")

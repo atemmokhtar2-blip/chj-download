@@ -815,6 +815,20 @@ def resolve_tiktok(url: str) -> Optional[dict]:
             {"provider": n, "score": s, "source": r.get("source"), "has_play": bool(r.get("play_url")), "images": len(r.get("images") or [])}
             for s, n, r in candidates[:5]
         ]
+        # Keep a ranked direct-download matrix for the engine. A single TikTok
+        # mirror/CDN URL may expire, geoblock, or be muted; trying verified peers
+        # dramatically improves real-world success without re-resolving.
+        result["download_candidates"] = [
+            {
+                "provider": n,
+                "source": r.get("source"),
+                "score": s,
+                "play_url": r.get("play_url"),
+                "height": int(r.get("height") or 0),
+            }
+            for s, n, r in candidates[:8]
+            if r.get("play_url")
+        ]
         logger.info("TikTok resolve OK via %s score=%s candidates=%s", name, score, len(candidates))
         return result
 
@@ -881,6 +895,7 @@ def scrape_tiktok(url: str) -> Optional[dict]:
             "source": data.get("source") or "unknown",
             "provider_score": data.get("provider_score"),
             "provider_candidates": data.get("provider_candidates") or [],
+            "download_candidates": data.get("download_candidates") or [],
         }
     except Exception as e:
         logger.error(f"scrape_tiktok fatal (swallowed): {e}")
@@ -920,8 +935,20 @@ def download_tiktok_direct(play_url: str, out_path: str) -> Optional[str]:
     for attempt in range(MAX_RETRIES + 1):
         headers = headers_list[attempt % len(headers_list)]
         try:
-            s = _session(headers["User-Agent"])
-            with s.get(play_url, headers=headers, timeout=DOWNLOAD_TIMEOUT, stream=True) as r:
+            try:
+                from curl_cffi import requests as creq
+                response_ctx = creq.get(
+                    play_url,
+                    headers=headers,
+                    timeout=DOWNLOAD_TIMEOUT,
+                    stream=True,
+                    impersonate="chrome",
+                    allow_redirects=True,
+                )
+            except Exception:
+                s = _session(headers["User-Agent"])
+                response_ctx = s.get(play_url, headers=headers, timeout=DOWNLOAD_TIMEOUT, stream=True)
+            with response_ctx as r:
                 if r.status_code not in (200, 206):
                     logger.debug(f"direct status {r.status_code} attempt {attempt}")
                     time.sleep(0.5 * (attempt + 1))
