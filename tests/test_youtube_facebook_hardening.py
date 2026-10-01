@@ -7,7 +7,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from services.youtube_scraper import _safe_selector
 from services.facebook_scraper import _from_ytdlp
 from services.downloader import _youtube_client_profiles
-from services.tiktok_scraper import resolve_tiktok
+from services.tiktok_scraper import resolve_tiktok, _build_download_candidates, _from_item
 
 
 class FakeYDL:
@@ -99,6 +99,45 @@ def test_facebook_ytdlp_marks_video_only_for_page_fallback() -> None:
     assert result["prefer_page_download"] is True
 
 
+def test_tiktok_from_item_extracts_multiple_video_urls() -> None:
+    item = {
+        "desc": "clip",
+        "author": {"nickname": "maker"},
+        "video": {
+            "height": 1080,
+            "playAddr": {"UrlList": ["https://v.example/wm.mp4"]},
+            "downloadAddr": {"UrlList": ["https://v.example/no-watermark.mp4"]},
+            "bit_rate": [
+                {"play_addr": {"url_list": ["https://v.example/720.mp4"]}},
+                {"play_addr": {"url_list": ["https://v.example/1080.mp4"]}},
+            ],
+        },
+    }
+    result = _from_item(item)
+    assert result["play_url"].startswith("https://v.example/")
+    all_urls = [result["play_url"], *result["alternate_play_urls"]]
+    assert "https://v.example/no-watermark.mp4" in all_urls
+    assert "https://v.example/1080.mp4" in all_urls
+    assert len(set(all_urls)) == len(all_urls)
+
+
+def test_tiktok_download_matrix_includes_alternate_urls() -> None:
+    candidates = [
+        (2000, "aweme", {
+            "source": "aweme",
+            "play_url": "https://v.example/main.mp4",
+            "alternate_play_urls": ["https://v.example/alt-a.mp4", "https://v.example/alt-b.mp4"],
+            "height": 1080,
+        })
+    ]
+    matrix = _build_download_candidates(candidates)
+    assert [m["play_url"] for m in matrix[:3]] == [
+        "https://v.example/main.mp4",
+        "https://v.example/alt-a.mp4",
+        "https://v.example/alt-b.mp4",
+    ]
+
+
 def test_tiktok_resolver_keeps_ranked_download_candidates() -> None:
     def low(_url):
         return {"play_url": "https://cdn.example/low.mp4", "source": "low", "height": 360, "title": "t"}
@@ -123,5 +162,7 @@ if __name__ == "__main__":
     test_youtube_uses_multi_surface_client_profiles()
     test_facebook_ytdlp_prefers_progressive_with_audio()
     test_facebook_ytdlp_marks_video_only_for_page_fallback()
+    test_tiktok_from_item_extracts_multiple_video_urls()
+    test_tiktok_download_matrix_includes_alternate_urls()
     test_tiktok_resolver_keeps_ranked_download_candidates()
     print("youtube/facebook/tiktok hardening tests passed")
