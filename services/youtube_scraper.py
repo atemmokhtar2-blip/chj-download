@@ -124,9 +124,11 @@ def normalize_youtube_url(url: str) -> str:
 
 def _extract_sync(url: str) -> dict:
     profiles: list[tuple[str, dict[str, Any]]] = [
-        ("android", {"extractor_args": {"youtube": {"player_client": ["android", "web"]}}}),
-        ("web", {"extractor_args": {"youtube": {"player_client": ["web", "ios"]}}}),
-        ("ios", {"extractor_args": {"youtube": {"player_client": ["ios", "android"]}}}),
+        ("android_ios", {"extractor_args": {"youtube": {"player_client": ["android", "ios"]}}}),
+        ("web_mweb", {"extractor_args": {"youtube": {"player_client": ["web", "mweb"]}}}),
+        ("tv_embedded", {"extractor_args": {"youtube": {"player_client": ["tv_embedded", "web"]}}}),
+        ("web_creator", {"extractor_args": {"youtube": {"player_client": ["web_creator", "web"]}}}),
+        ("ios_android", {"extractor_args": {"youtube": {"player_client": ["ios", "android"]}}}),
     ]
     last_err: Exception | None = None
     for profile_name, extra in profiles:
@@ -192,12 +194,14 @@ def _content_kind(url: str, info: dict) -> str:
 
 def _safe_selector(height: int) -> str:
     h = int(height)
+    # Never expose a video-only selector to users. YouTube commonly serves
+    # DASH video and audio separately; forcing +bestaudio keeps Telegram output audible.
     return (
         f"bestvideo[height<={h}][ext=mp4]+bestaudio[ext=m4a]/"
         f"bestvideo[height<={h}]+bestaudio/"
-        f"best[height<={h}][ext=mp4]/"
+        f"best[height<={h}][acodec!=none][vcodec!=none]/"
         f"best[height<={h}]/"
-        "best[ext=mp4]/best"
+        "best[acodec!=none][vcodec!=none]/best"
     )
 
 
@@ -276,7 +280,13 @@ def scrape_youtube(url: str) -> dict | None:
     formats = info.get("formats") or []
     qualities, audio_formats = _build_qualities(formats)
     if not qualities and info.get("url"):
-        qualities = [{"label": "Best", "height": 0, "format_id": "best[ext=mp4]/best", "has_audio": True, "tier": "Best"}]
+        qualities = [{
+            "label": "Best",
+            "height": 0,
+            "format_id": "bestvideo[ext=mp4]+bestaudio[ext=m4a]/bestvideo+bestaudio/best[acodec!=none][vcodec!=none]/best",
+            "has_audio": True,
+            "tier": "Best",
+        }]
 
     duration_secs = int(info.get("duration") or 0)
     media_id = str(info.get("id") or info.get("display_id") or "")

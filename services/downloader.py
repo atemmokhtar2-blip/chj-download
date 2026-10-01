@@ -50,7 +50,7 @@ YOUTUBE_PLAYER_CLIENTS = {"android", "web", "ios", "mweb", "tv", "tv_embedded", 
 
 def _safe_youtube_clients() -> list[str]:
     """Filter env config to valid yt-dlp YouTube player_client values only."""
-    candidates = [YTDLP_CLIENT, "android", "web", "ios", "mweb"]
+    candidates = [YTDLP_CLIENT, "android", "ios", "web", "mweb", "tv_embedded", "web_creator"]
     out: list[str] = []
     for raw in candidates:
         item = str(raw or "").strip()

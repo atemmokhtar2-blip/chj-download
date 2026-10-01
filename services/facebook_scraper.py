@@ -211,12 +211,18 @@ def _from_ytdlp(url: str) -> dict | None:
         if not info:
             return None
         formats = info.get("formats") or []
-        best = None
+        progressive = None
+        video_only = None
         for fmt in sorted(formats, key=lambda f: (int(f.get("height") or 0), int(f.get("tbr") or 0)), reverse=True):
             fu = fmt.get("url")
-            if fu and (fmt.get("vcodec") not in (None, "none")):
-                best = fmt
+            if not fu or fmt.get("vcodec") in (None, "none"):
+                continue
+            if fmt.get("acodec") not in (None, "none"):
+                progressive = fmt
                 break
+            if video_only is None:
+                video_only = fmt
+        best = progressive or video_only
         play = (best or {}).get("url") or info.get("url")
         if not play:
             return None
@@ -231,6 +237,11 @@ def _from_ytdlp(url: str) -> dict | None:
         result["duration_secs"] = int(info.get("duration") or 0)
         result["duration"] = f"{result['duration_secs']}s" if result["duration_secs"] else "Unknown"
         result["media_id"] = str(info.get("id") or result["media_id"])
+        result["direct_has_audio"] = bool(best and best.get("acodec") not in (None, "none"))
+        result["direct_format_id"] = (best or {}).get("format_id")
+        result["direct_height"] = int((best or {}).get("height") or 0)
+        if not result["direct_has_audio"]:
+            result["prefer_page_download"] = True
         return result
     except Exception as exc:
         logger.info("Facebook yt-dlp provider failed: %s", exc)
