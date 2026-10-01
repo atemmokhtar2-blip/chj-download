@@ -359,6 +359,65 @@ def _require_audio_or_none(path: str | None, *, source: str = "direct") -> str |
     return path
 
 
+def _remux_mp4_faststart(path: str) -> str:
+    """Copy-remux MP4 for Telegram streaming compatibility without re-encoding.
+
+    Keeps the operation cheap (`-c copy`) while moving metadata to the front of
+    the file. If ffmpeg is unavailable or remux fails, the original verified file
+    is kept.
+    """
+    ffmpeg = shutil.which("ffmpeg")
+    if not ffmpeg or not path or not os.path.exists(path):
+        return path
+    ext = os.path.splitext(path)[1].lower()
+    if ext not in {".mp4", ".m4v", ".mov"}:
+        return path
+    fd, out_path = tempfile.mkstemp(prefix="xdl-faststart-", suffix=".mp4", dir=TEMP_DIR)
+    os.close(fd)
+    try:
+        proc = subprocess.run(
+            [
+                ffmpeg,
+                "-y",
+                "-i", path,
+                "-map", "0:v:0?",
+                "-map", "0:a:0?",
+                "-c", "copy",
+                "-movflags", "+faststart",
+                out_path,
+            ],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=90,
+            check=False,
+        )
+        if proc.returncode != 0 or not os.path.exists(out_path) or os.path.getsize(out_path) < 2048:
+            logger.debug("ffmpeg faststart remux skipped for %s: %s", path, proc.stderr[-300:])
+            _safe_remove(out_path)
+            return path
+        # Never replace a verified audio file with a silent remux.
+        if _has_audio_stream(out_path) is False:
+            logger.warning("Faststart remux produced no audio; keeping original: %s", path)
+            _safe_remove(out_path)
+            return path
+        _check_size(out_path)
+        _safe_remove(path)
+        return out_path
+    except Exception as exc:
+        logger.debug("ffmpeg faststart remux failed for %s: %s", path, exc)
+        _safe_remove(out_path)
+        return path
+
+
+def _prepare_video_for_delivery(path: str | None, *, source: str = "video") -> str | None:
+    """Final guard before Telegram upload/cache: verify audio and optimize MP4."""
+    path = _require_audio_or_none(path, source=source)
+    if not path:
+        return None
+    return _remux_mp4_faststart(path)
+
+
 def _download_sync(url: str, opts: dict) -> str | None:
     Path(TEMP_DIR).mkdir(parents=True, exist_ok=True)
     with yt_dlp.YoutubeDL(opts) as ydl:
@@ -418,7 +477,7 @@ async def _generic_download_video(url: str, format_id: str = "best", quality_lab
                     opts.setdefault("extractor_args", {}).setdefault("youtube", {})["player_client"] = [client]
                 try:
                     path = await _run_sync(_download_sync, target, opts)
-                    path = _require_audio_or_none(path, source=f"yt-dlp:{target_kind}")
+                    path = _prepare_video_for_delivery(path, source=f"yt-dlp:{target_kind}")
                     if path:
                         if target_kind != "page-url" or fmt != formats[0] or client != clients[0]:
                             logger.info(

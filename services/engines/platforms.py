@@ -118,7 +118,7 @@ class TikTokEngine(PlatformEngine):
                     get_executor(), download_tiktok_direct, candidate_play, direct_out
                 )
                 if path:
-                    path = downloader._require_audio_or_none(path, source="tiktok-direct")
+                    path = downloader._prepare_video_for_delivery(path, source="tiktok-direct")
                     if path:
                         if progress_callback:
                             try:
@@ -233,7 +233,7 @@ class PinterestEngine(PlatformEngine):
                     loop,
                     "xdl-pinterest",
                 )
-                direct_path = downloader._require_audio_or_none(direct_path, source="direct-cdn")
+                direct_path = downloader._prepare_video_for_delivery(direct_path, source="direct-cdn")
                 if direct_path:
                     return direct_path
             except Exception as exc:
@@ -310,7 +310,7 @@ class FacebookEngine(PlatformEngine):
                     loop,
                     "xdl-facebook",
                 )
-                direct_path = downloader._require_audio_or_none(direct_path, source="direct-cdn")
+                direct_path = downloader._prepare_video_for_delivery(direct_path, source="direct-cdn")
                 if direct_path:
                     return direct_path
             except Exception as exc:
@@ -386,7 +386,7 @@ class TwitterEngine(PlatformEngine):
                     loop,
                     "xdl-twitter",
                 )
-                direct_path = downloader._require_audio_or_none(direct_path, source="direct-cdn")
+                direct_path = downloader._prepare_video_for_delivery(direct_path, source="direct-cdn")
                 if direct_path:
                     return direct_path
             except Exception as exc:
@@ -462,7 +462,7 @@ class RedditEngine(PlatformEngine):
                     loop,
                     "xdl-reddit",
                 )
-                direct_path = downloader._require_audio_or_none(direct_path, source="direct-cdn")
+                direct_path = downloader._prepare_video_for_delivery(direct_path, source="direct-cdn")
                 if direct_path:
                     return direct_path
             except Exception as exc:
