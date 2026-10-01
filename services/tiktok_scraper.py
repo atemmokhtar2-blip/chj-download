@@ -4,9 +4,11 @@ never-crash design so one blocked IP / dead API cannot stop the bot.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
+import random
 import re
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -39,6 +41,50 @@ USER_AGENTS = [MOBILE_UA, DESKTOP_UA, ANDROID_UA]
 PROVIDER_TIMEOUT = 12
 DOWNLOAD_TIMEOUT = 90
 MAX_RETRIES = 2
+
+
+def _stable_device_id(seed: str) -> str:
+    """Generate a deterministic TikTok-like 19 digit device id per video/url."""
+    digest = hashlib.sha256(seed.encode("utf-8", "ignore")).hexdigest()
+    return str(7000000000000000000 + (int(digest[:15], 16) % 999999999999999999))
+
+
+def _aweme_common_params(seed: str) -> dict[str, str]:
+    device_id = _stable_device_id(seed)
+    return {
+        "aid": "1233",
+        "app_name": "musical_ly",
+        "version_code": "340000",
+        "version_name": "34.0.0",
+        "device_platform": "android",
+        "os": "android",
+        "device_type": "Pixel 7",
+        "device_brand": "google",
+        "os_version": "13",
+        "manifest_version_code": "2023400000",
+        "resolution": "1080*2400",
+        "dpi": "420",
+        "carrier_region": "US",
+        "region": "US",
+        "app_language": "en",
+        "language": "en",
+        "timezone_name": "UTC",
+        "device_id": device_id,
+        "iid": str(int(device_id) + 111111111111111111),
+        "openudid": hashlib.md5(seed.encode("utf-8", "ignore")).hexdigest()[:16],
+        "channel": "googleplay",
+    }
+
+
+def _mobile_api_headers() -> dict[str, str]:
+    return {
+        "User-Agent": ANDROID_UA,
+        "Accept": "application/json",
+        "Accept-Encoding": "gzip, deflate, br",
+        "X-Argus": "",
+        "X-Gorgon": "",
+        "X-Khronos": str(int(time.time())),
+    }
 
 
 def _session(ua: str = DESKTOP_UA) -> requests.Session:
@@ -565,30 +611,69 @@ def _walk_for_item(obj: Any, found: list) -> None:
             _walk_for_item(v, found)
 
 
-def _addr_url(addr: Any) -> Optional[str]:
+def _addr_urls(addr: Any) -> list[str]:
+    urls: list[str] = []
     if not addr:
-        return None
+        return urls
     if isinstance(addr, str) and addr.startswith("http"):
-        return addr
+        return [addr]
     if isinstance(addr, dict):
-        for key in ("UrlList", "url_list"):
-            lst = addr.get(key) or []
-            if lst:
-                return lst[0]
-        u = addr.get("uri") or addr.get("Url")
-        if isinstance(u, str) and u.startswith("http"):
-            return u
-    return None
+        for key in ("UrlList", "url_list", "urlList", "urls"):
+            for u in (addr.get(key) or []):
+                if isinstance(u, str) and u.startswith("http") and u not in urls:
+                    urls.append(u)
+        for key in ("uri", "Url", "url"):
+            u = addr.get(key)
+            if isinstance(u, str) and u.startswith("http") and u not in urls:
+                urls.append(u)
+    return urls
+
+
+def _addr_url(addr: Any) -> Optional[str]:
+    urls = _addr_urls(addr)
+    return urls[0] if urls else None
+
+
+def _rank_play_urls(urls: list[str]) -> list[str]:
+    def score(u: str) -> int:
+        lu = u.lower()
+        s = 0
+        if any(x in lu for x in ("download", "watermark=0", "mime_type=video_mp4")):
+            s += 120
+        if any(x in lu for x in ("playwm", "watermark", "wmplay")):
+            s -= 300
+        if any(x in lu for x in ("byteoversea", "bytecdn", "tiktokcdn", "muscdn", "akamaized")):
+            s += 80
+        if ".mp4" in lu:
+            s += 40
+        if "ratio=720p" in lu or "720" in lu:
+            s += 20
+        if "ratio=1080p" in lu or "1080" in lu:
+            s += 35
+        return s
+    unique = []
+    for u in urls:
+        if u and u.startswith("http") and u not in unique:
+            unique.append(u)
+    return sorted(unique, key=score, reverse=True)
 
 
 def _from_item(item: dict) -> dict:
     video = item.get("video") or {}
-    play = (
-        _addr_url(video.get("downloadAddr"))
-        or _addr_url(video.get("download_addr"))
-        or _addr_url(video.get("playAddr"))
-        or _addr_url(video.get("play_addr"))
-    )
+    play_urls: list[str] = []
+    for key in (
+        "downloadAddr", "download_addr", "playAddr", "play_addr",
+        "bit_rate", "bitrate", "dynamic_cover", "ai_dynamic_cover",
+    ):
+        val = video.get(key)
+        if isinstance(val, list):
+            for entry in val:
+                if isinstance(entry, dict):
+                    play_urls.extend(_addr_urls(entry.get("play_addr") or entry.get("playAddr") or entry.get("download_addr") or entry.get("downloadAddr")))
+        else:
+            play_urls.extend(_addr_urls(val))
+    play_urls = _rank_play_urls(play_urls)
+    play = play_urls[0] if play_urls else None
     author = item.get("author") or {}
     author_name = (
         author.get("nickname") or author.get("uniqueId") or item.get("authorName") or "TikTok User"
@@ -621,7 +706,7 @@ def _from_item(item: dict) -> dict:
                 if u and str(u).startswith("http"):
                     images.append(str(u))
                     break
-    return _result(
+    result = _result(
         play or "",
         title=title,
         uploader=author_name,
@@ -631,6 +716,8 @@ def _from_item(item: dict) -> dict:
         source="page_json",
         images=images,
     )
+    result["alternate_play_urls"] = play_urls[1:10]
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -643,43 +730,75 @@ def provider_aweme(url: str) -> Optional[dict]:
         return None
     hosts = [
         "api16-normal-c-useast1a.tiktokv.com",
+        "api22-normal-c-useast1a.tiktokv.com",
         "api19-normal-c-useast1a.tiktokv.com",
+        "api16-va.tiktokv.com",
         "api.tiktokv.com",
     ]
+    endpoints = [
+        ("/aweme/v1/feed/", {"aweme_id": vid}),
+        ("/aweme/v1/multi/aweme/detail/", {"aweme_ids": f"[{vid}]"}),
+        ("/aweme/v1/aweme/detail/", {"aweme_id": vid}),
+    ]
+    base_params = _aweme_common_params(url)
+    headers = _mobile_api_headers()
     for host in hosts:
-        api = (
-            f"https://{host}/aweme/v1/feed/"
-            f"?aweme_id={vid}&version_code=300000&"
-            f"version_name=30.0.0&device_platform=android&aid=1233"
-        )
-        r = _safe_get(api, session=_session(ANDROID_UA), timeout=PROVIDER_TIMEOUT)
-        if r is None or r.status_code != 200:
-            continue
-        try:
-            data = r.json()
-        except Exception:
-            continue
-        aweme_list = data.get("aweme_list") or []
-        if not aweme_list:
-            # try aweme_detail shape
+        for path, specific in endpoints:
+            params = dict(base_params)
+            params.update(specific)
+            api = f"https://{host}{path}?{urlencode(params)}"
+            r = _safe_get(api, session=_session(ANDROID_UA), headers=headers, timeout=PROVIDER_TIMEOUT)
+            if r is None or r.status_code != 200:
+                continue
+            try:
+                data = r.json()
+            except Exception:
+                continue
+            aweme_list = data.get("aweme_list") or data.get("aweme_details") or []
             detail = data.get("aweme_detail") or data.get("aweme") or {}
             if detail:
-                aweme_list = [detail]
-        for item in aweme_list:
-            if str(item.get("aweme_id") or item.get("id") or "") != str(vid):
-                # still try first item
-                pass
-            meta = _from_item(item)
-            if meta.get("play_url"):
-                meta["source"] = "aweme"
-                meta["webpage_url"] = url
-                return meta
+                aweme_list = [detail] + list(aweme_list or [])
+            for item in aweme_list:
+                if not isinstance(item, dict):
+                    continue
+                meta = _from_item(item)
+                if meta.get("play_url") or meta.get("images"):
+                    meta["source"] = "aweme"
+                    meta["webpage_url"] = url
+                    return meta
     return None
 
 
 # ---------------------------------------------------------------------------
 # Orchestrator — run providers in parallel, first success wins
 # ---------------------------------------------------------------------------
+
+
+def provider_oembed(url: str) -> Optional[dict]:
+    """Official-ish lightweight endpoint: metadata fallback and canonical expansion."""
+    api = f"https://www.tiktok.com/oembed?url={quote(url, safe='')}"
+    r = _safe_get(api, session=_session(DESKTOP_UA), timeout=PROVIDER_TIMEOUT)
+    if r is None or r.status_code != 200:
+        return None
+    try:
+        data = r.json()
+    except Exception:
+        return None
+    title = data.get("title") or "TikTok Video"
+    author = data.get("author_name") or "TikTok User"
+    thumb = data.get("thumbnail_url") or ""
+    return {
+        "title": title,
+        "uploader": author,
+        "duration": 0,
+        "thumbnail": thumb,
+        "play_url": None,
+        "height": 0,
+        "webpage_url": url,
+        "source": "oembed",
+        "platform": "TikTok",
+        "media_type": "video",
+    }
 
 
 def provider_ytdlp(url: str) -> Optional[dict]:
@@ -698,6 +817,20 @@ def provider_ytdlp(url: str) -> Optional[dict]:
         "extract_flat": False,
         "noplaylist": True,
         "socket_timeout": PROVIDER_TIMEOUT,
+        "http_headers": {
+            "User-Agent": DESKTOP_UA,
+            "Referer": "https://www.tiktok.com/",
+            "Accept-Language": "en-US,en;q=0.9,ar;q=0.8",
+        },
+        "extractor_args": {
+            "tiktok": {
+                "api_hostname": [
+                    "api16-normal-c-useast1a.tiktokv.com",
+                    "api22-normal-c-useast1a.tiktokv.com",
+                    "api16-va.tiktokv.com",
+                ]
+            }
+        },
     }
     try:
         with yt_dlp.YoutubeDL(opts) as ydl:
@@ -723,9 +856,11 @@ def provider_ytdlp(url: str) -> Optional[dict]:
             if "watermark" in fmt_note.lower():
                 score -= 5000
             ranked.append((score, fu, h))
+        ranked_urls: list[str] = []
         if ranked:
             ranked.sort(key=lambda x: x[0], reverse=True)
             play, height = ranked[0][1], ranked[0][2]
+            ranked_urls = [u for _s, u, _h in ranked[:10]]
         if not play:
             play = info.get("url")
         if not play:
@@ -736,7 +871,7 @@ def provider_ytdlp(url: str) -> Optional[dict]:
             for e in info["entries"] or []:
                 if e and e.get("url"):
                     images.append(e["url"])
-        return _result(
+        result = _result(
             play,
             title=info.get("title") or "TikTok Video",
             uploader=info.get("uploader") or info.get("creator") or "TikTok User",
@@ -747,21 +882,48 @@ def provider_ytdlp(url: str) -> Optional[dict]:
             webpage_url=info.get("webpage_url") or url,
             images=images or None,
         )
+        result["alternate_play_urls"] = [u for u in ranked_urls if u != play]
+        return result
     except Exception as e:
         logger.debug(f"provider_ytdlp: {e}")
         return None
 
 
 PROVIDERS: list[tuple[str, Callable[[str], Optional[dict]]]] = [
-    ("tikwm", provider_tikwm),
+    ("aweme", provider_aweme),
     ("ytdlp", provider_ytdlp),
     ("page_json", provider_page_json),
-    ("aweme", provider_aweme),
+    ("tikwm", provider_tikwm),
+    ("oembed", provider_oembed),
     ("ssstik", provider_ssstik),
     ("snaptik", provider_snaptik),
     ("musicaldown", provider_musicaldown),
     ("tikdown", provider_tikdown),
 ]
+
+
+def _build_download_candidates(candidates: list[tuple[int, str, dict]]) -> list[dict]:
+    out: list[dict] = []
+    seen: set[str] = set()
+    for score, provider, result in candidates:
+        urls = []
+        if result.get("play_url"):
+            urls.append(result.get("play_url"))
+        urls.extend(result.get("alternate_play_urls") or [])
+        for idx, play in enumerate(_rank_play_urls([str(u) for u in urls if u])):
+            if not play or play in seen:
+                continue
+            seen.add(play)
+            out.append({
+                "provider": provider,
+                "source": result.get("source"),
+                "score": score - idx,
+                "play_url": play,
+                "height": int(result.get("height") or 0),
+            })
+            if len(out) >= 18:
+                return out
+    return out
 
 
 def resolve_tiktok(url: str) -> Optional[dict]:
@@ -818,17 +980,7 @@ def resolve_tiktok(url: str) -> Optional[dict]:
         # Keep a ranked direct-download matrix for the engine. A single TikTok
         # mirror/CDN URL may expire, geoblock, or be muted; trying verified peers
         # dramatically improves real-world success without re-resolving.
-        result["download_candidates"] = [
-            {
-                "provider": n,
-                "source": r.get("source"),
-                "score": s,
-                "play_url": r.get("play_url"),
-                "height": int(r.get("height") or 0),
-            }
-            for s, n, r in candidates[:8]
-            if r.get("play_url")
-        ]
+        result["download_candidates"] = _build_download_candidates(candidates)
         logger.info("TikTok resolve OK via %s score=%s candidates=%s", name, score, len(candidates))
         return result
 
