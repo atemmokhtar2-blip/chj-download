@@ -100,25 +100,42 @@ class TikTokEngine(PlatformEngine):
         direct_out = os.path.join(TEMP_DIR, safe_name)
 
         candidate_play = play_url
-        if not candidate_play:
-            try:
-                meta = await loop.run_in_executor(get_executor(), scrape_tiktok, url)
-                candidate_play = meta.get("play_url") if meta else None
-                if meta:
-                    download_logger.info(
-                        "TikTokEnginePro selected source=%s score=%s",
-                        meta.get("source"), meta.get("provider_score"),
-                    )
-            except Exception as exc:
-                error_logger.error("TikTokEnginePro resolve before download failed: %s", exc)
-
+        direct_candidates: list[dict] = []
+        resolved_page_url = url
         if candidate_play:
+            direct_candidates.append({"provider": "telegram-play-url", "play_url": candidate_play, "score": 9999})
+        try:
+            meta = await loop.run_in_executor(get_executor(), scrape_tiktok, url)
+            if meta:
+                resolved_page_url = meta.get("webpage_url") or meta.get("url") or url
+                for item in meta.get("download_candidates") or []:
+                    if item.get("play_url"):
+                        direct_candidates.append(item)
+                if meta.get("play_url"):
+                    direct_candidates.append({
+                        "provider": meta.get("source") or "scrape_tiktok",
+                        "play_url": meta.get("play_url"),
+                        "score": meta.get("provider_score") or 0,
+                    })
+                download_logger.info(
+                    "TikTokEnginePro selected source=%s score=%s candidates=%s",
+                    meta.get("source"), meta.get("provider_score"), len(direct_candidates),
+                )
+        except Exception as exc:
+            error_logger.error("TikTokEnginePro resolve before download failed: %s", exc)
+
+        seen_direct: set[str] = set()
+        for idx, item in enumerate(sorted(direct_candidates, key=lambda x: int(x.get("score") or 0), reverse=True), start=1):
+            candidate = str(item.get("play_url") or "")
+            if not candidate or candidate in seen_direct:
+                continue
+            seen_direct.add(candidate)
             try:
                 path = await loop.run_in_executor(
-                    get_executor(), download_tiktok_direct, candidate_play, direct_out
+                    get_executor(), download_tiktok_direct, candidate, f"{direct_out}-{idx}"
                 )
                 if path:
-                    path = downloader._prepare_video_for_delivery(path, source="tiktok-direct")
+                    path = downloader._prepare_video_for_delivery(path, source=f"tiktok-direct:{item.get('provider')}")
                     if path:
                         if progress_callback:
                             try:
@@ -126,14 +143,24 @@ class TikTokEngine(PlatformEngine):
                             except Exception:
                                 pass
                         return downloader._enforce_max_file_size(path)
+                download_logger.info("TikTok direct candidate failed/was silent provider=%s idx=%s", item.get("provider"), idx)
             except downloader.FileTooLargeError:
                 raise
             except Exception as exc:
-                error_logger.error("TikTokEnginePro direct download failed: %s", exc)
+                error_logger.error("TikTokEnginePro direct candidate failed provider=%s: %s", item.get("provider"), exc)
 
-        return await downloader._generic_download_video(
-            url, format_id, quality_label, progress_callback, play_url
-        )
+        # Final fallback must use the page URL, not the failed CDN play_url, so yt-dlp
+        # can re-extract/merge with its own TikTok logic.
+        for page_url in dict.fromkeys([resolved_page_url, url]):
+            try:
+                path = await downloader._generic_download_video(page_url, format_id, quality_label, progress_callback, None)
+                if path:
+                    return path
+            except downloader.FileTooLargeError:
+                raise
+            except Exception as exc:
+                error_logger.error("TikTokEnginePro page fallback failed for %s: %s", page_url[:90], exc)
+        return None
 
     async def download_audio(self, url: str, progress_callback: Callable | None = None) -> str | None:
         # Keep audio on yt-dlp/ffmpeg path for reliable mp3 conversion.
