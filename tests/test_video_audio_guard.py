@@ -5,7 +5,13 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from services.downloader import _generic_download_video, _video_format_candidates, _require_audio_or_none
+from services.downloader import (
+    _generic_download_video,
+    _prepare_video_for_delivery,
+    _remux_mp4_faststart,
+    _video_format_candidates,
+    _require_audio_or_none,
+)
 
 
 def test_video_format_candidates_prefer_merged_audio() -> None:
@@ -34,6 +40,22 @@ def test_require_audio_keeps_unverifiable_file(tmp_path: Path) -> None:
     path.write_bytes(b"not-real-video")
     with patch("services.downloader._has_audio_stream", return_value=None):
         assert _require_audio_or_none(str(path), source="test") == str(path)
+    assert path.exists()
+
+
+def test_prepare_video_rejects_silent_before_delivery(tmp_path: Path) -> None:
+    path = tmp_path / "silent.mp4"
+    path.write_bytes(b"video-only")
+    with patch("services.downloader._has_audio_stream", return_value=False):
+        assert _prepare_video_for_delivery(str(path), source="test") is None
+    assert not path.exists()
+
+
+def test_faststart_keeps_original_when_ffmpeg_missing(tmp_path: Path) -> None:
+    path = tmp_path / "video.mp4"
+    path.write_bytes(b"video+audio")
+    with patch("services.downloader.shutil.which", return_value=None):
+        assert _remux_mp4_faststart(str(path)) == str(path)
     assert path.exists()
 
 
@@ -74,6 +96,10 @@ if __name__ == "__main__":
         test_require_audio_removes_verified_silent_file(Path(d))
     with tempfile.TemporaryDirectory() as d:
         test_require_audio_keeps_unverifiable_file(Path(d))
+    with tempfile.TemporaryDirectory() as d:
+        test_prepare_video_rejects_silent_before_delivery(Path(d))
+    with tempfile.TemporaryDirectory() as d:
+        test_faststart_keeps_original_when_ffmpeg_missing(Path(d))
     with tempfile.TemporaryDirectory() as d:
         test_direct_play_url_falls_back_to_page_url_for_audio(Path(d))
     print("video audio guard tests passed")
