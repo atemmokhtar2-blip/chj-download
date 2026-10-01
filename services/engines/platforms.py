@@ -285,20 +285,24 @@ class FacebookEngine(PlatformEngine):
 
         loop = asyncio.get_running_loop()
         candidate = play_url
+        prefer_page_download = False
+        normalized_url = url
         if not candidate:
             try:
                 meta = await loop.run_in_executor(get_executor(), scrape_facebook, url)
                 if meta:
+                    normalized_url = meta.get("webpage_url") or meta.get("url") or url
+                    prefer_page_download = bool(meta.get("prefer_page_download"))
                     candidate = meta.get("hd_url") if format_id == "hd" else meta.get("play_url")
                     candidate = candidate or meta.get("play_url")
                     download_logger.info(
-                        "FacebookEnginePro selected source=%s score=%s",
-                        meta.get("source"), meta.get("provider_score"),
+                        "FacebookEnginePro selected source=%s score=%s direct_has_audio=%s prefer_page=%s",
+                        meta.get("source"), meta.get("provider_score"), meta.get("direct_has_audio"), prefer_page_download,
                     )
             except Exception as exc:
                 error_logger.error("FacebookEnginePro resolve before download failed: %s", exc)
 
-        if candidate:
+        if candidate and not prefer_page_download:
             try:
                 direct_path = await loop.run_in_executor(
                     get_executor(),
@@ -316,7 +320,21 @@ class FacebookEngine(PlatformEngine):
             except Exception as exc:
                 error_logger.error("FacebookEnginePro direct download failed: %s", exc)
 
-        return await downloader._generic_download_video(url, format_id, quality_label, progress_callback)
+        for page_url in dict.fromkeys([
+            normalized_url,
+            url,
+            url.replace("://www.facebook.com", "://m.facebook.com"),
+            url.replace("://www.facebook.com", "://mbasic.facebook.com"),
+        ]):
+            try:
+                path = await downloader._generic_download_video(page_url, format_id, quality_label, progress_callback)
+                if path:
+                    return path
+            except downloader.FileTooLargeError:
+                raise
+            except Exception as exc:
+                error_logger.error("FacebookEnginePro page fallback failed for %s: %s", page_url[:90], exc)
+        return None
 
 
 class TwitterEngine(PlatformEngine):
