@@ -350,34 +350,76 @@ def _download_direct_sync(
     return None
 
 
+def _ffmpeg_path() -> str | None:
+    ffmpeg = shutil.which("ffmpeg")
+    if ffmpeg:
+        return ffmpeg
+    try:
+        import imageio_ffmpeg
+        return imageio_ffmpeg.get_ffmpeg_exe()
+    except Exception as exc:
+        logger.debug("imageio-ffmpeg unavailable: %s", exc)
+        return None
+
+
+def _ffprobe_path() -> str | None:
+    return shutil.which("ffprobe")
+
+
 def _has_audio_stream(path: str) -> bool | None:
-    """Return True/False when ffprobe is available, None when audio cannot be verified."""
-    ffprobe = shutil.which("ffprobe")
-    if not ffprobe or not path or not os.path.exists(path):
+    """Return whether a local media file contains an audio stream.
+
+    Uses ffprobe when installed; otherwise falls back to ffmpeg stderr parsing.
+    The project now depends on imageio-ffmpeg, so even hosts without system
+    ffmpeg can still perform a real audio check.
+    """
+    if not path or not os.path.exists(path):
+        return None
+    ffprobe = _ffprobe_path()
+    if ffprobe:
+        try:
+            proc = subprocess.run(
+                [
+                    ffprobe,
+                    "-v", "error",
+                    "-select_streams", "a",
+                    "-show_entries", "stream=index",
+                    "-of", "json",
+                    path,
+                ],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                timeout=20,
+                check=False,
+            )
+            if proc.returncode == 0:
+                payload = json.loads(proc.stdout or "{}")
+                return bool(payload.get("streams"))
+            logger.debug("ffprobe audio check failed for %s: %s", path, proc.stderr[:200])
+        except Exception as exc:
+            logger.debug("ffprobe audio check skipped for %s: %s", path, exc)
+
+    ffmpeg = _ffmpeg_path()
+    if not ffmpeg:
         return None
     try:
         proc = subprocess.run(
-            [
-                ffprobe,
-                "-v", "error",
-                "-select_streams", "a",
-                "-show_entries", "stream=index",
-                "-of", "json",
-                path,
-            ],
+            [ffmpeg, "-hide_banner", "-i", path, "-f", "null", "-"],
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
-            timeout=20,
+            timeout=25,
             check=False,
         )
-        if proc.returncode != 0:
-            logger.debug("ffprobe audio check failed for %s: %s", path, proc.stderr[:200])
-            return None
-        payload = json.loads(proc.stdout or "{}")
-        return bool(payload.get("streams"))
+        output = f"{proc.stdout}\n{proc.stderr}".lower()
+        if "audio:" in output or "stream #" in output and ": audio" in output:
+            return True
+        if "video:" in output or "stream #" in output:
+            return False
+        return None
     except Exception as exc:
-        logger.debug("ffprobe audio check skipped for %s: %s", path, exc)
+        logger.debug("ffmpeg audio check skipped for %s: %s", path, exc)
         return None
 
 
@@ -390,6 +432,10 @@ def _require_audio_or_none(path: str | None, *, source: str = "direct") -> str |
         logger.warning("Rejected %s download without audio stream: %s", source, path)
         _safe_remove(path)
         return None
+    if has_audio is None and _ffmpeg_path():
+        logger.warning("Rejected %s download because audio stream could not be verified: %s", source, path)
+        _safe_remove(path)
+        return None
     return path
 
 
@@ -400,7 +446,7 @@ def _remux_mp4_faststart(path: str) -> str:
     the file. If ffmpeg is unavailable or remux fails, the original verified file
     is kept.
     """
-    ffmpeg = shutil.which("ffmpeg")
+    ffmpeg = _ffmpeg_path()
     if not ffmpeg or not path or not os.path.exists(path):
         return path
     ext = os.path.splitext(path)[1].lower()
@@ -597,12 +643,17 @@ async def analyze_url(url: str) -> dict | None:
 async def download_video(url: str, format_id: str = "best", quality_label: str = "best", progress=None, play_url: str | None = None) -> str | None:
     engine = _select_engine(url)
     try:
-        return await engine.download_video(url, format_id, quality_label, progress, play_url)
+        path = await engine.download_video(url, format_id, quality_label, progress, play_url)
+        path = _prepare_video_for_delivery(path, source=f"engine:{getattr(engine, 'name', 'unknown')}")
+        if path:
+            return path
+        logger.warning("Engine returned no verified-audio video (%s); forcing generic merge fallback for %s", getattr(engine, "name", "unknown"), url[:120])
+        return await _generic_download_video(url, format_id, quality_label, progress, None)
     except FileTooLargeError:
         raise
     except Exception as exc:
         logger.warning("Engine video download failed (%s) for %s: %s", getattr(engine, "name", "unknown"), url[:120], exc)
-        return await _generic_download_video(url, format_id, quality_label, progress, play_url)
+        return await _generic_download_video(url, format_id, quality_label, progress, None)
 
 
 async def download_audio(url: str, progress=None) -> str | None:
