@@ -60,6 +60,32 @@ async def _quiet_edit(edit_fn, *args, **kwargs):
         return None
 
 
+def _safe_store(fn, *args, **kwargs):
+    """Run post-send bookkeeping (cache/DB stats) without failing the download.
+
+    Once the media has been delivered to Telegram, a follow-up failure (cache
+    write, stats log, fingerprint index) must NEVER surface as "download
+    failed" to the user — the file already arrived.
+    """
+    try:
+        return fn(*args, **kwargs)
+    except Exception as exc:
+        logger.warning("Post-send bookkeeping failed (%s): %s", getattr(fn, "__name__", "fn"), exc)
+        return None
+
+
+async def _safe_vault(context, sent_message):
+    """Archive a sent file to the storage channel best-effort.
+
+    A vault failure is cosmetic — it must never mark a delivered file as failed.
+    """
+    try:
+        return await archive_to_vault(context.bot, sent_message)
+    except Exception as exc:
+        logger.warning("Vault archive failed: %s", exc)
+        return None
+
+
 def _extract_urls(text: str) -> list[str]:
     """Pull every URL from a message, stripping trailing punctuation."""
     urls = []
@@ -442,7 +468,7 @@ async def download_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     else:
                         media_group.append(InputMediaPhoto(media=it["file_id"], caption=caption, parse_mode="HTML" if caption else None))
                 await _upload_with_retry(lambda: query.message.reply_media_group(media=media_group))
-                increment_downloads(user.id)
+                _safe_store(increment_downloads, user.id)
                 release_user_download(user.id)
                 return
             except TelegramError as e:
@@ -478,7 +504,7 @@ async def download_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     await query.message.reply_photo(photo=fid)
                 else:
                     await query.message.reply_video(video=fid)
-            increment_downloads(user.id)
+            _safe_store(increment_downloads, user.id)
             release_user_download(user.id)
             return
         except TelegramError as e:
@@ -602,7 +628,8 @@ async def _run_download(query, context, info, user, lang, quality_label,
                                 )
 
                         sent = await _upload_with_retry(_send_single_photo)
-                        set_cache(
+                        _safe_store(
+                            set_cache,
                             info["url"], quality_label, "image",
                             sent.photo[-1].file_id, title, platform,
                         )
@@ -616,7 +643,8 @@ async def _run_download(query, context, info, user, lang, quality_label,
                                 )
 
                         sent = await _upload_with_retry(_send_single_video)
-                        set_cache(
+                        _safe_store(
+                            set_cache,
                             info["url"], quality_label, "video",
                             sent.video.file_id, title, platform,
                         )
@@ -664,9 +692,10 @@ async def _run_download(query, context, info, user, lang, quality_label,
                             elif msg.video:
                                 album_entries.append({"file_id": msg.video.file_id, "type": "video"})
                         if len(album_entries) >= 2:
-                            set_cache_album(info["url"], album_entries, title, platform)
+                            _safe_store(set_cache_album, info["url"], album_entries, title, platform)
                         elif album_entries:
-                            set_cache(
+                            _safe_store(
+                                set_cache,
                                 info["url"], quality_label, album_entries[0]["type"],
                                 album_entries[0]["file_id"], title, platform,
                             )
@@ -693,8 +722,9 @@ async def _run_download(query, context, info, user, lang, quality_label,
 
             sent = await _upload_with_retry(_send_photo)
             _fid = sent.photo[-1].file_id
-            _vault = await archive_to_vault(context.bot, sent)
-            set_cache_with_meta(
+            _vault = await _safe_vault(context, sent)
+            _safe_store(
+                set_cache_with_meta,
                 info["url"], quality_label, "image", _fid,
                 title=title, platform=platform,
                 media_id=str(info.get("media_id") or ""),
@@ -718,8 +748,9 @@ async def _run_download(query, context, info, user, lang, quality_label,
 
             sent = await _upload_with_retry(_send_audio)
             _fid = sent.audio.file_id
-            _vault = await archive_to_vault(context.bot, sent)
-            set_cache_with_meta(
+            _vault = await _safe_vault(context, sent)
+            _safe_store(
+                set_cache_with_meta,
                 info["url"], quality_label, "audio", _fid,
                 title=title, platform=platform,
                 media_id=str(info.get("media_id") or ""),
@@ -788,8 +819,9 @@ async def _run_download(query, context, info, user, lang, quality_label,
 
                 sent = await _upload_with_retry(_send_video)
                 _fid = sent.video.file_id
-                _vault = await archive_to_vault(context.bot, sent)
-                set_cache_with_meta(
+                _vault = await _safe_vault(context, sent)
+                _safe_store(
+                    set_cache_with_meta,
                     info["url"], quality_label, "video", _fid,
                     title=title, platform=platform,
                     media_id=str(info.get("media_id") or ""),
@@ -797,8 +829,12 @@ async def _run_download(query, context, info, user, lang, quality_label,
                     vault_message_id=(_vault or {}).get("message_id"),
                 )
 
-        increment_downloads(user.id)
-        log_download(user.id, info["url"], title, platform, quality_label, "audio" if is_audio else ("image" if is_image else "video"))
+        _safe_store(increment_downloads, user.id)
+        _safe_store(
+            log_download,
+            user.id, info["url"], title, platform, quality_label,
+            "audio" if is_audio else ("image" if is_image else "video"),
+        )
     finally:
         if file_path and os.path.exists(file_path):
             _cleanup_file(file_path)
