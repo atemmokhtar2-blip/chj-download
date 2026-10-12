@@ -17,25 +17,35 @@ from telegram.error import BadRequest
 
 logger = logging.getLogger(__name__)
 
-NOT_MODIFIED = "message is not modified"
+# These Telegram errors describe benign, transient edit states — not real
+# failures. Swallow them so a tap on a stale/unchanged button, or an edit to a
+# message the user already deleted, never surfaces "unexpected error".
+BENIGN_EDIT_ERRORS = (
+    "message is not modified",
+    "message to edit not found",
+    "message can't be edited",
+    "there is no caption in the message to edit",
+)
 
 
-def is_not_modified_error(error: Exception) -> bool:
-    return NOT_MODIFIED in str(error).lower()
+def is_benign_edit_error(error: Exception) -> bool:
+    msg = str(error).lower()
+    return any(token in msg for token in BENIGN_EDIT_ERRORS)
 
 
-async def safe_edit(edit_callable, **kwargs):
-    """Invoke a bound Telegram edit method, ignoring the harmless not-modified error.
+async def safe_edit(edit_callable, *args, **kwargs):
+    """Invoke a bound Telegram edit method, ignoring benign edit errors.
 
     Usage::
 
         await safe_edit(query.edit_message_text, text=..., parse_mode="HTML")
-        await safe_edit(message.edit_text, text=..., reply_markup=...)
+        await safe_edit(message.edit_text, "text", parse_mode="HTML")
+        await safe_edit(message.edit_caption, "caption", parse_mode="HTML")
     """
     try:
-        return await edit_callable(**kwargs)
+        return await edit_callable(*args, **kwargs)
     except BadRequest as exc:
-        if is_not_modified_error(exc):
-            logger.debug("Ignored benign 'message is not modified' edit error.")
+        if is_benign_edit_error(exc):
+            logger.debug("Ignored benign Telegram edit error: %s", exc)
             return None
         raise

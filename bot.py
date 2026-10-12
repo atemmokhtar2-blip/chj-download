@@ -99,7 +99,11 @@ async def global_error_handler(update: object, context) -> None:
     """
     err = context.error
     system_logger.exception("Unhandled error: %s", err)
-    reason = summarize_error(err)
+    try:
+        from utils.helpers import summarize_error  # defensive: the handler must never crash itself
+        reason = summarize_error(err)
+    except Exception:
+        reason = str(err or "Unknown error")[:220]
     try:
         if update and getattr(update, "effective_message", None):
             from locales import t

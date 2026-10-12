@@ -43,12 +43,21 @@ from config.settings import (
     BATCH_MAX_URLS,
 )
 from utils.media_split import split_video_parts
+from utils.telegram_safe import safe_edit
 
 logger = logging.getLogger(__name__)
 
 UPLOAD_RETRIES = 3
 UPLOAD_RETRY_DELAY = 2
 _URL_RE = re.compile(r"https?://\S+", re.IGNORECASE)
+
+
+async def _quiet_edit(edit_fn, *args, **kwargs):
+    """Best-effort status edit: never raise on benign/transient Telegram errors."""
+    try:
+        return await safe_edit(edit_fn, *args, **kwargs)
+    except TelegramError:
+        return None
 
 
 def _extract_urls(text: str) -> list[str]:
@@ -120,17 +129,17 @@ async def process_url(update: Update, context: ContextTypes.DEFAULT_TYPE, user, 
         info = await analyze_url(url)
     except Exception as exc:
         logger.exception("URL analysis crashed for %s: %s", url[:120], exc)
-        await status_msg.edit_text(
+        await _quiet_edit(status_msg.edit_text, 
             t(lang, "analysis_failed_reason", reason=escape(summarize_error(exc))),
             parse_mode="HTML",
         )
         return
     if not info:
-        await status_msg.edit_text(t(lang, "analysis_failed"), parse_mode="HTML")
+        await _quiet_edit(status_msg.edit_text, t(lang, "analysis_failed"), parse_mode="HTML")
         return
 
     if info.get("error_reason") and not (info.get("downloadable", True) or info.get("album_items")):
-        await status_msg.edit_text(_friendly_error(lang, info), parse_mode="HTML")
+        await _quiet_edit(status_msg.edit_text, _friendly_error(lang, info), parse_mode="HTML")
         return
 
     context.user_data["current_info"] = info
@@ -156,18 +165,18 @@ async def process_url(update: Update, context: ContextTypes.DEFAULT_TYPE, user, 
 
     if info.get("thumbnail"):
         try:
-            await status_msg.delete()
             await msg.reply_photo(
                 photo=info["thumbnail"],
                 caption=caption,
                 parse_mode="HTML",
                 reply_markup=InlineKeyboardMarkup(keyboard)
             )
+            await status_msg.delete()
             return
         except Exception:
             pass
 
-    await status_msg.edit_text(caption, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard))
+    await _quiet_edit(status_msg.edit_text, caption, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard))
 
 
 async def handle_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -352,7 +361,7 @@ async def download_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if data == "dl_cancel":
         await query.answer()
         edit_fn = query.edit_message_caption if query.message.caption else query.edit_message_text
-        await edit_fn(t(lang, "cancelled"))
+        await _quiet_edit(edit_fn, t(lang, "cancelled"))
         return
 
     if token:
@@ -366,7 +375,7 @@ async def download_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if data == "dl_unavailable" or info.get("downloadable") is False:
         await query.answer(t(lang, "spotify_download_unavailable_alert"), show_alert=True)
         edit_fn = query.edit_message_caption if query.message.caption else query.edit_message_text
-        await edit_fn(_friendly_error(lang, info), parse_mode="HTML")
+        await _quiet_edit(edit_fn, _friendly_error(lang, info), parse_mode="HTML")
         return
 
     if not try_acquire_user_download(user.id):
@@ -415,7 +424,7 @@ async def download_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         try:
             edit_fn = query.edit_message_caption if query.message.caption else query.edit_message_text
             chosen = "image" if is_image else ("album" if is_album else f"video {quality_label}")
-            await edit_fn(f"⚡ <b>Smart Download selected:</b> {chosen}", parse_mode="HTML")
+            await _quiet_edit(edit_fn, f"⚡ <b>Smart Download selected:</b> {chosen}", parse_mode="HTML")
         except Exception:
             pass
 
@@ -424,7 +433,7 @@ async def download_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if cached_album and len(cached_album) >= 2:
             try:
                 edit_fn = query.edit_message_caption if query.message.caption else query.edit_message_text
-                await edit_fn(t(lang, "from_cache"), parse_mode="HTML")
+                await _quiet_edit(edit_fn, t(lang, "from_cache"), parse_mode="HTML")
                 media_group = []
                 for i, it in enumerate(cached_album[:ALBUM_MAX_ITEMS]):
                     caption = t(lang, "completed") if i == 0 else None
@@ -449,7 +458,7 @@ async def download_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if cached and cached.get("file_id"):
         try:
             edit_fn = query.edit_message_caption if query.message.caption else query.edit_message_text
-            await edit_fn(t(lang, "from_cache"), parse_mode="HTML")
+            await _quiet_edit(edit_fn, t(lang, "from_cache"), parse_mode="HTML")
             delivered = False
             # Prefer vault copy_message (durable CDN path)
             if cached.get("vault_chat_id") and cached.get("vault_message_id"):
@@ -491,7 +500,7 @@ async def download_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         in_use, max_slots = active_global_slots()
         if in_use >= max_slots:
-            await edit_fn(t(lang, "queue_wait", current=in_use, maximum=max_slots), parse_mode="HTML")
+            await _quiet_edit(edit_fn, t(lang, "queue_wait", current=in_use, maximum=max_slots), parse_mode="HTML")
     except Exception:
         pass
 
@@ -523,21 +532,21 @@ async def download_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                                 is_audio, is_image, is_album, edit_fn, update_progress,
                                 audio_bitrate=audio_bitrate)
     except asyncio.TimeoutError:
-        await edit_fn(t(lang, "server_busy"))
+        await _quiet_edit(edit_fn, t(lang, "server_busy"))
     except FileTooLargeError:
-        await edit_fn(t(lang, "file_too_large", max_size=f"{MAX_FILE_SIZE_MB}MB"))
+        await _quiet_edit(edit_fn, t(lang, "file_too_large", max_size=f"{MAX_FILE_SIZE_MB}MB"))
     except Exception as e:
         logger.exception("Download error for user=%s url=%s: %s", user.id, str(info.get("url", ""))[:120], e)
         reason = summarize_error(e)
         try:
-            await edit_fn(
+            await _quiet_edit(edit_fn, 
                 t(lang, "download_failed_reason", reason=escape(reason)),
                 parse_mode="HTML",
             )
         except Exception:
             # Never let a failed status edit mask the original download error.
             try:
-                await edit_fn(t(lang, "download_failed"))
+                await _quiet_edit(edit_fn, t(lang, "download_failed"))
             except Exception:
                 pass
     finally:
@@ -564,16 +573,16 @@ async def _run_download(query, context, info, user, lang, quality_label,
                     idx = prog.get("album_index", 0)
                     tot = prog.get("album_total", len(items))
                     txt = t(lang, "album_downloading", current=idx, total=tot)
-                    await edit_fn(txt, parse_mode="HTML")
+                    await _quiet_edit(edit_fn, txt, parse_mode="HTML")
                 except Exception:
                     pass
 
-            await edit_fn(t(lang, "preparing_download"), parse_mode="HTML")
+            await _quiet_edit(edit_fn, t(lang, "preparing_download"), parse_mode="HTML")
             downloaded = await download_album(items, album_progress)
             if not downloaded:
                 raise Exception("Album download failed")
 
-            await edit_fn(
+            await _quiet_edit(edit_fn, 
                 t(lang, "album_uploading", count=len(downloaded)),
                 parse_mode="HTML",
             )
@@ -669,10 +678,10 @@ async def _run_download(query, context, info, user, lang, quality_label,
                 file_path = None
 
         elif is_image:
-            await edit_fn(t(lang, "preparing_download"), parse_mode="HTML")
+            await _quiet_edit(edit_fn, t(lang, "preparing_download"), parse_mode="HTML")
             file_path = await download_image(info["url"], info.get("image_url"))
             if not file_path: raise Exception("Download failed")
-            await edit_fn(t(lang, "uploading"), parse_mode="HTML")
+            await _quiet_edit(edit_fn, t(lang, "uploading"), parse_mode="HTML")
             safe_title = _safe_upload_name(title)
 
             async def _send_photo():
@@ -694,10 +703,10 @@ async def _run_download(query, context, info, user, lang, quality_label,
             )
 
         elif is_audio:
-            await edit_fn(t(lang, "preparing_audio"), parse_mode="HTML")
+            await _quiet_edit(edit_fn, t(lang, "preparing_audio"), parse_mode="HTML")
             file_path = await download_audio(info["url"], update_progress, bitrate=audio_bitrate)
             if not file_path: raise Exception("Download failed")
-            await edit_fn(t(lang, "uploading"), parse_mode="HTML")
+            await _quiet_edit(edit_fn, t(lang, "uploading"), parse_mode="HTML")
             safe_title = _safe_upload_name(title)
 
             async def _send_audio():
@@ -729,7 +738,7 @@ async def _run_download(query, context, info, user, lang, quality_label,
             if str(quality_label).lower() in ("best", "best_quality"):
                 format_id = "best"
 
-            await edit_fn(t(lang, "preparing_download"), parse_mode="HTML")
+            await _quiet_edit(edit_fn, t(lang, "preparing_download"), parse_mode="HTML")
 
             # Allow oversized files so they can be split into Telegram-friendly
             # parts instead of being deleted mid-download.
@@ -743,7 +752,7 @@ async def _run_download(query, context, info, user, lang, quality_label,
                 raise Exception("Download failed")
 
             if AUTO_SPLIT_LARGE_VIDEOS and os.path.getsize(file_path) > MAX_FILE_SIZE_BYTES:
-                await edit_fn(t(lang, "splitting_video"), parse_mode="HTML")
+                await _quiet_edit(edit_fn, t(lang, "splitting_video"), parse_mode="HTML")
                 parts = split_video_parts(file_path, MAX_FILE_SIZE_BYTES)
                 if not parts:
                     raise FileTooLargeError(os.path.getsize(file_path), MAX_FILE_SIZE_BYTES)
@@ -766,7 +775,7 @@ async def _run_download(query, context, info, user, lang, quality_label,
                         if part and part != file_path and os.path.exists(part):
                             _cleanup_file(part)
             else:
-                await edit_fn(t(lang, "uploading"), parse_mode="HTML")
+                await _quiet_edit(edit_fn, t(lang, "uploading"), parse_mode="HTML")
                 safe_title = _safe_upload_name(title)
 
                 async def _send_video():
