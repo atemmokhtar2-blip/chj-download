@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import threading
 import time
 from dataclasses import dataclass
 from collections import defaultdict, deque
@@ -9,6 +10,8 @@ from config.settings import RATE_LIMIT_SECONDS, RATE_LIMIT_BURST, HOURLY_DOWNLOA
 _recent: dict[int, deque[float]] = defaultdict(deque)
 _downloads_hour: dict[int, deque[float]] = defaultdict(deque)
 _downloads_day: dict[int, deque[float]] = defaultdict(deque)
+# Check and record requests atomically: Telegram updates may be handled concurrently.
+_lock = threading.RLock()
 
 
 @dataclass
@@ -18,35 +21,43 @@ class RateLimitResult:
     wait_seconds: int = 0
 
 
-def _trim(q: deque[float], window: int) -> None:
-    now = time.time()
-    while q and now - q[0] > window:
+def _trim(q: deque[float], window: int, now: float | None = None) -> None:
+    current = time.monotonic() if now is None else now
+    while q and current - q[0] >= window:
         q.popleft()
 
 
-def check_rate_limit_detailed(user_id: int) -> RateLimitResult:
-    now = time.time()
+def _check_rate_limit_locked(user_id: int, now: float) -> RateLimitResult:
     recent = _recent[user_id]
     hour = _downloads_hour[user_id]
     day = _downloads_day[user_id]
-    _trim(recent, RATE_LIMIT_SECONDS)
-    _trim(hour, 3600)
-    _trim(day, 86400)
+    _trim(recent, RATE_LIMIT_SECONDS, now)
+    _trim(hour, 3600, now)
+    _trim(day, 86400, now)
+
     if len(day) >= DAILY_DOWNLOAD_LIMIT:
-        return RateLimitResult(False, "daily", int(86400 - (now - day[0])))
+        return RateLimitResult(False, "daily", max(1, int(86400 - (now - day[0]))))
     if len(hour) >= HOURLY_DOWNLOAD_LIMIT:
-        return RateLimitResult(False, "hourly", int(3600 - (now - hour[0])))
+        return RateLimitResult(False, "hourly", max(1, int(3600 - (now - hour[0]))))
     if len(recent) >= RATE_LIMIT_BURST:
         return RateLimitResult(False, "burst", max(1, int(RATE_LIMIT_SECONDS - (now - recent[0]))))
     return RateLimitResult(True)
 
 
+def check_rate_limit_detailed(user_id: int) -> RateLimitResult:
+    with _lock:
+        return _check_rate_limit_locked(user_id, time.monotonic())
+
+
 def mark_download(user_id: int) -> bool:
-    result = check_rate_limit_detailed(user_id)
-    if not result.allowed:
-        return False
-    now = time.time()
-    _recent[user_id].append(now)
-    _downloads_hour[user_id].append(now)
-    _downloads_day[user_id].append(now)
-    return True
+    # Keep the lock held through the check and all three appends. Otherwise two
+    # concurrent requests can both pass the check and exceed the configured limit.
+    with _lock:
+        now = time.monotonic()
+        result = _check_rate_limit_locked(user_id, now)
+        if not result.allowed:
+            return False
+        _recent[user_id].append(now)
+        _downloads_hour[user_id].append(now)
+        _downloads_day[user_id].append(now)
+        return True
