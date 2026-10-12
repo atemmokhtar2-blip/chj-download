@@ -266,7 +266,9 @@ class PinterestEngine(PlatformEngine):
             except Exception as exc:
                 error_logger.error("PinterestEnginePro direct download failed: %s", exc)
 
-        return await downloader._generic_download_video(url, format_id, quality_label, progress_callback)
+        # Fall back to yt-dlp but keep the resolved direct CDN URL as the first
+        # target so a video pin can never degrade into its poster image.
+        return await downloader._generic_download_video(url, format_id, quality_label, progress_callback, candidate)
 
 
 class FacebookEngine(PlatformEngine):

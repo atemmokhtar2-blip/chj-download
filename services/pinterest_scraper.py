@@ -162,7 +162,10 @@ def _probe_media_url(url: str, session: requests.Session | None = None, timeout:
             return result
         if "text/html" in ctype or "application/json" in ctype:
             return result
-        if any(token in ctype for token in ("image/", "video/", "application/octet-stream")):
+        if any(token in ctype for token in (
+            "image/", "video/", "application/octet-stream",
+            "mpegurl", "x-mpegurl",  # HLS playlists (video pins without mp4)
+        )):
             result["ok"] = True
             return result
         # Some Pinterest CDN responses omit a useful content-type; trust known CDN hosts.
@@ -603,11 +606,15 @@ def _from_pinterest_downloader(url: str) -> dict | None:
         if image_url:
             image_url = upgrade_to_originals(image_url)
 
-        # Video formats — prefer highest non-HLS MP4
+        # Video — accept all shapes the library/API can return:
+        #   {"video": {"formats": [{"url", "height", "quality", ...}]}} (normalised)
+        #   {"videos": {"video_list": {"V_HLSV4": {"url": ...}}}} (raw API fallback)
         video_url = None
         duration_secs = 0
         video = pin.get("video") or {}
-        formats = video.get("formats") or []
+        if isinstance(video, str) and video.startswith("http"):
+            video_url = video
+        formats = video.get("formats") or [] if isinstance(video, dict) else []
         mp4s = []
         for fmt in formats:
             if not isinstance(fmt, dict):
@@ -628,6 +635,10 @@ def _from_pinterest_downloader(url: str) -> dict | None:
                 duration_secs = int((mp4s[0][2].get("duration") or 0) / 1000)
             except Exception:
                 duration_secs = 0
+        # Library sometimes normalises away the raw `videos` dict; recover it so
+        # HLS-only video pins are still recognised as video, never as image.
+        if not video_url:
+            video_url = _best_video_url(pin.get("videos"))
 
         media_type_raw = (pin.get("media_type") or "").lower()
         if video_url or media_type_raw == "video":
@@ -652,7 +663,7 @@ def _from_pinterest_downloader(url: str) -> dict | None:
             qualities = []
 
         ext = "mp4" if media_type == "video" else "jpg"
-        if image_url and "." in image_url.split("?")[0]:
+        if media_type != "video" and image_url and "." in image_url.split("?")[0]:
             e = image_url.split("?")[0].rsplit(".", 1)[-1].lower()
             if e in ("jpg", "jpeg", "png", "webp", "gif"):
                 ext = e
@@ -733,7 +744,13 @@ def scrape_pinterest(url: str) -> dict | None:
         for candidate in candidates:
             _score_result(candidate, session=session)
         candidates.sort(key=lambda item: item.get("provider_score", 0), reverse=True)
-        best = candidates[0]
+        # A pin that has a playable video must never be served as its poster
+        # image. Pick the strongest *video* candidate whenever one exists.
+        video_candidates = [
+            c for c in candidates
+            if c.get("media_type") == "video" and c.get("play_url")
+        ]
+        best = video_candidates[0] if video_candidates else candidates[0]
         best["provider_candidates"] = [
             {
                 "source": c.get("source"),
