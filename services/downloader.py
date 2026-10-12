@@ -42,6 +42,17 @@ def _platform(url: str) -> str:
     if "vimeo" in host: return "Vimeo"
     if "dailymotion" in host or "dai.ly" in host: return "Dailymotion"
     if host in {"t.me", "telegram.me", "telegram.dog"}: return "Telegram"
+    if "likee" in host: return "Likee"
+    if "kwai" in host or "kw.ai" in host: return "Kwai"
+    if "twitch" in host: return "Twitch"
+    if "bilibili" in host or "b23.tv" in host: return "Bilibili"
+    if "vk.com" in host or "vkvideo" in host or "vk.cc" in host: return "VK"
+    if "tumblr" in host or "tmblr.co" in host: return "Tumblr"
+    if "imgur" in host: return "Imgur"
+    if "streamable" in host: return "Streamable"
+    if "coub" in host: return "Coub"
+    if "ok.ru" in host or "odnoklassniki" in host: return "Odnoklassniki"
+    if "spotify" in host: return "Spotify"
     return host or "Generic"
 
 

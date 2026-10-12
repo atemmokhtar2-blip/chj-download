@@ -1,19 +1,29 @@
 from __future__ import annotations
 
 from services.engines.platforms import (
+    BilibiliEngine,
+    CoubEngine,
     DailymotionEngine,
     FacebookEngine,
+    ImgurEngine,
     InstagramEngine,
+    KwaiEngine,
+    LikeeEngine,
+    OdnoklassnikiEngine,
     PinterestEngine,
     RedditEngine,
     SnapchatEngine,
     SoundCloudEngine,
     SpotifyEngine,
+    StreamableEngine,
     TelegramPublicEngine,
     ThreadsEngine,
     TikTokEngine,
+    TumblrEngine,
+    TwitchEngine,
     TwitterEngine,
     VimeoEngine,
+    VkEngine,
     YouTubeEngine,
 )
 
@@ -39,6 +49,16 @@ def registered_engines():
         TelegramPublicEngine(),
         SoundCloudEngine(),
         SpotifyEngine(),
+        LikeeEngine(),
+        KwaiEngine(),
+        TwitchEngine(),
+        BilibiliEngine(),
+        VkEngine(),
+        TumblrEngine(),
+        ImgurEngine(),
+        StreamableEngine(),
+        CoubEngine(),
+        OdnoklassnikiEngine(),
     ]
 
 

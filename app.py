@@ -54,6 +54,12 @@ from config.settings import (  # noqa: E402
     STORAGE_CHANNEL_ID,
 )
 
+try:
+    from services.engines import registered_engines as _registered_engines
+    ENGINE_COUNT = len(_registered_engines())
+except Exception:
+    ENGINE_COUNT = 24
+
 @spaces.GPU
 def dummy_gpu_task():
     return "GPU Initialized"
@@ -335,7 +341,7 @@ button.primary { background: var(--xd-accent) !important; color: #03100b !import
 
 with gr.Blocks(css=CUSTOM_CSS, title="X Downloader Control Center") as demo:
     gr.Markdown(
-        """
+        f"""
 <div class="dashboard-hero">
 
 # X Downloader Control Center
@@ -345,13 +351,16 @@ with gr.Blocks(css=CUSTOM_CSS, title="X Downloader Control Center") as demo:
   <span class="xd-badge">YouTube / Shorts</span>
   <span class="xd-badge">TikTok No Watermark</span>
   <span class="xd-badge">Instagram Reels</span>
+  <span class="xd-badge">Twitch Clips</span>
+  <span class="xd-badge">Bilibili / VK</span>
+  <span class="xd-badge">KWAI / Likee</span>
   <span class="xd-badge">SoundCloud Audio</span>
   <span class="xd-badge">MP3 Audio Only</span>
   <span class="xd-badge">Smart Cache</span>
 </div>
 
 <div class="xd-grid">
-  <div class="xd-mini"><strong>14</strong>Active platform engines</div>
+  <div class="xd-mini"><strong>{ENGINE_COUNT}</strong>Active platform engines</div>
   <div class="xd-mini"><strong>MP3</strong>زر صوت فقط يظهر مع كل فيديو</div>
   <div class="xd-mini"><strong>Live</strong>Metrics, cache, limits and health</div>
 </div>

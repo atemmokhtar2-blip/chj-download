@@ -623,6 +623,66 @@ class TelegramPublicEngine(YtDlpFallbackEngine):
     domains = ("t.me", "telegram.me", "telegram.dog")
 
 
+class LikeeEngine(YtDlpFallbackEngine):
+    name = "LikeeEnginePro"
+    platform_label = "Likee"
+    domains = ("likee.video", "likee.com", "l.likee.video", "mobile.likee.video")
+
+
+class KwaiEngine(YtDlpFallbackEngine):
+    name = "KwaiEnginePro"
+    platform_label = "Kwai"
+    domains = ("kwai.com", "kw.ai", "s.kw.ai", "m.kwai.com", "kwai-video.com")
+
+
+class TwitchEngine(YtDlpFallbackEngine):
+    name = "TwitchEnginePro"
+    platform_label = "Twitch"
+    domains = ("twitch.tv", "clips.twitch.tv", "m.twitch.tv", "player.twitch.tv")
+
+
+class BilibiliEngine(YtDlpFallbackEngine):
+    name = "BilibiliEnginePro"
+    platform_label = "Bilibili"
+    domains = ("bilibili.com", "b23.tv", "bilibili.tv", "m.bilibili.com")
+
+
+class VkEngine(YtDlpFallbackEngine):
+    name = "VkEnginePro"
+    platform_label = "VK"
+    domains = ("vk.com", "vkvideo.ru", "vk.cc", "m.vk.com", "vkvideo.cc")
+
+
+class TumblrEngine(YtDlpFallbackEngine):
+    name = "TumblrEnginePro"
+    platform_label = "Tumblr"
+    domains = ("tumblr.com", "www.tumblr.com", "at.tumblr.com", "tmblr.co")
+
+
+class ImgurEngine(YtDlpFallbackEngine):
+    name = "ImgurEnginePro"
+    platform_label = "Imgur"
+    domains = ("imgur.com", "i.imgur.com", "m.imgur.com", "stack.imgur.com")
+
+
+class StreamableEngine(YtDlpFallbackEngine):
+    name = "StreamableEnginePro"
+    platform_label = "Streamable"
+    domains = ("streamable.com", "www.streamable.com")
+
+
+class CoubEngine(YtDlpFallbackEngine):
+    name = "CoubEnginePro"
+    platform_label = "Coub"
+    domains = ("coub.com", "www.coub.com")
+
+
+class OdnoklassnikiEngine(YtDlpFallbackEngine):
+    name = "OdnoklassnikiEnginePro"
+    platform_label = "Odnoklassniki"
+    domains = ("ok.ru", "m.ok.ru", "odnoklassniki.ru", "m.odnoklassniki.ru")
+
+
 class GenericEngine(YtDlpFallbackEngine):
     name = "GenericEngine"
     domains = ()

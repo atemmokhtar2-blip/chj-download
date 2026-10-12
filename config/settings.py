@@ -71,7 +71,16 @@ SUPPORTED_DOMAINS = [
     "soundcloud.com", "m.soundcloud.com",
     "spotify.com", "open.spotify.com", "play.spotify.com",
     "t.me", "telegram.me", "telegram.org",
-    "likee.video", "likee.com",
+    "likee.video", "likee.com", "l.likee.video", "mobile.likee.video",
+    "kwai.com", "kw.ai", "s.kw.ai", "m.kwai.com", "kwai-video.com",
+    "twitch.tv", "clips.twitch.tv", "m.twitch.tv", "player.twitch.tv",
+    "bilibili.com", "b23.tv", "bilibili.tv", "m.bilibili.com",
+    "vk.com", "vkvideo.ru", "vk.cc", "m.vk.com", "vkvideo.cc",
+    "tumblr.com", "at.tumblr.com", "tmblr.co",
+    "imgur.com", "i.imgur.com", "m.imgur.com", "stack.imgur.com",
+    "streamable.com",
+    "coub.com",
+    "ok.ru", "m.ok.ru", "odnoklassniki.ru", "m.odnoklassniki.ru",
 ]
 
 os.makedirs(TEMP_DIR, exist_ok=True)

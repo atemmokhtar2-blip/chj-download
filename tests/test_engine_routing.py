@@ -35,6 +35,16 @@ def test_platform_routing() -> None:
         "https://t.me/channel/123": "TelegramPublicEnginePro",
         "https://soundcloud.com/artist/track": "SoundCloudEnginePro",
         "https://open.spotify.com/track/123": "SpotifyEnginePro",
+        "https://likee.video/@user/video/123": "LikeeEnginePro",
+        "https://www.kwai.com/video/123": "KwaiEnginePro",
+        "https://clips.twitch.tv/AbcDef123": "TwitchEnginePro",
+        "https://www.bilibili.com/video/BV123": "BilibiliEnginePro",
+        "https://vk.com/video-123_456": "VkEnginePro",
+        "https://www.tumblr.com/user/123": "TumblrEnginePro",
+        "https://imgur.com/gallery/abc": "ImgurEnginePro",
+        "https://streamable.com/abc123": "StreamableEnginePro",
+        "https://coub.com/view/abc123": "CoubEnginePro",
+        "https://ok.ru/video/123": "OdnoklassnikiEnginePro",
     }
     for url, expected in cases.items():
         assert_engine(url, expected)
@@ -43,7 +53,7 @@ def test_platform_routing() -> None:
 def test_engine_registry_matches_dashboard() -> None:
     engines = registered_engines()
     dashboard_names = [item["name"] for item in list_engines()]
-    assert len(engines) == 14
+    assert len(engines) == 24
     assert dashboard_names == [engine.name for engine in engines]
     assert all(item["status"] == "ready" for item in list_engines())
     assert all(item["domains"] > 0 for item in list_engines())

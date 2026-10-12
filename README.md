@@ -16,7 +16,7 @@ pinned: true
 
 ## ✨ المميزات (Features)
 - **🚀 سرعة خارقة:** تحميل ومعالجة الفيديوهات في ثوانٍ معدودة.
-- **🎬 دعم منصات متعددة:** (YouTube, TikTok, Instagram, Facebook, Twitter/X, Threads, Reddit, Pinterest, Snapchat, Vimeo, Dailymotion, SoundCloud).
+- **🎬 دعم منصات متعددة:** (YouTube, TikTok, Instagram, Facebook, Twitter/X, Threads, Reddit, Pinterest, Snapchat, Vimeo, Dailymotion, SoundCloud, Twitch, Bilibili, VK, Tumblr, Imgur, Streamable, Coub, OK.ru, Likee, Kwai).
 - **🏆 جودة عالية:** دعم تحميل الفيديوهات بجودة تصل إلى 4K و MP3 عالي النقاء.
 - **📱 بدون علامة مائية:** تحميل فيديوهات تيك توك وكوايي بدون العلامة المائية المزعجة.
 - **🎁 نظام مكافآت:** احصل على نقاط مجانية يومياً ومن خلال دعوة أصدقائك.
@@ -28,9 +28,23 @@ pinned: true
 - Instagram (Reels & Stories)
 - Facebook
 - Twitter / X
+- Threads
+- Reddit
 - Pinterest
 - Snapchat
+- Vimeo
+- Dailymotion
 - SoundCloud (High Quality Audio)
+- Twitch (Clips)
+- Bilibili
+- VK
+- Tumblr
+- Imgur (Images & Galleries)
+- Streamable
+- Coub
+- OK.ru (Odnoklassniki)
+- Likee
+- Kwai
 - والمزيد...
 
 ## 🖥 لوحة التحكم الجديدة
