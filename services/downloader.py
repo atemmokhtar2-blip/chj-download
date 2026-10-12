@@ -874,23 +874,102 @@ def _select_engine(url: str):
     return first_match(url, registered_engines(), UniversalEngine())
 
 
-def _finalize_analysis(info: dict | None) -> dict | None:
-    """Sanitize qualities for every platform before the result reaches the UI.
+def _format_height_candidates(formats) -> list:
+    """Extract real video quality candidates from raw yt-dlp format rows.
 
-    Only standard, real resolutions (144p–2160p) survive; scraper-provided
-    labels like ``Best`` / ``HD`` are dropped so the keyboard never advertises
-    a quality that was not actually probed on the media. The intelligence card
-    is kept in sync with the sanitized list.
+    Only rows that actually carry a video stream (``vcodec`` not ``none``) and a
+    numeric height are considered. Audio-only rows and placeholder rows are
+    excluded so the keyboard can never advertise a quality that does not exist.
+    """
+    out: list[dict] = []
+    for f in formats or []:
+        if not isinstance(f, dict):
+            continue
+        if f.get("vcodec") in (None, "none"):
+            continue
+        try:
+            height = int(f.get("height") or 0)
+        except (TypeError, ValueError):
+            height = 0
+        if height <= 0:
+            continue
+        out.append({
+            "label": f"{height}p",
+            "format_id": str(f.get("format_id") or "best"),
+            "has_audio": f.get("acodec") not in (None, "none"),
+        })
+    return out
+
+
+def _heights_from_urls(*urls) -> list[int]:
+    """Parse concrete video heights embedded in CDN filenames (e.g. Reddit's DASH_720)."""
+    heights: list[int] = []
+    for value in urls or []:
+        url = str(value or "")
+        if not url.startswith("http"):
+            continue
+        m = re.search(r"DASH_(\d{3,4})", url)
+        if m:
+            heights.append(int(m.group(1)))
+            continue
+        m = re.search(r"(\d{3,4})x(\d{3,4})", url)
+        if m:
+            heights.append(min(int(m.group(1)), int(m.group(2))))
+    return heights
+
+
+def _collect_quality_candidates(info: dict) -> list:
+    """Gather every real, probed quality hint from an analyzed media result.
+
+    Sources, in order of confidence:
+      1. Existing ``qualities`` entries (YouTube already builds safe selectors,
+         and generic yt-dlp analysis already probed every DASH/HLS rendition).
+      2. Raw ``formats`` rows that carry a true video stream + height.
+      3. Single-file direct height hints (``direct_height`` on Facebook/others).
+      4. Concrete heights embedded in CDN URLs (``DASH_720``, ``1920x1080``).
+
+    Fake labels (``Best`` / ``HD``) are left for ``normalize_qualities`` to drop;
+    this function's job is only to widen the real signal, never to invent one.
+    """
+    candidates: list[dict] = [
+        q for q in (info.get("qualities") or []) if isinstance(q, dict)
+    ]
+    candidates.extend(_format_height_candidates(info.get("formats")))
+
+    try:
+        direct_height = int(info.get("direct_height") or 0)
+    except (TypeError, ValueError):
+        direct_height = 0
+    if direct_height > 0:
+        candidates.append({"label": f"{direct_height}p", "format_id": "best"})
+
+    for key in ("play_url", "hd_url", "sd_url"):
+        for height in _heights_from_urls(info.get(key)):
+            candidates.append({"height": height, "format_id": "best"})
+
+    return candidates
+
+
+def _finalize_analysis(info: dict | None) -> dict | None:
+    """Sanitize and probe qualities for every platform before the UI renders.
+
+    Every analysis result — no matter which engine produced it — passes through
+    one quality gate: only standard, real resolutions (144p–2160p) that were
+    actually seen in formats, scraper height fields, or CDN URLs survive.
+    ``Best``/``HD`` labels are dropped, so the inline keyboard only advertises
+    qualities that genuinely exist on the media. The intelligence card is kept
+    in sync with the final list.
     """
     if not info:
         return None
-    info["qualities"] = normalize_qualities(info.get("qualities") or [])
+    info["qualities"] = normalize_qualities(_collect_quality_candidates(info))
 
     intel = info.get("intelligence")
     if isinstance(intel, dict):
         qs = info["qualities"]
         best = qs[-1]["label"] if qs else "best"
         intel["best_quality"] = best
+        intel["available_qualities"] = [q["label"] for q in qs]
         details = []
         for detail in intel.get("details") or []:
             if isinstance(detail, str) and detail.startswith("Best quality:"):

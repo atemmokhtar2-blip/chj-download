@@ -146,11 +146,14 @@ def render_intelligence_html(intel: dict[str, Any] | None, lang: str = "en") -> 
         return ""
     badges = " • ".join(intel.get("badges") or [])
     risk = str(intel.get("risk") or "unknown").upper()
+    available = intel.get("available_qualities") or []
+    available_text = " • ".join(available) if available else intel.get("best_quality", "best")
     if lang == "ar":
         return (
             "\n\n🧠 <b>التحليل الذكي</b>"
             f"\n• النتيجة: <b>{intel.get('score', '-')}/99</b>"
             f"\n• أفضل جودة: <b>{intel.get('best_quality', 'best')}</b>"
+            f"\n• الجودات المتاحة: <b>{available_text}</b>"
             f"\n• الحجم المتوقع: <b>{intel.get('estimated_size', 'Unknown')}</b>"
             f"\n• مخاطرة الحجم: <b>{risk}</b>"
             f"\n• {badges}"
@@ -159,6 +162,7 @@ def render_intelligence_html(intel: dict[str, Any] | None, lang: str = "en") -> 
         "\n\n🧠 <b>Smart intelligence</b>"
         f"\n• Score: <b>{intel.get('score', '-')}/99</b>"
         f"\n• Best quality: <b>{intel.get('best_quality', 'best')}</b>"
+        f"\n• Available qualities: <b>{available_text}</b>"
         f"\n• Estimated size: <b>{intel.get('estimated_size', 'Unknown')}</b>"
         f"\n• Size risk: <b>{risk}</b>"
         f"\n• {badges}"
