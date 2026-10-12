@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any
@@ -798,3 +799,55 @@ def scrape_pinterest(url: str) -> dict | None:
 
     logger.warning("Pinterest extract failed for %s", url)
     return None
+
+
+def download_hls_video(play_url: str, out_path: str) -> str | None:
+    """Download an HLS video pin via ffmpeg -c copy into a faststart MP4.
+
+    Some Pinterest video pins only expose HLS (`.m3u8`) playlists; yt-dlp has no
+    reliable Pinterest extractor, so this is the dedicated unbreakable path for
+    those pins. Uses the same ffmpeg binary the rest of the downloader relies on.
+    """
+    import subprocess
+
+    if not play_url or not str(play_url).startswith("http"):
+        return None
+    path = out_path if out_path.endswith(".mp4") else out_path + ".mp4"
+    try:
+        from services import downloader as _dl
+
+        ffmpeg = _dl._ffmpeg_path()
+        if not ffmpeg:
+            logger.info("HLS pin skipped: no ffmpeg available")
+            return None
+        proc = subprocess.run(
+            [
+                ffmpeg, "-y", "-hide_banner", "-loglevel", "error",
+                "-i", play_url,
+                "-c", "copy",
+                "-movflags", "+faststart",
+                path,
+            ],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=120,
+            check=False,
+        )
+        if proc.returncode != 0 or not os.path.exists(path) or os.path.getsize(path) < 2048:
+            logger.info("HLS pin download failed: %s", proc.stderr[-300:])
+            try:
+                if os.path.exists(path):
+                    os.remove(path)
+            except OSError:
+                pass
+            return None
+        return path
+    except Exception as exc:
+        logger.info("HLS pin download crashed: %s", exc)
+        try:
+            if os.path.exists(path):
+                os.remove(path)
+        except OSError:
+            pass
+        return None

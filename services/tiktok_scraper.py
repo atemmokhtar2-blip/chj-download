@@ -706,6 +706,17 @@ def _from_item(item: dict) -> dict:
                 if u and str(u).startswith("http"):
                     images.append(str(u))
                     break
+    music_url = None
+    music = item.get("music") or {}
+    if isinstance(music, dict):
+        for key in ("playUrl", "play_url", "playUri", "url"):
+            candidate = music.get(key)
+            if isinstance(candidate, str) and candidate.startswith("http"):
+                music_url = candidate
+                break
+        if not music_url:
+            music_url = _addr_url(music)
+
     result = _result(
         play or "",
         title=title,
@@ -714,9 +725,11 @@ def _from_item(item: dict) -> dict:
         duration=duration,
         height=int(video.get("height") or 0),
         source="page_json",
+        music_url=music_url,
         images=images,
     )
     result["alternate_play_urls"] = play_urls[1:10]
+    result["music_url"] = music_url
     return result
 
 
@@ -801,16 +814,75 @@ def provider_oembed(url: str) -> Optional[dict]:
     }
 
 
+def _result_from_ytdlp_info(info: dict, url: str) -> Optional[dict]:
+    """Normalize a yt-dlp TikTok extract_info dict into a provider result."""
+    if not info:
+        return None
+    # Prefer direct format URL (no watermark when available)
+    play = None
+    height = 0
+    formats = info.get("formats") or []
+    # Prefer http mp4 without watermark markers
+    ranked = []
+    for f in formats:
+        fu = f.get("url") or ""
+        if not fu.startswith("http"):
+            continue
+        if f.get("vcodec") in (None, "none"):
+            continue
+        h = int(f.get("height") or 0)
+        score = h
+        # Prefer non-watermark if labeled
+        fmt_note = (f.get("format_note") or "") + (f.get("format_id") or "")
+        if "watermark" in fmt_note.lower():
+            score -= 5000
+        ranked.append((score, fu, h))
+    ranked_urls: list[str] = []
+    if ranked:
+        ranked.sort(key=lambda x: x[0], reverse=True)
+        play, height = ranked[0][1], ranked[0][2]
+        ranked_urls = [u for _s, u, _h in ranked[:10]]
+    if not play:
+        play = info.get("url")
+    if not play:
+        return None
+    images = []
+    # photo mode
+    if info.get("entries"):
+        for e in info["entries"] or []:
+            if e and e.get("url"):
+                images.append(e["url"])
+    result = _result(
+        play,
+        title=info.get("title") or "TikTok Video",
+        uploader=info.get("uploader") or info.get("creator") or "TikTok User",
+        thumbnail=info.get("thumbnail") or "",
+        duration=int(info.get("duration") or 0),
+        height=height,
+        source="yt-dlp",
+        webpage_url=info.get("webpage_url") or url,
+        images=images or None,
+    )
+    result["alternate_play_urls"] = [u for u in ranked_urls if u != play]
+    return result
+
+
 def provider_ytdlp(url: str) -> Optional[dict]:
     """
     Use yt-dlp extract_info only (no download) as a peer provider.
-    Strong when third-party sites (tikwm/ssstik) are down.
+    Rotates TikTok API hostnames so a blocked/expired CDN API node cannot kill it.
     """
     try:
         import yt_dlp
     except ImportError:
         return None
-    opts = {
+    api_profiles = [
+        ["api16-normal-c-useast1a.tiktokv.com", "api22-normal-c-useast1a.tiktokv.com", "api16-va.tiktokv.com"],
+        ["api19-normal-c-useast1a.tiktokv.com", "api22-normal-c-useast1a.tiktokv.com", "api.tiktokv.com"],
+        ["api-va.tiktokv.com", "api16-normal-c-useast1a.tiktokv.com", "api22-normal-c-useast1a.tiktokv.com"],
+        ["api16-normal-c-useast2a.tiktokv.com", "api19-normal-c-useast1a.tiktokv.com", "api16-va.tiktokv.com"],
+    ]
+    base_opts = {
         "quiet": True,
         "no_warnings": True,
         "skip_download": True,
@@ -822,71 +894,23 @@ def provider_ytdlp(url: str) -> Optional[dict]:
             "Referer": "https://www.tiktok.com/",
             "Accept-Language": "en-US,en;q=0.9,ar;q=0.8",
         },
-        "extractor_args": {
-            "tiktok": {
-                "api_hostname": [
-                    "api16-normal-c-useast1a.tiktokv.com",
-                    "api22-normal-c-useast1a.tiktokv.com",
-                    "api16-va.tiktokv.com",
-                ]
-            }
-        },
     }
-    try:
-        with yt_dlp.YoutubeDL(opts) as ydl:
-            info = ydl.extract_info(url, download=False)
-        if not info:
-            return None
-        # Prefer direct format URL (no watermark when available)
-        play = None
-        height = 0
-        formats = info.get("formats") or []
-        # Prefer http mp4 without watermark markers
-        ranked = []
-        for f in formats:
-            fu = f.get("url") or ""
-            if not fu.startswith("http"):
-                continue
-            if f.get("vcodec") in (None, "none"):
-                continue
-            h = int(f.get("height") or 0)
-            score = h
-            # Prefer non-watermark if labeled
-            fmt_note = (f.get("format_note") or "") + (f.get("format_id") or "")
-            if "watermark" in fmt_note.lower():
-                score -= 5000
-            ranked.append((score, fu, h))
-        ranked_urls: list[str] = []
-        if ranked:
-            ranked.sort(key=lambda x: x[0], reverse=True)
-            play, height = ranked[0][1], ranked[0][2]
-            ranked_urls = [u for _s, u, _h in ranked[:10]]
-        if not play:
-            play = info.get("url")
-        if not play:
-            return None
-        images = []
-        # photo mode
-        if info.get("entries"):
-            for e in info["entries"] or []:
-                if e and e.get("url"):
-                    images.append(e["url"])
-        result = _result(
-            play,
-            title=info.get("title") or "TikTok Video",
-            uploader=info.get("uploader") or info.get("creator") or "TikTok User",
-            thumbnail=info.get("thumbnail") or "",
-            duration=int(info.get("duration") or 0),
-            height=height,
-            source="yt-dlp",
-            webpage_url=info.get("webpage_url") or url,
-            images=images or None,
-        )
-        result["alternate_play_urls"] = [u for u in ranked_urls if u != play]
-        return result
-    except Exception as e:
-        logger.debug(f"provider_ytdlp: {e}")
-        return None
+    last_err: Optional[Exception] = None
+    for host_list in api_profiles:
+        opts = dict(base_opts)
+        opts["extractor_args"] = {"tiktok": {"api_hostname": host_list}}
+        try:
+            with yt_dlp.YoutubeDL(opts) as ydl:
+                info = ydl.extract_info(url, download=False)
+            result = _result_from_ytdlp_info(info, url)
+            if result:
+                result["api_hosts_tried"] = host_list
+                return result
+        except Exception as e:
+            last_err = e
+            continue
+    logger.debug(f"provider_ytdlp: {last_err}")
+    return None
 
 
 PROVIDERS: list[tuple[str, Callable[[str], Optional[dict]]]] = [
@@ -1158,6 +1182,97 @@ def download_tiktok_direct(play_url: str, out_path: str) -> Optional[str]:
         except Exception as e:
             logger.debug(f"direct download attempt {attempt}: {e}")
             time.sleep(0.5 * (attempt + 1))
+            try:
+                if os.path.exists(path):
+                    os.remove(path)
+            except OSError:
+                pass
+    return None
+
+
+def download_tiktok_audio_direct(music_url: str, out_path: str) -> Optional[str]:
+    """Stream TikTok's original music URL to disk with light content verification.
+
+    The `music` field is usually a direct MP3/AAC CDN link. Accepting it lets
+    TikTok audio keep working even when yt-dlp's TikTok extractor is blocked.
+    Returns None on non-audio responses so callers fall back to yt-dlp.
+    """
+    from services.downloader import FileTooLargeError
+
+    if not music_url or not str(music_url).startswith("http"):
+        return None
+    path = out_path if out_path.endswith((".mp3", ".m4a", ".aac", ".opus")) else out_path + ".mp3"
+    headers_list = [
+        {"User-Agent": MOBILE_UA, "Referer": "https://www.tiktok.com/", "Accept": "*/*"},
+        {"User-Agent": DESKTOP_UA, "Referer": "https://www.tiktok.com/", "Accept": "*/*"},
+    ]
+    for attempt in range(MAX_RETRIES + 1):
+        headers = headers_list[attempt % len(headers_list)]
+        try:
+            try:
+                from curl_cffi import requests as creq
+                response_ctx = creq.get(
+                    music_url, headers=headers, timeout=DOWNLOAD_TIMEOUT,
+                    stream=True, impersonate="chrome", allow_redirects=True,
+                )
+            except Exception:
+                s = _session(headers["User-Agent"])
+                response_ctx = s.get(music_url, headers=headers, timeout=DOWNLOAD_TIMEOUT, stream=True)
+            with response_ctx as r:
+                if r.status_code not in (200, 206):
+                    continue
+                ctype = (r.headers.get("Content-Type") or "").lower()
+                if "text/html" in ctype or "application/json" in ctype:
+                    continue
+                cl = r.headers.get("Content-Length")
+                if cl:
+                    try:
+                        if int(cl) > MAX_FILE_SIZE_BYTES:
+                            raise FileTooLargeError(size_bytes=int(cl), limit_bytes=MAX_FILE_SIZE_BYTES)
+                    except ValueError:
+                        pass
+                written = 0
+                first_chunk = True
+                with open(path, "wb") as f:
+                    for chunk in r.iter_content(chunk_size=256 * 1024):
+                        if not chunk:
+                            continue
+                        if first_chunk:
+                            first_chunk = False
+                            sample = chunk.lstrip().lower()
+                            if sample.startswith((b"<!doctype html", b"<html", b"{", b"[")):
+                                f.close()
+                                try:
+                                    os.remove(path)
+                                except OSError:
+                                    pass
+                                return None
+                        written += len(chunk)
+                        if written > MAX_FILE_SIZE_BYTES:
+                            f.close()
+                            try:
+                                os.remove(path)
+                            except OSError:
+                                pass
+                            raise FileTooLargeError(size_bytes=written, limit_bytes=MAX_FILE_SIZE_BYTES)
+                        f.write(chunk)
+                size = os.path.getsize(path) if os.path.exists(path) else 0
+                if size > 1000:
+                    return path
+                try:
+                    os.remove(path)
+                except OSError:
+                    pass
+        except FileTooLargeError:
+            try:
+                if os.path.exists(path):
+                    os.remove(path)
+            except OSError:
+                pass
+            raise
+        except Exception as e:
+            logger.debug(f"tiktok audio direct attempt {attempt}: {e}")
+            time.sleep(0.3 * (attempt + 1))
             try:
                 if os.path.exists(path):
                     os.remove(path)

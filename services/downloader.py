@@ -677,18 +677,72 @@ def _valid_audio_bitrate(value: str | None) -> str:
     return raw if raw.isdigit() and 32 <= int(raw) <= 320 else "192"
 
 
+def _audio_format_candidates() -> list[str]:
+    """Layered audio format fallbacks — m4a-first, then bitrate-tight, then any audio."""
+    return [
+        "bestaudio[ext=m4a]/bestaudio[acodec!=none]/bestaudio/best[acodec!=none]/best",
+        "bestaudio[abr<=256]/bestaudio[abr<=192]/bestaudio/best[acodec!=none]/best",
+        "best[acodec!=none]/bestaudio/best",
+    ]
+
+
 async def _generic_download_audio(url: str, progress=None, bitrate: str | None = None) -> str | None:
+    """Bullet-proof audio/music download with client-profile + format fallbacks.
+
+    YouTube is the only engine that is player-client sensitive; for every other
+    platform a single default profile suffices and we simply walk the format
+    candidates. Every attempt runs inside yt-dlp's own network retries, so this
+    adds a second layer instead of replacing a failed one-off call.
+    """
     loop = asyncio.get_running_loop() if progress else None
     preferred_quality = _valid_audio_bitrate(bitrate or AUDIO_BITRATE)
-    opts = {
-        **_base_opts(progress, loop),
-        "format": "bestaudio/best",
-        "noplaylist": True,
-        "postprocessors": [
-            {"key": "FFmpegExtractAudio", "preferredcodec": "mp3", "preferredquality": preferred_quality}
-        ],
-    }
-    return await _run_sync(_download_sync, url, opts)
+    host = urlparse(url).netloc.lower()
+    formats = _audio_format_candidates()
+
+    if "youtu" in host:
+        client_profiles = _youtube_client_profiles()
+    else:
+        client_profiles = [("default", [YTDLP_CLIENT] if YTDLP_CLIENT else [])]
+
+    last_error: Exception | None = None
+    for profile_name, clients in client_profiles:
+        for fmt in formats:
+            opts = {
+                **_base_opts(progress, loop),
+                "format": fmt,
+                "noplaylist": True,
+                "postprocessors": [
+                    {
+                        "key": "FFmpegExtractAudio",
+                        "preferredcodec": "mp3",
+                        "preferredquality": preferred_quality,
+                    }
+                ],
+            }
+            if clients and "youtu" in host:
+                opts.setdefault("extractor_args", {}).setdefault("youtube", {})["player_client"] = clients
+            try:
+                path = await _run_sync(_download_sync, url, opts)
+                if path:
+                    if profile_name != client_profiles[0][0] or fmt != formats[0]:
+                        logger.info(
+                            "Audio fallback succeeded: profile=%s clients=%s format=%s url=%s",
+                            profile_name, clients, fmt, url[:100],
+                        )
+                    return path
+            except FileTooLargeError:
+                raise
+            except Exception as exc:
+                last_error = exc
+                logger.warning(
+                    "Audio attempt failed profile=%s clients=%s format=%s url=%s error=%s",
+                    profile_name, clients, fmt, url[:100], exc,
+                )
+                continue
+
+    if last_error:
+        raise last_error
+    raise RuntimeError("No downloadable audio stream returned after all formats and fallbacks were exhausted")
 
 
 def _normalize_tiktok_info(raw: dict, original_url: str) -> dict:

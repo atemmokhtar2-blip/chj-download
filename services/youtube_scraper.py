@@ -64,9 +64,9 @@ def _base_opts(extra: dict | None = None) -> dict:
             "Accept-Language": "en-US,en;q=0.9,ar;q=0.8",
             "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
         },
-        "retries": 5,
-        "fragment_retries": 5,
-        "extractor_retries": 3,
+        "retries": 8,
+        "fragment_retries": 8,
+        "extractor_retries": 5,
         "socket_timeout": 30,
         "sleep_interval_requests": 0.2,
         "geo_bypass": True,
@@ -86,6 +86,13 @@ def _base_opts(extra: dict | None = None) -> dict:
     # Only pass real network backends here; invalid values make YouTube extraction fail.
     if YTDLP_CLIENT in {"curl_cffi", "requests", "urllib"}:
         opts["http_client"] = YTDLP_CLIENT
+    # PO token + visitor data unlock age-gated / bot-checked YouTube extraction.
+    yt_po_token = (os.getenv("YOUTUBE_PO_TOKEN") or os.getenv("YT_PO_TOKEN") or "").strip()
+    yt_visitor_data = (os.getenv("YOUTUBE_VISITOR_DATA") or os.getenv("YT_VISITOR_DATA") or "").strip()
+    if yt_po_token:
+        opts.setdefault("extractor_args", {}).setdefault("youtube", {})["po_token"] = [yt_po_token]
+    if yt_visitor_data:
+        opts.setdefault("extractor_args", {}).setdefault("youtube", {})["visitor_data"] = [yt_visitor_data]
     if extra:
         opts.update(extra)
     return opts
@@ -129,6 +136,10 @@ def _extract_sync(url: str) -> dict:
         ("tv_embedded", {"extractor_args": {"youtube": {"player_client": ["tv_embedded", "web"]}}}),
         ("web_creator", {"extractor_args": {"youtube": {"player_client": ["web_creator", "web"]}}}),
         ("ios_android", {"extractor_args": {"youtube": {"player_client": ["ios", "android"]}}}),
+        ("web_safari", {"extractor_args": {"youtube": {"player_client": ["web_safari", "web"]}}}),
+        ("tv", {"extractor_args": {"youtube": {"player_client": ["tv", "tv_embedded"]}}}),
+        ("web_music", {"extractor_args": {"youtube": {"player_client": ["web_music", "web"]}}}),
+        ("mediaconnect", {"extractor_args": {"youtube": {"player_client": ["mediaconnect", "web"]}}}),
     ]
     last_err: Exception | None = None
     for profile_name, extra in profiles:

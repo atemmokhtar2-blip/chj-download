@@ -81,6 +81,39 @@ class TikTokEngine(PlatformEngine):
             fallback["engine_profile"] = "yt-dlp-generic-fallback"
         return self._tag(fallback)
 
+    async def download_audio(self, url: str, progress_callback: Callable | None = None) -> str | None:
+        """Try the original TikTok music CDN first, then fall back to yt-dlp merge."""
+        from services import downloader
+        from services.tiktok_scraper import scrape_tiktok, download_tiktok_audio_direct
+        from middlewares.concurrency import get_executor
+        import asyncio
+
+        loop = asyncio.get_running_loop()
+        try:
+            meta = await loop.run_in_executor(get_executor(), scrape_tiktok, url)
+            music = (meta or {}).get("music_url")
+            if music:
+                safe_name = sanitize_filename(f"tiktok_music_{hash(url) % 100000}")
+                out_path = os.path.join(TEMP_DIR, safe_name)
+                path = await loop.run_in_executor(
+                    get_executor(),
+                    download_tiktok_audio_direct,
+                    music,
+                    out_path,
+                )
+                if path:
+                    if progress_callback:
+                        try:
+                            await progress_callback({"pct": 100, "downloaded": 1, "total": 1, "speed": 0, "eta": 0})
+                        except Exception:
+                            pass
+                    download_logger.info("TikTokEnginePro used direct music CDN: %s", str(music)[:100])
+                    return path
+        except Exception as exc:
+            download_logger.warning("TikTokEnginePro direct audio failed: %s", exc)
+
+        return await downloader._generic_download_audio(url, progress_callback)
+
     async def download_video(
         self,
         url: str,
@@ -248,21 +281,36 @@ class PinterestEngine(PlatformEngine):
             except Exception as exc:
                 error_logger.error("PinterestEnginePro resolve before download failed: %s", exc)
 
-        if candidate and ".mp4" in candidate:
+        if candidate and (".mp4" in candidate or ".m3u8" in candidate):
             try:
-                direct_path = await loop.run_in_executor(
-                    get_executor(),
-                    downloader._download_direct_sync,
-                    candidate,
-                    {"Referer": "https://www.pinterest.com/"},
-                    60,
-                    progress_callback,
-                    loop,
-                    "xdl-pinterest",
-                )
-                direct_path = downloader._prepare_video_for_delivery(direct_path, source="direct-cdn")
-                if direct_path:
-                    return direct_path
+                if ".m3u8" in candidate:
+                    from services.pinterest_scraper import download_hls_video
+
+                    safe_name = sanitize_filename(f"pinterest_hls_{hash(url) % 100000}")
+                    hls_out = os.path.join(TEMP_DIR, safe_name)
+                    hls_path = await loop.run_in_executor(
+                        get_executor(),
+                        download_hls_video,
+                        candidate,
+                        hls_out,
+                    )
+                    hls_path = downloader._prepare_video_for_delivery(hls_path, source="hls-cdn")
+                    if hls_path:
+                        return hls_path
+                else:
+                    direct_path = await loop.run_in_executor(
+                        get_executor(),
+                        downloader._download_direct_sync,
+                        candidate,
+                        {"Referer": "https://www.pinterest.com/"},
+                        60,
+                        progress_callback,
+                        loop,
+                        "xdl-pinterest",
+                    )
+                    direct_path = downloader._prepare_video_for_delivery(direct_path, source="direct-cdn")
+                    if direct_path:
+                        return direct_path
             except Exception as exc:
                 error_logger.error("PinterestEnginePro direct download failed: %s", exc)
 
