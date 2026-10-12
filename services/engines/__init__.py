@@ -30,6 +30,7 @@ from services.engines.platforms import (
     VkEngine,
     XiaohongshuEngine,
     YouTubeEngine,
+    UniversalEngine,
 )
 
 
@@ -77,7 +78,7 @@ _registered_engines = registered_engines
 
 
 def list_engines() -> list[dict]:
-    return [
+    rows = [
         {
             "name": engine.name,
             "status": "ready",
@@ -85,3 +86,12 @@ def list_engines() -> list[dict]:
         }
         for engine in _registered_engines()
     ]
+    # Show the universal catch-all explicitly so dashboards/status screens
+    # communicate that ANY yt-dlp-supported site (1000+) is downloadable.
+    rows.append({
+        "name": "UniversalEngine",
+        "status": "ready",
+        "domains": "any",
+        "note": "أي منصة يدعمها yt-dlp (1000+)",
+    })
+    return rows

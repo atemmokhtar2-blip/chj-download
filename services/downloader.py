@@ -178,8 +178,38 @@ def _run_sync(fn, *args):
 
 
 def _extract_info_sync(url: str) -> dict | None:
-    with yt_dlp.YoutubeDL({**_base_opts(), "skip_download": True, "extract_flat": False}) as ydl:
-        return ydl.extract_info(url, download=False)
+    """Extract metadata with layered fallbacks so odd URLs don't break analysis.
+
+    Attempts, in order:
+      1. full metadata extraction (normal case)
+      2. in_playlist flat extraction (playlists / multi-item pages)
+      3. plain flat extraction (aggressive fallback)
+
+    yt-dlp already retries network I/O internally; this adds a second layer for
+    extractor-level quirks that only surface with different extraction modes.
+    """
+    variants = (
+        {"extract_flat": False},
+        {"extract_flat": "in_playlist"},
+        {"extract_flat": True},
+    )
+    last_error: Exception | None = None
+    for variant in variants:
+        try:
+            with yt_dlp.YoutubeDL({**_base_opts(), "skip_download": True, **variant}) as ydl:
+                info = ydl.extract_info(url, download=False)
+                if info:
+                    return info
+        except Exception as exc:
+            last_error = exc
+            logger.warning(
+                "Extract pass failed fallback mode=%s url=%s error=%s",
+                variant.get("extract_flat"), url[:120], exc,
+            )
+            continue
+    if last_error:
+        logger.warning("All extract passes failed for %s: %s", url[:120], last_error)
+    return None
 
 
 async def _generic_analyze_url(url: str) -> dict | None:
@@ -691,9 +721,9 @@ def _select_engine(url: str):
     """Choose a platform-specific engine lazily to avoid import cycles."""
     from services.engines import registered_engines
     from services.engines.base import first_match
-    from services.engines.platforms import GenericEngine
+    from services.engines.platforms import UniversalEngine
 
-    return first_match(url, registered_engines(), GenericEngine())
+    return first_match(url, registered_engines(), UniversalEngine())
 
 
 async def analyze_url(url: str) -> dict | None:

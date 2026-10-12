@@ -91,7 +91,7 @@ async def process_url(update: Update, context: ContextTypes.DEFAULT_TYPE, user, 
         await msg.reply_text(t(lang, "banned"))
         return
 
-    if not is_valid_url(url) or not is_supported_url(url):
+    if not is_valid_url(url):
         await msg.reply_text(t(lang, "invalid_url"))
         return
 
@@ -202,7 +202,7 @@ async def handle_batch_urls(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
     for url in urls:
-        if not is_supported_url(url):
+        if not is_valid_url(url):
             await update.message.reply_text(
                 t(lang, "batch_invalid", url=url[:80]),
                 parse_mode="HTML",

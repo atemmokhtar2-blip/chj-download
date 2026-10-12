@@ -719,3 +719,15 @@ class GenericEngine(YtDlpFallbackEngine):
     name = "GenericEngine"
     domains = ()
     platform_label = "Generic"
+
+
+class UniversalEngine(YtDlpFallbackEngine):
+    """Catch-all engine for ANY site yt-dlp can extract (1000+ platforms).
+
+    This is the routing fallback: when no bespoke platform engine matches, the
+    universal engine owns the URL and runs the bullet-proof generic yt-dlp path.
+    """
+    name = "UniversalEngine"
+    platform_label = "Universal"
+    engine_profile = "yt-dlp-universal-fallback"
+    domains = ()

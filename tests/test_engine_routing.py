@@ -52,19 +52,21 @@ def test_platform_routing() -> None:
 
 def test_engine_registry_matches_dashboard() -> None:
     engines = registered_engines()
-    dashboard_names = [item["name"] for item in list_engines()]
+    dashboard = list_engines()
+    bespoke_names = [item["name"] for item in dashboard if item["name"] != "UniversalEngine"]
     assert len(engines) == 29
-    assert dashboard_names == [engine.name for engine in engines]
-    assert all(item["status"] == "ready" for item in list_engines())
-    assert all(item["domains"] > 0 for item in list_engines())
+    assert bespoke_names == [engine.name for engine in engines]
+    assert all(item["status"] == "ready" for item in dashboard)
+    universal = next(item for item in dashboard if item["name"] == "UniversalEngine")
+    assert universal["domains"] == "any"
 
 
-def test_unknown_url_uses_generic_engine() -> None:
-    assert _select_engine("https://example.com/video/123").name == "GenericEngine"
+def test_unknown_url_uses_universal_engine() -> None:
+    assert _select_engine("https://example.com/video/123").name == "UniversalEngine"
 
 
 if __name__ == "__main__":
     test_platform_routing()
     test_engine_registry_matches_dashboard()
-    test_unknown_url_uses_generic_engine()
+    test_unknown_url_uses_universal_engine()
     print("engine routing smoke tests passed")
