@@ -19,6 +19,7 @@ from handlers.start import (
     help_command, settings_command, settings_callback
 )
 from handlers.download import handle_url, download_callback
+from handlers.search import search_command, search_callback, inline_search
 from handlers.admin import (
     admin_command, admin_callback, send_update_announcement,
     engine_status_command, update_ytdlp_command, health_command,
@@ -128,8 +129,10 @@ def build_application() -> Application:
     # Legacy buttons are handled without allowing a language switch.
     app.add_handler(CallbackQueryHandler(language_callback, pattern="^lang_"))
     app.add_handler(CallbackQueryHandler(settings_callback, pattern="^settings_"))
+    app.add_handler(CallbackQueryHandler(search_callback, pattern="^search_"))
     app.add_handler(CallbackQueryHandler(download_callback, pattern="^dl_"))
     app.add_handler(CallbackQueryHandler(unknown_callback))
+    app.add_handler(InlineQueryHandler(inline_search))
 
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, message_router))
     app.add_error_handler(global_error_handler)

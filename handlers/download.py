@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import os
+import re
+import uuid
 import logging
 import time
 from telegram import (
@@ -29,7 +31,16 @@ from middlewares.user_locks import is_user_busy, try_acquire_user_download, rele
 from middlewares.auth import is_banned
 from locales import t
 from utils.helpers import is_valid_url, is_supported_url, truncate_title, make_progress_bar, format_size, get_platform_emoji
-from config.settings import MAX_FILE_SIZE_MB, HOURLY_DOWNLOAD_LIMIT, DAILY_DOWNLOAD_LIMIT
+from config.settings import (
+    MAX_FILE_SIZE_MB,
+    HOURLY_DOWNLOAD_LIMIT,
+    DAILY_DOWNLOAD_LIMIT,
+    MAX_FILE_SIZE_BYTES,
+    AUTO_SPLIT_LARGE_VIDEOS,
+    AUDIO_BITRATE,
+    AUDIO_BITRATE_HIGH,
+)
+from utils.media_split import split_video_parts
 
 logger = logging.getLogger(__name__)
 
@@ -54,41 +65,44 @@ async def _upload_with_retry(operation):
         except TelegramError:
             raise
 
-async def handle_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = update.effective_user
-    url = update.message.text.strip()
+async def process_url(update: Update, context: ContextTypes.DEFAULT_TYPE, user, url: str, msg) -> None:
+    """Analyze one URL and present the action card.
+
+    Shared by the normal URL path, /search results, and multi-link messages so
+    every entry point behaves identically.
+    """
     db_user = get_user(user.id)
     lang = db_user.get("language", "en") if db_user else "en"
 
     if is_banned(user.id):
-        await update.message.reply_text(t(lang, "banned"))
+        await msg.reply_text(t(lang, "banned"))
         return
 
     if not is_valid_url(url) or not is_supported_url(url):
-        await update.message.reply_text(t(lang, "invalid_url"))
+        await msg.reply_text(t(lang, "invalid_url"))
         return
 
     rl = check_rate_limit_detailed(user.id)
     if not rl.allowed:
         if rl.reason == "daily":
-            await update.message.reply_text(
+            await msg.reply_text(
                 t(lang, "rate_limit_daily", limit=DAILY_DOWNLOAD_LIMIT)
             )
         elif rl.reason == "hourly":
-            await update.message.reply_text(
+            await msg.reply_text(
                 t(lang, "rate_limit_hourly", limit=HOURLY_DOWNLOAD_LIMIT)
             )
         else:
-            await update.message.reply_text(
+            await msg.reply_text(
                 t(lang, "rate_limit", seconds=rl.wait_seconds)
             )
         return
 
     if is_user_busy(user.id):
-        await update.message.reply_text(t(lang, "queue_full"))
+        await msg.reply_text(t(lang, "queue_full"))
         return
 
-    status_msg = await update.message.reply_text(t(lang, "analyzing"), parse_mode="HTML")
+    status_msg = await msg.reply_text(t(lang, "analyzing"), parse_mode="HTML")
     info = await analyze_url(url)
     if not info:
         await status_msg.edit_text(t(lang, "analysis_failed"), parse_mode="HTML")
@@ -120,16 +134,59 @@ async def handle_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if info.get("thumbnail"):
         try:
             await status_msg.delete()
-            await update.message.reply_photo(
+            await msg.reply_photo(
                 photo=info["thumbnail"],
                 caption=caption,
                 parse_mode="HTML",
                 reply_markup=InlineKeyboardMarkup(keyboard)
             )
             return
-        except Exception: pass
+        except Exception:
+            pass
 
     await status_msg.edit_text(caption, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard))
+
+
+async def handle_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    text = (update.message.text or "").strip()
+    urls = _extract_urls(text)
+    url = urls[0] if urls else text
+    await process_url(update, context, user, url, update.message)
+
+
+async def handle_batch_urls(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Process multiple URLs from a single message, one card per link."""
+    user = update.effective_user
+    text = (update.message.text or "").strip()
+    urls = _extract_urls(text)[:BATCH_MAX_URLS]
+
+    if not urls:
+        await process_url(update, context, user, text, update.message)
+        return
+
+    db_user = get_user(user.id)
+    lang = db_user.get("language", "en") if db_user else "en"
+
+    if is_banned(user.id):
+        await update.message.reply_text(t(lang, "banned"))
+        return
+
+    await update.message.reply_text(
+        t(lang, "batch_start", count=len(urls)),
+        parse_mode="HTML",
+        disable_web_page_preview=True,
+    )
+
+    for url in urls:
+        if not is_supported_url(url):
+            await update.message.reply_text(
+                t(lang, "batch_invalid", url=url[:80]),
+                parse_mode="HTML",
+                disable_web_page_preview=True,
+            )
+            continue
+        await process_url(update, context, user, url, update.message)
 
 def _friendly_error(lang: str, info: dict) -> str:
     reason = info.get("user_message_key") or info.get("error_reason") or "analysis_failed"
@@ -207,7 +264,7 @@ def _callback_matches_media(data: str, info: dict) -> bool:
     if data == "dl_smart":
         return media_type in {"video", "audio", "image", "album"}
     if media_type == "video":
-        return data == "dl_audio" or data.startswith("dl_video_")
+        return data in {"dl_audio", "dl_audio_320"} or data.startswith("dl_video_")
     if media_type == "audio":
         return data == "dl_audio"
     if media_type == "image":
@@ -218,35 +275,40 @@ def _callback_matches_media(data: str, info: dict) -> bool:
 
 
 def _build_action_keyboard(
-    media_type: str, qualities: list, lang: str, album_count: int = 0, info: dict | None = None
+    media_type: str, qualities: list, lang: str, album_count: int = 0, info: dict | None = None,
+    token: str | None = None,
 ) -> list:
     """Build clear download actions, including MP3/audio-only for videos."""
+    suffix = f"|{token}" if token else ""
     keyboard = []
     if info and info.get("downloadable") is False:
-        keyboard.append([InlineKeyboardButton(t(lang, "why_no_download"), callback_data="dl_unavailable")])
+        keyboard.append([InlineKeyboardButton(t(lang, "why_no_download"), callback_data=f"dl_unavailable{suffix}")])
         return keyboard
     if media_type == "video":
         keyboard.append([
-            InlineKeyboardButton("⚡ Smart Download", callback_data="dl_smart"),
+            InlineKeyboardButton("⚡ Smart Download", callback_data=f"dl_smart{suffix}"),
         ])
         keyboard.append([
-            InlineKeyboardButton(t(lang, "best_quality"), callback_data="dl_video_best"),
-            InlineKeyboardButton("🎧 MP3 / صوت فقط", callback_data="dl_audio"),
+            InlineKeyboardButton(t(lang, "best_quality"), callback_data=f"dl_video_best{suffix}"),
+            InlineKeyboardButton("🎧 MP3 / صوت فقط", callback_data=f"dl_audio{suffix}"),
+        ])
+        keyboard.append([
+            InlineKeyboardButton("🎵 MP3 320kbps — أعلى نقاء", callback_data=f"dl_audio_320{suffix}"),
         ])
         if qualities:
             for q in qualities[-3:]:
                 keyboard.append([
-                    InlineKeyboardButton(f"📹 {q['label']}", callback_data=f"dl_video_{q['label']}"),
+                    InlineKeyboardButton(f"📹 {q['label']}", callback_data=f"dl_video_{q['label']}{suffix}"),
                 ])
     elif media_type == "audio":
-        keyboard.append([InlineKeyboardButton(t(lang, "download_audio"), callback_data="dl_audio")])
+        keyboard.append([InlineKeyboardButton(t(lang, "download_audio"), callback_data=f"dl_audio{suffix}")])
     elif media_type == "image":
-        keyboard.append([InlineKeyboardButton(t(lang, "download_image"), callback_data="dl_image")])
+        keyboard.append([InlineKeyboardButton(t(lang, "download_image"), callback_data=f"dl_image{suffix}")])
     elif media_type == "album":
         label = t(lang, "download_album")
         if album_count:
             label = f"{label} ({album_count})"
-        keyboard.append([InlineKeyboardButton(label, callback_data="dl_album")])
+        keyboard.append([InlineKeyboardButton(label, callback_data=f"dl_album{suffix}")])
     return keyboard
 
 async def download_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -289,7 +351,7 @@ async def download_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     allowed_prefixes = ("dl_video_",)
-    allowed_exact = {"dl_smart", "dl_audio", "dl_image", "dl_album", "dl_unavailable"}
+    allowed_exact = {"dl_smart", "dl_audio", "dl_audio_320", "dl_image", "dl_album", "dl_unavailable"}
     if data not in allowed_exact and not data.startswith(allowed_prefixes):
         await query.answer(t(lang, "session_expired"), show_alert=True)
         release_user_download(user.id)
@@ -303,11 +365,17 @@ async def download_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     smart_mode = data == "dl_smart"
     if smart_mode:
         is_audio, is_image, is_album, quality_label = _pick_smart_download(info)
+        audio_bitrate = AUDIO_BITRATE
     else:
-        is_audio = data == "dl_audio"
+        is_audio = data in {"dl_audio", "dl_audio_320"}
         is_image = data == "dl_image"
         is_album = data == "dl_album"
-        quality_label = "audio" if is_audio else ("image" if is_image else data.replace("dl_video_", ""))
+        if is_audio:
+            quality_label = "audio_320" if data == "dl_audio_320" else "audio"
+            audio_bitrate = AUDIO_BITRATE_HIGH if data == "dl_audio_320" else AUDIO_BITRATE
+        else:
+            quality_label = "image" if is_image else data.replace("dl_video_", "")
+            audio_bitrate = AUDIO_BITRATE
 
     if smart_mode and not is_audio:
         try:
@@ -433,7 +501,8 @@ async def download_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def _run_download(query, context, info, user, lang, quality_label,
-                        is_audio, is_image, is_album, edit_fn, update_progress):
+                        is_audio, is_image, is_album, edit_fn, update_progress,
+                        audio_bitrate: str | None = None):
     file_path = None
     try:
         title = info.get("title", "Unknown")
@@ -580,7 +649,7 @@ async def _run_download(query, context, info, user, lang, quality_label,
 
         elif is_audio:
             await edit_fn(t(lang, "preparing_audio"), parse_mode="HTML")
-            file_path = await download_audio(info["url"], update_progress)
+            file_path = await download_audio(info["url"], update_progress, bitrate=audio_bitrate)
             if not file_path: raise Exception("Download failed")
             await edit_fn(t(lang, "uploading"), parse_mode="HTML")
             safe_title = _safe_upload_name(title)
@@ -615,33 +684,63 @@ async def _run_download(query, context, info, user, lang, quality_label,
                 format_id = "best"
 
             await edit_fn(t(lang, "preparing_download"), parse_mode="HTML")
+
+            # Allow oversized files so they can be split into Telegram-friendly
+            # parts instead of being deleted mid-download.
+            allow_large = AUTO_SPLIT_LARGE_VIDEOS
             file_path = await download_video(
                 info["url"], format_id, quality_label, update_progress,
                 play_url=info.get("play_url"),
+                allow_large=allow_large,
             )
             if not file_path:
                 raise Exception("Download failed")
-            await edit_fn(t(lang, "uploading"), parse_mode="HTML")
-            safe_title = _safe_upload_name(title)
 
-            async def _send_video():
-                with open(file_path, "rb") as f:
-                    return await query.message.reply_video(
-                        video=InputFile(f, filename=f"{safe_title}.mp4"),
-                        caption=t(lang, "completed"),
-                        supports_streaming=True,
-                    )
+            if AUTO_SPLIT_LARGE_VIDEOS and os.path.getsize(file_path) > MAX_FILE_SIZE_BYTES:
+                await edit_fn(t(lang, "splitting_video"), parse_mode="HTML")
+                parts = split_video_parts(file_path, MAX_FILE_SIZE_BYTES)
+                if not parts:
+                    raise FileTooLargeError(os.path.getsize(file_path), MAX_FILE_SIZE_BYTES)
 
-            sent = await _upload_with_retry(_send_video)
-            _fid = sent.video.file_id
-            _vault = await archive_to_vault(context.bot, sent)
-            set_cache_with_meta(
-                info["url"], quality_label, "video", _fid,
-                title=title, platform=platform,
-                media_id=str(info.get("media_id") or ""),
-                vault_chat_id=(_vault or {}).get("chat_id"),
-                vault_message_id=(_vault or {}).get("message_id"),
-            )
+                total = len(parts)
+                safe_title = _safe_upload_name(title)
+                try:
+                    for idx, part_path in enumerate(parts, start=1):
+                        async def _send_part(p=part_path, i=idx):
+                            with open(p, "rb") as f:
+                                return await query.message.reply_video(
+                                    video=InputFile(f, filename=f"{safe_title}_part{i}.mp4"),
+                                    caption=t(lang, "video_part", idx=i, total=total),
+                                    supports_streaming=True,
+                                )
+
+                        await _upload_with_retry(_send_part)
+                finally:
+                    for part in parts:
+                        if part and part != file_path and os.path.exists(part):
+                            _cleanup_file(part)
+            else:
+                await edit_fn(t(lang, "uploading"), parse_mode="HTML")
+                safe_title = _safe_upload_name(title)
+
+                async def _send_video():
+                    with open(file_path, "rb") as f:
+                        return await query.message.reply_video(
+                            video=InputFile(f, filename=f"{safe_title}.mp4"),
+                            caption=t(lang, "completed"),
+                            supports_streaming=True,
+                        )
+
+                sent = await _upload_with_retry(_send_video)
+                _fid = sent.video.file_id
+                _vault = await archive_to_vault(context.bot, sent)
+                set_cache_with_meta(
+                    info["url"], quality_label, "video", _fid,
+                    title=title, platform=platform,
+                    media_id=str(info.get("media_id") or ""),
+                    vault_chat_id=(_vault or {}).get("chat_id"),
+                    vault_message_id=(_vault or {}).get("message_id"),
+                )
 
         increment_downloads(user.id)
         log_download(user.id, info["url"], title, platform, quality_label, "audio" if is_audio else ("image" if is_image else "video"))

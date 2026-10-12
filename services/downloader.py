@@ -510,6 +510,19 @@ def _prepare_video_for_delivery(path: str | None, *, source: str = "video") -> s
 
 
 def _download_sync(url: str, opts: dict) -> str | None:
+    return _download_sync_impl(url, opts, check_size=True)
+
+
+def _download_sync_no_limit(url: str, opts: dict) -> str | None:
+    """Same as _download_sync but keeps files that exceed the size limit.
+
+    Large videos are later split into Telegram-friendly parts instead of being
+    deleted and reported as failures.
+    """
+    return _download_sync_impl(url, opts, check_size=False)
+
+
+def _download_sync_impl(url: str, opts: dict, check_size: bool) -> str | None:
     Path(TEMP_DIR).mkdir(parents=True, exist_ok=True)
     with yt_dlp.YoutubeDL(opts) as ydl:
         info = ydl.extract_info(url, download=True)
@@ -522,7 +535,7 @@ def _download_sync(url: str, opts: dict) -> str | None:
         base = os.path.splitext(filename)[0]
         for candidate in (base + ".mp3", base + ".m4a", base + ".mp4", filename):
             if os.path.exists(candidate):
-                return _check_size(candidate)
+                return candidate if not check_size else _check_size(candidate)
     return None
 
 
@@ -546,7 +559,7 @@ def _youtube_client_candidates() -> list[str]:
     return _safe_youtube_clients()
 
 
-async def _generic_download_video(url: str, format_id: str = "best", quality_label: str = "best", progress=None, play_url: str | None = None) -> str | None:
+async def _generic_download_video(url: str, format_id: str = "best", quality_label: str = "best", progress=None, play_url: str | None = None, allow_large: bool = False) -> str | None:
     loop = asyncio.get_running_loop() if progress else None
     host = urlparse(url).netloc.lower()
     formats = _video_format_candidates(format_id)
@@ -570,8 +583,9 @@ async def _generic_download_video(url: str, format_id: str = "best", quality_lab
                 if clients:
                     opts.setdefault("extractor_args", {}).setdefault("youtube", {})["player_client"] = clients
                 try:
-                    path = await _run_sync(_download_sync, target, opts)
-                    path = _prepare_video_for_delivery(path, source=f"yt-dlp:{target_kind}")
+                    sync_fn = _download_sync_no_limit if allow_large else _download_sync
+                    path = await _run_sync(sync_fn, target, opts)
+                    path = _prepare_video_for_delivery(path, source=f"yt-dlp:{target_kind}", allow_large=allow_large)
                     if path:
                         if target_kind != "page-url" or fmt != formats[0] or profile_name != client_profiles[0][0]:
                             logger.info(
@@ -597,12 +611,20 @@ async def _generic_download_video(url: str, format_id: str = "best", quality_lab
     return None
 
 
-async def _generic_download_audio(url: str, progress=None) -> str | None:
+def _valid_audio_bitrate(value: str | None) -> str:
+    raw = str(value or "").strip()
+    return raw if raw.isdigit() and 32 <= int(raw) <= 320 else "192"
+
+
+async def _generic_download_audio(url: str, progress=None, bitrate: str | None = None) -> str | None:
     loop = asyncio.get_running_loop() if progress else None
+    preferred_quality = _valid_audio_bitrate(bitrate or AUDIO_BITRATE)
     opts = {
         **_base_opts(progress, loop),
         "format": "bestaudio/best",
-        "postprocessors": [{"key": "FFmpegExtractAudio", "preferredcodec": "mp3", "preferredquality": "192"}],
+        "postprocessors": [
+            {"key": "FFmpegExtractAudio", "preferredcodec": "mp3", "preferredquality": preferred_quality}
+        ],
     }
     return await _run_sync(_download_sync, url, opts)
 
@@ -651,7 +673,11 @@ async def analyze_url(url: str) -> dict | None:
         return await _generic_analyze_url(url)
 
 
-async def download_video(url: str, format_id: str = "best", quality_label: str = "best", progress=None, play_url: str | None = None) -> str | None:
+async def download_video(url: str, format_id: str = "best", quality_label: str = "best", progress=None, play_url: str | None = None, allow_large: bool = False) -> str | None:
+    if allow_large:
+        # Keep large files intact so the caller can split them into
+        # Telegram-friendly parts instead of deleting them mid-download.
+        return await _generic_download_video(url, format_id, quality_label, progress, play_url, allow_large=True)
     engine = _select_engine(url)
     try:
         path = await engine.download_video(url, format_id, quality_label, progress, play_url)
@@ -667,7 +693,13 @@ async def download_video(url: str, format_id: str = "best", quality_label: str =
         return await _generic_download_video(url, format_id, quality_label, progress, None)
 
 
-async def download_audio(url: str, progress=None) -> str | None:
+async def download_audio(url: str, progress=None, bitrate: str | None = None) -> str | None:
+    requested = _valid_audio_bitrate(bitrate or AUDIO_BITRATE)
+    # Explicit high-bitrate requests (e.g. 320) use the reliable yt-dlp/ffmpeg
+    # path directly, skipping platform micro-optimisations that default to 192.
+    if requested == AUDIO_BITRATE_HIGH or requested != AUDIO_BITRATE:
+        return await _generic_download_audio(url, progress, requested)
+
     engine = _select_engine(url)
     try:
         return await engine.download_audio(url, progress)
@@ -675,7 +707,7 @@ async def download_audio(url: str, progress=None) -> str | None:
         raise
     except Exception as exc:
         logger.warning("Engine audio download failed (%s) for %s: %s", getattr(engine, "name", "unknown"), url[:120], exc)
-        return await _generic_download_audio(url, progress)
+        return await _generic_download_audio(url, progress, requested)
 
 
 # Compatibility aliases used by platform engines.

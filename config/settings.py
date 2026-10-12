@@ -36,6 +36,14 @@ RATE_LIMIT_BURST = int(os.getenv("RATE_LIMIT_BURST", "2"))
 # Moving-window quotas (`limits` library; SQLite backstop without Redis).
 HOURLY_DOWNLOAD_LIMIT = int(os.getenv("HOURLY_DOWNLOAD_LIMIT", "30"))
 DAILY_DOWNLOAD_LIMIT = int(os.getenv("DAILY_DOWNLOAD_LIMIT", "100"))
+# Batch handling: how many URLs may be processed in a single multi-link message.
+BATCH_MAX_URLS = min(int(os.getenv("BATCH_MAX_URLS", "10")), 50)
+# Audio MP3 extraction bitrate (LAME VBR-style numeric target, e.g. 128/192/320).
+AUDIO_BITRATE = os.getenv("AUDIO_BITRATE", "192").strip() or "192"
+AUDIO_BITRATE_HIGH = os.getenv("AUDIO_BITRATE_HIGH", "320").strip() or "320"
+# When a video exceeds Telegram's upload limit, split it into parts instead of
+# refusing the download. Disable with AUTO_SPLIT_LARGE_VIDEOS=0.
+AUTO_SPLIT_LARGE_VIDEOS = os.getenv("AUTO_SPLIT_LARGE_VIDEOS", "1") == "1"
 # Optional: redis://[:password]@host:6379/0  (also REDIS_URL / RATE_LIMIT_REDIS_URL)
 REDIS_URL = os.getenv("REDIS_URL", os.getenv("RATE_LIMIT_REDIS_URL", "")).strip()
 STORAGE_CHANNEL_ID = os.getenv("STORAGE_CHANNEL_ID", os.getenv("MEDIA_VAULT_CHANNEL_ID", "")).strip()
