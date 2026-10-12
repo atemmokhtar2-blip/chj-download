@@ -17,11 +17,12 @@ from database.users import (
     get_user, get_total_users, get_new_users_today, get_active_today,
     get_active_24h, get_banned_users_count, get_users_page, search_users,
     get_all_user_ids, ban_user, unban_user, update_user, get_top_users,
+    count_users,
 )
 from database.downloads import (
     get_downloads_today, get_downloads_week, get_downloads_month,
     get_downloads_by_platform, get_total_downloads, get_user_download_stats,
-    get_downloads_24h, get_total_data_bytes,
+    get_downloads_24h, get_total_data_bytes, get_top_user_today,
 )
 from database.cache import get_cache_count, get_cache_hits
 from database.broadcast import log_broadcast, get_broadcast_history
@@ -30,13 +31,14 @@ from services.engine_maintenance import get_ytdlp_version, update_ytdlp
 from services.engines import list_engines
 from config.settings import (
     YTDLP_COOKIES_FILE, YTDLP_COOKIES_FROM_BROWSER, DOWNLOAD_PROXY, TEMP_DIR,
-    OWNER_ID, ADMIN_IDS,
+    OWNER_ID, ADMIN_IDS, REDIS_URL, STORAGE_CHANNEL_ID,
 )
 
 logger = logging.getLogger(__name__)
 
 ADMIN_CONVERSATION_STATES = {}
 ADMIN_LAST_PAGE: dict[int, int] = {}
+ADMIN_USER_FILTER: dict[int, str] = {}
 _ADMIN_TEXT_STATES = {"search", "ban", "broadcast"}
 
 
@@ -443,6 +445,7 @@ def _build_admin_panel(lang: str):
     cache_hits = get_cache_hits()
     platform_stats = get_downloads_by_platform()
     top_users = get_top_users(5)
+    top_today = get_top_user_today(3)
     engines = list_engines()
     temp_size = _temp_dir_size()
     audit_entries = get_admin_audit(5)
@@ -463,6 +466,11 @@ def _build_admin_panel(lang: str):
         f"• <b>{escape(str(u.get('first_name') or str(u.get('user_id'))))}</b> — {u.get('downloads', 0)} تحميل"
         for u in top_users
     ) or "• لا يوجد نشاط بعد."
+
+    top_today_lines = "\n".join(
+        f"• <b>{escape(str(u.get('first_name') or str(u.get('user_id'))))}</b> — {u.get('downloads', 0)} تحميل اليوم"
+        for u in top_today
+    ) or "• لا توجد تحميلات اليوم بعد."
 
     history = get_broadcast_history(3)
     if history:
@@ -509,6 +517,8 @@ def _build_admin_panel(lang: str):
         f"{platform_lines}\n\n"
         "👑 <b>الأكثر نشاطًا</b>\n"
         f"{top_user_lines}\n\n"
+        "🏆 <b>الأكثر تحميلًا اليوم</b>\n"
+        f"{top_today_lines}\n\n"
         "📢 <b>الإذاعة</b>\n"
         f"{broadcast_lines}\n\n"
         "📜 <b>سجل أمان الأدمن</b>\n"
@@ -618,41 +628,53 @@ async def _show_security_scan(query) -> None:
     await query.edit_message_text(text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(back))
 
 
-async def _show_users_page(query, lang: str, page: int = 0):
+async def _show_users_page(query, lang: str, page: int = 0, status: str = "all"):
     per_page = 8
-    total = get_total_users()
+    status = status or "all"
+    if status not in ("all", "active", "banned"):
+        status = "all"
+    total = count_users(status)
     total_pages = max(1, (total + per_page - 1) // per_page)
     page = max(0, min(page or 0, total_pages - 1))
-    users = get_users_page(offset=page * per_page, limit=per_page)
+    users = get_users_page(offset=page * per_page, limit=per_page, status=status)
+    status_label = {"all": "الكل", "active": "النشطون", "banned": "المحظورون"}[status]
 
     if not users:
-        keyboard = [[InlineKeyboardButton("🔙 لوحة التحكم", callback_data="admin_panel")]]
+        keyboard = [
+            [
+                InlineKeyboardButton("👥 الكل", callback_data="admin_users"),
+                InlineKeyboardButton("✅ نشط", callback_data="admin_users_active"),
+                InlineKeyboardButton("🚫 محظور", callback_data="admin_users_banned"),
+            ],
+            [InlineKeyboardButton("🔙 لوحة التحكم", callback_data="admin_panel")],
+        ]
         await query.edit_message_text(
-            "👥 <b>المستخدمون</b>\n\nلا يوجد مستخدمون مسجلون حتى الآن.\n"
-            "بمجرد أن يرسل أحدهم /start سيظهر هنا فورًا.",
+            f"👥 <b>المستخدمون — {status_label}</b>\n\n"
+            "لا يوجد مستخدمون في هذه الفئة حاليًا.",
             parse_mode="HTML",
             reply_markup=InlineKeyboardMarkup(keyboard),
         )
         return
 
     ADMIN_LAST_PAGE[query.from_user.id] = page
+    ADMIN_USER_FILTER[query.from_user.id] = status
 
     lines = []
     for u in users:
-        status = "🚫" if u.get("is_banned") else "✅"
+        status_icon = "🚫" if u.get("is_banned") else "✅"
         name = escape(u.get("first_name") or "بدون اسم")
         username = escape(u.get("username") or "—")
         downloads = u.get("downloads", 0)
         language = escape(u.get("language") or "—")
         last_seen = _short_datetime(u.get("last_seen"))
         lines.append(
-            f"{status} <b>{name}</b> @{username}\n"
+            f"{status_icon} <b>{name}</b> @{username}\n"
             f"    🆔 <code>{u['user_id']}</code> • 📥 <b>{downloads}</b> • 🌐 {language} • 🕑 {last_seen}"
         )
 
     text = (
-        f"👥 <b>قائمة المستخدمين</b>\n"
-        f"الصفحة <b>{page + 1}</b> من <b>{total_pages}</b> • الإجمالي: <b>{total}</b>\n\n"
+        f"👥 <b>قائمة المستخدمين</b> — فلتر: <b>{status_label}</b>\n"
+        f"الصفحة <b>{page + 1}</b> من <b>{total_pages}</b> • العدد: <b>{total}</b>\n\n"
         + "\n".join(lines)
     )
 
@@ -674,6 +696,11 @@ async def _show_users_page(query, lang: str, page: int = 0):
     if nav:
         keyboard.append(nav)
 
+    keyboard.append([
+        InlineKeyboardButton("👥 الكل", callback_data="admin_users"),
+        InlineKeyboardButton("✅ نشط", callback_data="admin_users_active"),
+        InlineKeyboardButton("🚫 محظور", callback_data="admin_users_banned"),
+    ])
     keyboard.append([InlineKeyboardButton("🔙 رجوع للوحة", callback_data="admin_panel")])
     await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML")
 
@@ -794,6 +821,7 @@ def _invalid_admin_callback(data: str) -> bool:
         "admin_engine_status", "admin_update_ytdlp", "admin_search", "admin_maintenance",
         "admin_ban", "admin_maintenance_on", "admin_maintenance_off", "admin_send_broadcast",
         "admin_health", "admin_audit", "admin_security",
+        "admin_users_active", "admin_users_banned",
     }
     return data not in known
 

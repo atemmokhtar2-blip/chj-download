@@ -91,4 +91,6 @@ if __name__ == "__main__":
     test_owner_gate_exists()
     test_update_user_allowlist_blocks_arbitrary_columns()
     test_search_users_handles_nasty_input()
+    test_users_page_status_filter_and_count()
+    test_top_user_today_uses_real_downloads()
     print("admin panel tests passed")

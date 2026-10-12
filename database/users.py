@@ -75,10 +75,29 @@ def unban_user(user_id: int):
     with db_cursor() as c:
         c.execute("UPDATE users SET is_banned = 0 WHERE user_id = ?", (user_id,))
 
-def get_users_page(offset: int = 0, limit: int = 20) -> list[dict]:
-    """User rows with the REAL download count from the downloads table."""
+def count_users(status: str | None = None) -> int:
+    """Total users, optionally filtered by status: 'all', 'active', 'banned'."""
+    if status == "active":
+        with db_cursor() as c:
+            c.execute("SELECT COUNT(*) AS cnt FROM users WHERE is_banned = 0")
+            return c.fetchone()["cnt"]
+    if status == "banned":
+        return get_banned_users_count()
+    return get_total_users()
+
+
+def get_users_page(offset: int = 0, limit: int = 20, status: str | None = None) -> list[dict]:
+    """User rows with the REAL download count from the downloads table.
+
+    ``status`` can be None/'all', 'active', or 'banned'.
+    """
+    where = ""
+    if status == "active":
+        where = "WHERE u.is_banned = 0"
+    elif status == "banned":
+        where = "WHERE u.is_banned = 1"
     with db_cursor() as c:
-        c.execute("""
+        c.execute(f"""
             SELECT u.user_id, u.username, u.first_name, u.last_name,
                    u.is_banned, u.language, u.join_date, u.last_seen,
                    COALESCE(d.cnt, 0) AS downloads
@@ -88,6 +107,7 @@ def get_users_page(offset: int = 0, limit: int = 20) -> list[dict]:
                 FROM downloads
                 GROUP BY user_id
             ) d ON d.user_id = u.user_id
+            {where}
             ORDER BY u.join_date DESC, u.user_id DESC
             LIMIT ? OFFSET ?
         """, (limit, offset))
