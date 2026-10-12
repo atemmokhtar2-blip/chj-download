@@ -401,6 +401,12 @@ def _download_direct_sync(
 ) -> str | None:
     """Stream a direct CDN video with bounded size, transient retries, and cleanup."""
     import requests
+    from utils.url_safety import is_public_url
+
+    safe, _guard_reason = is_public_url(url)
+    if not safe:
+        logger.warning("Blocked direct CDN download (SSRF guard) for %s", str(url)[:120])
+        return None
 
     parsed = urlparse(str(url or ""))
     if parsed.scheme not in {"http", "https"} or not parsed.netloc:
@@ -1033,8 +1039,15 @@ _enforce_max_file_size = _check_size
 
 async def download_image(url: str, image_url: str | None = None) -> str | None:
     import requests
-    Path(TEMP_DIR).mkdir(parents=True, exist_ok=True)
+    from utils.url_safety import is_public_url
+
     target = image_url or url
+    safe, _guard_reason = await asyncio.to_thread(is_public_url, target)
+    if not safe:
+        logger.warning("Blocked image download (SSRF guard) for %s", str(target)[:120])
+        raise RuntimeError("blocked_url")
+
+    Path(TEMP_DIR).mkdir(parents=True, exist_ok=True)
     fd, path = tempfile.mkstemp(prefix="xdl-img-", suffix=".jpg", dir=TEMP_DIR)
     os.close(fd)
     headers = {
@@ -1044,20 +1057,51 @@ async def download_image(url: str, image_url: str | None = None) -> str | None:
         ),
         "Accept": "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
     }
-    r = await asyncio.to_thread(requests.get, target, timeout=45, headers=headers)
-    r.raise_for_status()
-    content_type = (r.headers.get("Content-Type") or "").lower()
-    if content_type and "text/html" in content_type:
+
+    # Stream to disk with a hard size cap instead of buffering the whole image in
+    # memory — a hostile/oversized response could otherwise exhaust RAM across
+    # concurrent downloads.
+    try:
+        with requests.get(target, timeout=45, headers=headers, stream=True) as r:
+            r.raise_for_status()
+            content_type = (r.headers.get("Content-Type") or "").lower()
+            if content_type and "text/html" in content_type:
+                _safe_remove(path)
+                raise RuntimeError("image endpoint returned HTML")
+
+            try:
+                total = max(0, int(r.headers.get("Content-Length") or 0))
+            except (TypeError, ValueError):
+                total = 0
+            if total > MAX_FILE_SIZE_BYTES:
+                _safe_remove(path)
+                raise FileTooLargeError(size_bytes=total, limit_bytes=MAX_FILE_SIZE_BYTES)
+
+            downloaded = 0
+            with open(path, "wb") as fh:
+                for chunk in r.iter_content(chunk_size=256 * 1024):
+                    if not chunk:
+                        continue
+                    if downloaded + len(chunk) > MAX_FILE_SIZE_BYTES:
+                        _safe_remove(path)
+                        raise FileTooLargeError(
+                            size_bytes=downloaded + len(chunk),
+                            limit_bytes=MAX_FILE_SIZE_BYTES,
+                        )
+                    if downloaded == 0:
+                        sample = chunk.lstrip().lower()
+                        if sample.startswith((b"<!doctype html", b"<html", b"<script")):
+                            _safe_remove(path)
+                            raise RuntimeError("image endpoint returned a web page")
+                    fh.write(chunk)
+                    downloaded += len(chunk)
+    except FileTooLargeError:
+        raise
+    except Exception:
         _safe_remove(path)
-        raise RuntimeError("image endpoint returned HTML")
-    data = r.content
-    head = data[:256].lstrip().lower()
-    if head.startswith((b"<!doctype html", b"<html", b"<script")):
-        _safe_remove(path)
-        raise RuntimeError("image endpoint returned a web page")
-    with open(path, "wb") as fh:
-        fh.write(data)
-    if os.path.getsize(path) < 64:
+        raise
+
+    if downloaded < 64:
         _safe_remove(path)
         raise RuntimeError("image too small")
     return _check_size(path)

@@ -254,7 +254,7 @@ async def handle_batch_urls(update: Update, context: ContextTypes.DEFAULT_TYPE):
     for url in urls:
         if not is_valid_url(url):
             await update.message.reply_text(
-                t(lang, "batch_invalid", url=url[:80]),
+                t(lang, "batch_invalid", url=escape(url[:80])),
                 parse_mode="HTML",
                 disable_web_page_preview=True,
             )

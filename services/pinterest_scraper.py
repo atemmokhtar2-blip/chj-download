@@ -812,6 +812,14 @@ def download_hls_video(play_url: str, out_path: str) -> str | None:
 
     if not play_url or not str(play_url).startswith("http"):
         return None
+    from utils.url_safety import is_public_url
+    from config.settings import MAX_FILE_SIZE_BYTES
+
+    safe, _reason = is_public_url(play_url)
+    if not safe:
+        logger.info("HLS pin blocked by SSRF guard: %s", str(play_url)[:100])
+        return None
+
     path = out_path if out_path.endswith(".mp4") else out_path + ".mp4"
     try:
         from services import downloader as _dl
