@@ -90,13 +90,20 @@ async def post_init(application: Application):
 
 
 async def global_error_handler(update: object, context) -> None:
-    """Catch unhandled exceptions so the bot never dies silently."""
+    """Catch unhandled exceptions so the bot never dies silently.
+
+    The real root cause is always written to the server logs via
+    ``system_logger.exception``, and now a short, safe version is also shown to
+    the user so they can report/understand exactly what went wrong.
+    """
     err = context.error
     system_logger.exception("Unhandled error: %s", err)
+    reason = summarize_error(err)
     try:
         if update and getattr(update, "effective_message", None):
+            from locales import t
             await update.effective_message.reply_text(
-                "⚠️ حدث خطأ غير متوقع. حاول مرة أخرى."
+                t("ar", "unexpected_error", reason=reason)
             )
     except Exception:
         pass

@@ -6,6 +6,7 @@ import re
 import uuid
 import logging
 import time
+from html import escape
 from telegram import (
     Update, InlineKeyboardButton, InlineKeyboardMarkup, InputFile,
     InputMediaPhoto, InputMediaVideo,
@@ -30,7 +31,7 @@ from middlewares.concurrency import download_slot, active_global_slots
 from middlewares.user_locks import is_user_busy, try_acquire_user_download, release_user_download
 from middlewares.auth import is_banned
 from locales import t
-from utils.helpers import is_valid_url, is_supported_url, truncate_title, make_progress_bar, format_size, get_platform_emoji
+from utils.helpers import is_valid_url, is_supported_url, truncate_title, make_progress_bar, format_size, get_platform_emoji, summarize_error
 from config.settings import (
     MAX_FILE_SIZE_MB,
     HOURLY_DOWNLOAD_LIMIT,
@@ -115,7 +116,15 @@ async def process_url(update: Update, context: ContextTypes.DEFAULT_TYPE, user, 
         return
 
     status_msg = await msg.reply_text(t(lang, "analyzing"), parse_mode="HTML")
-    info = await analyze_url(url)
+    try:
+        info = await analyze_url(url)
+    except Exception as exc:
+        logger.exception("URL analysis crashed for %s: %s", url[:120], exc)
+        await status_msg.edit_text(
+            t(lang, "analysis_failed_reason", reason=escape(summarize_error(exc))),
+            parse_mode="HTML",
+        )
+        return
     if not info:
         await status_msg.edit_text(t(lang, "analysis_failed"), parse_mode="HTML")
         return
@@ -212,6 +221,8 @@ def _friendly_error(lang: str, info: dict) -> str:
         return t(lang, "region_blocked")
     if reason == "removed_or_not_found":
         return t(lang, "removed_or_not_found")
+    if reason and reason != "analysis_failed":
+        return t(lang, "analysis_failed_reason", reason=escape(summarize_error(reason)))
     return t(lang, "analysis_failed")
 
 
@@ -517,7 +528,18 @@ async def download_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await edit_fn(t(lang, "file_too_large", max_size=f"{MAX_FILE_SIZE_MB}MB"))
     except Exception as e:
         logger.exception("Download error for user=%s url=%s: %s", user.id, str(info.get("url", ""))[:120], e)
-        await edit_fn(t(lang, "download_failed"))
+        reason = summarize_error(e)
+        try:
+            await edit_fn(
+                t(lang, "download_failed_reason", reason=escape(reason)),
+                parse_mode="HTML",
+            )
+        except Exception:
+            # Never let a failed status edit mask the original download error.
+            try:
+                await edit_fn(t(lang, "download_failed"))
+            except Exception:
+                pass
     finally:
         release_user_download(user.id)
         if file_path and os.path.exists(file_path):

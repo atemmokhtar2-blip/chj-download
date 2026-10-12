@@ -633,7 +633,9 @@ async def _generic_download_video(url: str, format_id: str = "best", quality_lab
 
     if last_error:
         raise last_error
-    return None
+    raise RuntimeError(
+        "No downloadable video stream returned after all formats and fallbacks were exhausted"
+    )
 
 
 def _valid_audio_bitrate(value: str | None) -> str:

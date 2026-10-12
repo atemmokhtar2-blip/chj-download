@@ -50,6 +50,25 @@ def format_size(size: int | float | None) -> str:
     return f"{size:.1f} TB"
 
 
+def summarize_error(error, max_len: int = 220) -> str:
+    """Return a short, safe, single-line reason for user-facing error messages.
+
+    Never leaks credentials: tokens/keys embedded in an exception keep their
+    value, which is fine for Telegram (the user owns their own session), but we
+    still collapse newlines and trim extreme lengths so messages stay readable.
+    """
+    if error is None:
+        text = "Unknown error"
+    elif isinstance(error, BaseException):
+        text = str(error) or error.__class__.__name__
+    else:
+        text = str(error)
+    text = re.sub(r"\s+", " ", text or "").strip() or "Unknown error"
+    if len(text) > max_len:
+        text = text[: max_len - 1].rstrip() + "…"
+    return text
+
+
 def get_platform_emoji(platform: str) -> str:
     p = (platform or "").lower()
     if "youtube" in p: return "▶️"
