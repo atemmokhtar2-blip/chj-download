@@ -116,31 +116,58 @@ def _best_image_from_images_dict(images: dict) -> str | None:
 
 
 def _best_video_url(videos: Any) -> str | None:
-    """Pick highest-quality mp4 from pin videos structure."""
+    """Pick the highest-quality mp4 from any Pinterest video structure.
+
+    Pinterest returns several shapes across API versions and libraries:
+      {"video_list": {"V_720P": {"url": ...}, ...}}
+      [{"video_files": [{"url": ..., "height": ...}, ...]}]
+      [{"url": ..., "height": ...}]
+      {"formats": [...]}
+
+    A video pin must never be served as its poster image, so this normalizer
+    is intentionally broad and handles all of the above.
+    """
     if not videos:
         return None
+    collected: list[tuple[str, dict]] = []
+
+    def walk(node: Any) -> None:
+        if isinstance(node, dict):
+            u = node.get("url") or node.get("mp4") or ""
+            if isinstance(u, str) and u.startswith("http"):
+                collected.append((u, node))
+            # Walk every nested value: the keys above the actual files vary
+            # (video_list / video_files / V_720P / formats / 0,1,2...).
+            for v in node.values():
+                walk(v)
+            return
+        if isinstance(node, (list, tuple)):
+            for item in node:
+                walk(item)
+            return
+        if isinstance(node, str) and node.startswith("http"):
+            collected.append((node, {}))
+
+    walk(videos)
+    if not collected:
+        return None
+
     candidates: list[tuple[int, str]] = []
-    # Shape A: {"video_list": {"V_720P": {"url": ...}, ...}}
-    video_list = None
-    if isinstance(videos, dict):
-        video_list = videos.get("video_list") or videos.get("items") or videos
-    if isinstance(video_list, dict):
-        for key, meta in video_list.items():
-            if not isinstance(meta, dict):
-                continue
-            u = meta.get("url") or meta.get("mp4")
-            if not u or not str(u).startswith("http"):
-                continue
-            h = int(meta.get("height") or meta.get("width") or 0)
-            # Prefer non-hls
-            score = h
-            if ".m3u8" in u:
-                score -= 10_000
-            candidates.append((score, u))
-    if candidates:
-        candidates.sort(key=lambda x: x[0], reverse=True)
-        return candidates[0][1]
-    return None
+    seen: set[str] = set()
+    for u, meta in collected:
+        u = u.strip()
+        if u in seen:
+            continue
+        seen.add(u)
+        h = int(meta.get("height") or meta.get("width") or 0)
+        score = h
+        # Prefer a progressive mp4 over an HLS playlist; height is secondary.
+        if ".m3u8" in u or "hls" in u.lower():
+            score -= 10_000
+        candidates.append((score, u))
+
+    candidates.sort(key=lambda x: x[0], reverse=True)
+    return candidates[0][1]
 
 
 def _probe_media_url(url: str, session: requests.Session | None = None, timeout: int = 10) -> dict:
