@@ -75,6 +75,9 @@ REDIS_URL = os.getenv("REDIS_URL", os.getenv("RATE_LIMIT_REDIS_URL", "")).strip(
 STORAGE_CHANNEL_ID = os.getenv("STORAGE_CHANNEL_ID", os.getenv("MEDIA_VAULT_CHANNEL_ID", "")).strip()
 MAX_CONCURRENT_DOWNLOADS = int(os.getenv("MAX_CONCURRENT_DOWNLOADS", "5"))
 
+# Brand shown on every delivered media caption ("downloaded by …").
+BOT_DISPLAY_NAME = os.getenv("BOT_DISPLAY_NAME", "〆 𝑿𝑬𝑳𝑽𝑶𝑹").strip()
+
 # Advanced download engine knobs. Leave empty unless needed.
 # YTDLP_COOKIES_FILE: path to Netscape cookies.txt for Instagram/Facebook/YouTube restricted media.
 # YTDLP_COOKIES_FROM_BROWSER: e.g. chrome, firefox, edge (only works where browser profiles exist).

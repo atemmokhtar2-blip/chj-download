@@ -41,6 +41,7 @@ from config.settings import (
     AUDIO_BITRATE,
     AUDIO_BITRATE_HIGH,
     BATCH_MAX_URLS,
+    BOT_DISPLAY_NAME,
 )
 from utils.media_split import split_video_parts
 from utils.telegram_safe import safe_edit
@@ -462,7 +463,7 @@ async def download_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await _quiet_edit(edit_fn, t(lang, "from_cache"), parse_mode="HTML")
                 media_group = []
                 for i, it in enumerate(cached_album[:ALBUM_MAX_ITEMS]):
-                    caption = t(lang, "completed") if i == 0 else None
+                    caption = t(lang, "completed", bot_name=BOT_DISPLAY_NAME) if i == 0 else None
                     if it.get("type") == "video":
                         media_group.append(InputMediaVideo(media=it["file_id"], caption=caption, parse_mode="HTML" if caption else None, supports_streaming=True))
                     else:
@@ -498,12 +499,13 @@ async def download_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     logger.warning("Vault deliver failed, trying file_id: %s", ve)
             if not delivered:
                 fid = cached["file_id"]
+                brand_caption = t(lang, "completed", bot_name=BOT_DISPLAY_NAME)
                 if is_audio:
-                    await query.message.reply_audio(audio=fid)
+                    await query.message.reply_audio(audio=fid, caption=brand_caption)
                 elif is_image:
-                    await query.message.reply_photo(photo=fid)
+                    await query.message.reply_photo(photo=fid, caption=brand_caption)
                 else:
-                    await query.message.reply_video(video=fid)
+                    await query.message.reply_video(video=fid, caption=brand_caption)
             _safe_store(increment_downloads, user.id)
             release_user_download(user.id)
             return
@@ -624,7 +626,7 @@ async def _run_download(query, context, info, user, lang, quality_label,
                             with open(item["path"], "rb") as fh:
                                 return await query.message.reply_photo(
                                     photo=InputFile(fh, filename=f"{safe_title}.jpg"),
-                                    caption=t(lang, "completed"),
+                                    caption=t(lang, "completed", bot_name=BOT_DISPLAY_NAME),
                                 )
 
                         sent = await _upload_with_retry(_send_single_photo)
@@ -638,7 +640,7 @@ async def _run_download(query, context, info, user, lang, quality_label,
                             with open(item["path"], "rb") as fh:
                                 return await query.message.reply_video(
                                     video=InputFile(fh, filename=f"{safe_title}.mp4"),
-                                    caption=t(lang, "completed"),
+                                    caption=t(lang, "completed", bot_name=BOT_DISPLAY_NAME),
                                     supports_streaming=True,
                                 )
 
@@ -656,7 +658,7 @@ async def _run_download(query, context, info, user, lang, quality_label,
                             for i, item in enumerate(downloaded[:ALBUM_MAX_ITEMS]):
                                 fh = open(item["path"], "rb")
                                 open_handles.append(fh)
-                                caption = t(lang, "completed") if i == 0 else None
+                                caption = t(lang, "completed", bot_name=BOT_DISPLAY_NAME) if i == 0 else None
                                 safe_title = _safe_upload_name(item.get("title") or title or "media", 40)
                                 if item["type"] == "image":
                                     media_group.append(
@@ -717,7 +719,7 @@ async def _run_download(query, context, info, user, lang, quality_label,
                 with open(file_path, "rb") as f:
                     return await query.message.reply_photo(
                         photo=InputFile(f, filename=f"{safe_title}.jpg"),
-                        caption=t(lang, "completed"),
+                        caption=t(lang, "completed", bot_name=BOT_DISPLAY_NAME),
                     )
 
             sent = await _upload_with_retry(_send_photo)
@@ -743,7 +745,7 @@ async def _run_download(query, context, info, user, lang, quality_label,
                 with open(file_path, "rb") as f:
                     return await query.message.reply_audio(
                         audio=InputFile(f, filename=f"{safe_title}.mp3"),
-                        caption=t(lang, "completed"),
+                        caption=t(lang, "completed", bot_name=BOT_DISPLAY_NAME),
                     )
 
             sent = await _upload_with_retry(_send_audio)
@@ -796,7 +798,7 @@ async def _run_download(query, context, info, user, lang, quality_label,
                             with open(p, "rb") as f:
                                 return await query.message.reply_video(
                                     video=InputFile(f, filename=f"{safe_title}_part{i}.mp4"),
-                                    caption=t(lang, "video_part", idx=i, total=total),
+                                    caption=t(lang, "video_part", idx=i, total=total, bot_name=BOT_DISPLAY_NAME),
                                     supports_streaming=True,
                                 )
 
@@ -813,7 +815,7 @@ async def _run_download(query, context, info, user, lang, quality_label,
                     with open(file_path, "rb") as f:
                         return await query.message.reply_video(
                             video=InputFile(f, filename=f"{safe_title}.mp4"),
-                            caption=t(lang, "completed"),
+                            caption=t(lang, "completed", bot_name=BOT_DISPLAY_NAME),
                             supports_streaming=True,
                         )
 
