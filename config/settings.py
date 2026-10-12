@@ -89,6 +89,11 @@ SUPPORTED_DOMAINS = [
     "streamable.com",
     "coub.com",
     "ok.ru", "m.ok.ru", "odnoklassniki.ru", "m.odnoklassniki.ru",
+    "rumble.com", "www.rumble.com",
+    "odysee.com", "www.odysee.com",
+    "nicovideo.jp", "nico.ms", "www.nicovideo.jp",
+    "douyin.com", "v.douyin.com", "www.douyin.com", "m.douyin.com",
+    "xiaohongshu.com", "xhslink.com", "www.xiaohongshu.com", "m.xiaohongshu.com",
 ]
 
 os.makedirs(TEMP_DIR, exist_ok=True)

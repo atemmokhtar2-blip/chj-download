@@ -53,7 +53,7 @@ def test_platform_routing() -> None:
 def test_engine_registry_matches_dashboard() -> None:
     engines = registered_engines()
     dashboard_names = [item["name"] for item in list_engines()]
-    assert len(engines) == 24
+    assert len(engines) == 29
     assert dashboard_names == [engine.name for engine in engines]
     assert all(item["status"] == "ready" for item in list_engines())
     assert all(item["domains"] > 0 for item in list_engines())

@@ -75,6 +75,11 @@ def get_platform_emoji(platform: str) -> str:
     if "streamable" in p: return "▶️"
     if "coub" in p: return "🔁"
     if "spotify" in p: return "🎧"
+    if "rumble" in p: return "🥊"
+    if "odysee" in p: return "🛰️"
+    if "niconico" in p or "nico" in p: return "🇯🇵"
+    if "douyin" in p: return "🎶"
+    if "xiaohongshu" in p or "xhslink" in p: return "📕"
     return "🌐"
 
 

@@ -683,6 +683,36 @@ class OdnoklassnikiEngine(YtDlpFallbackEngine):
     domains = ("ok.ru", "m.ok.ru", "odnoklassniki.ru", "m.odnoklassniki.ru")
 
 
+class RumbleEngine(YtDlpFallbackEngine):
+    name = "RumbleEnginePro"
+    platform_label = "Rumble"
+    domains = ("rumble.com", "www.rumble.com")
+
+
+class OdyseeEngine(YtDlpFallbackEngine):
+    name = "OdyseeEnginePro"
+    platform_label = "Odysee"
+    domains = ("odysee.com", "www.odysee.com")
+
+
+class NiconicoEngine(YtDlpFallbackEngine):
+    name = "NiconicoEnginePro"
+    platform_label = "Niconico"
+    domains = ("nicovideo.jp", "nico.ms", "www.nicovideo.jp")
+
+
+class DouyinEngine(YtDlpFallbackEngine):
+    name = "DouyinEnginePro"
+    platform_label = "Douyin"
+    domains = ("douyin.com", "v.douyin.com", "www.douyin.com", "m.douyin.com")
+
+
+class XiaohongshuEngine(YtDlpFallbackEngine):
+    name = "XiaohongshuEnginePro"
+    platform_label = "Xiaohongshu"
+    domains = ("xiaohongshu.com", "xhslink.com", "www.xiaohongshu.com", "m.xiaohongshu.com")
+
+
 class GenericEngine(YtDlpFallbackEngine):
     name = "GenericEngine"
     domains = ()

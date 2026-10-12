@@ -4,14 +4,18 @@ from services.engines.platforms import (
     BilibiliEngine,
     CoubEngine,
     DailymotionEngine,
+    DouyinEngine,
     FacebookEngine,
     ImgurEngine,
     InstagramEngine,
     KwaiEngine,
     LikeeEngine,
+    NiconicoEngine,
     OdnoklassnikiEngine,
+    OdyseeEngine,
     PinterestEngine,
     RedditEngine,
+    RumbleEngine,
     SnapchatEngine,
     SoundCloudEngine,
     SpotifyEngine,
@@ -24,6 +28,7 @@ from services.engines.platforms import (
     TwitterEngine,
     VimeoEngine,
     VkEngine,
+    XiaohongshuEngine,
     YouTubeEngine,
 )
 
@@ -59,6 +64,11 @@ def registered_engines():
         StreamableEngine(),
         CoubEngine(),
         OdnoklassnikiEngine(),
+        RumbleEngine(),
+        OdyseeEngine(),
+        NiconicoEngine(),
+        DouyinEngine(),
+        XiaohongshuEngine(),
     ]
 
 

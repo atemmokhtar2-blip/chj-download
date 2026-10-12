@@ -6,6 +6,7 @@ import time
 import logging
 import asyncio
 import sqlite3
+import secrets
 from datetime import datetime
 from pathlib import Path
 
@@ -58,7 +59,7 @@ try:
     from services.engines import registered_engines as _registered_engines
     ENGINE_COUNT = len(_registered_engines())
 except Exception:
-    ENGINE_COUNT = 24
+    ENGINE_COUNT = 29
 
 @spaces.GPU
 def dummy_gpu_task():
@@ -425,5 +426,20 @@ if __name__ == "__main__":
     except ValueError:
         logger.warning("Invalid PORT value; falling back to 7860")
         server_port = 7860
+
+    # The dashboard exposes user data on the public internet: always protect it.
+    # Set DASHBOARD_USERNAME / DASHBOARD_PASSWORD as environment secrets.
+    # DASHBOARD_AUTH_DISABLED=1 is only intended for local development.
+    if os.getenv("DASHBOARD_AUTH_DISABLED", "0") == "1":
+        dashboard_auth = None
+        logger.warning("Dashboard auth disabled (DASHBOARD_AUTH_DISABLED=1) — local dev only.")
+    else:
+        dash_user = os.getenv("DASHBOARD_USERNAME", "admin").strip() or "admin"
+        dash_pass = os.getenv("DASHBOARD_PASSWORD", "").strip()
+        if not dash_pass:
+            dash_pass = secrets.token_urlsafe(16)
+            logger.warning("DASHBOARD_PASSWORD not set — generated a temporary password: %s", dash_pass)
+        dashboard_auth = (dash_user, dash_pass)
+
     logger.info("Starting Gradio server on 0.0.0.0:%s", server_port)
-    demo.launch(server_name="0.0.0.0", server_port=server_port)
+    demo.launch(server_name="0.0.0.0", server_port=server_port, auth=dashboard_auth)

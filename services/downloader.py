@@ -53,6 +53,11 @@ def _platform(url: str) -> str:
     if "coub" in host: return "Coub"
     if "ok.ru" in host or "odnoklassniki" in host: return "Odnoklassniki"
     if "spotify" in host: return "Spotify"
+    if "rumble" in host: return "Rumble"
+    if "odysee" in host: return "Odysee"
+    if "nicovideo" in host or host == "nico.ms": return "Niconico"
+    if "douyin" in host: return "Douyin"
+    if "xiaohongshu" in host or "xhslink" in host: return "Xiaohongshu"
     return host or "Generic"
 
 
@@ -105,9 +110,15 @@ def _base_opts(progress=None, loop: asyncio.AbstractEventLoop | None = None) -> 
         "noplaylist": False,
         "outtmpl": os.path.join(TEMP_DIR, "%(title).80s-%(id)s.%(ext)s"),
         "retries": 5,
+        "extractor_retries": 5,
+        "file_access_retries": 5,
         "fragment_retries": 8,
         "socket_timeout": DOWNLOAD_TIMEOUT,
         "continuedl": True,
+        "overwrites": True,
+        "concurrent_fragment_downloads": 4,
+        "http_chunk_size": 10 * 1024 * 1024,
+        "windowsfilenames": True,
         "merge_output_format": "mp4",
         "http_headers": {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36",
@@ -629,6 +640,7 @@ async def _generic_download_audio(url: str, progress=None, bitrate: str | None =
     opts = {
         **_base_opts(progress, loop),
         "format": "bestaudio/best",
+        "noplaylist": True,
         "postprocessors": [
             {"key": "FFmpegExtractAudio", "preferredcodec": "mp3", "preferredquality": preferred_quality}
         ],
@@ -727,10 +739,29 @@ async def download_image(url: str, image_url: str | None = None) -> str | None:
     target = image_url or url
     fd, path = tempfile.mkstemp(prefix="xdl-img-", suffix=".jpg", dir=TEMP_DIR)
     os.close(fd)
-    r = await asyncio.to_thread(requests.get, target, timeout=30, headers={"User-Agent": "Mozilla/5.0"})
+    headers = {
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131 Safari/537.36"
+        ),
+        "Accept": "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
+    }
+    r = await asyncio.to_thread(requests.get, target, timeout=45, headers=headers)
     r.raise_for_status()
+    content_type = (r.headers.get("Content-Type") or "").lower()
+    if content_type and "text/html" in content_type:
+        _safe_remove(path)
+        raise RuntimeError("image endpoint returned HTML")
+    data = r.content
+    head = data[:256].lstrip().lower()
+    if head.startswith((b"<!doctype html", b"<html", b"<script")):
+        _safe_remove(path)
+        raise RuntimeError("image endpoint returned a web page")
     with open(path, "wb") as fh:
-        fh.write(r.content)
+        fh.write(data)
+    if os.path.getsize(path) < 64:
+        _safe_remove(path)
+        raise RuntimeError("image too small")
     return _check_size(path)
 
 
