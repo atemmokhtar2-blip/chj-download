@@ -49,3 +49,13 @@ def get_downloads_month() -> int:
     with db_cursor() as c:
         c.execute("SELECT COUNT(*) AS cnt FROM downloads WHERE created_at >= datetime('now', '-30 days')")
         return c.fetchone()["cnt"]
+
+def get_downloads_24h() -> int:
+    with db_cursor() as c:
+        c.execute("SELECT COUNT(*) AS cnt FROM downloads WHERE created_at >= datetime('now', '-1 day')")
+        return c.fetchone()["cnt"]
+
+def get_total_data_bytes() -> int:
+    with db_cursor() as c:
+        c.execute("SELECT COALESCE(SUM(file_size), 0) AS total FROM downloads")
+        return int(c.fetchone()["total"] or 0)

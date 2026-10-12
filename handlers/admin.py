@@ -224,6 +224,14 @@ async def _broadcast_update_message(context: ContextTypes.DEFAULT_TYPE, status_m
     except Exception:
         logger.exception("Failed to write broadcast_log")
 
+    try:
+        log_admin_action(
+            admin_id or 0, "announce_broadcast",
+            detail=f"success={success} failed={failed}",
+        )
+    except Exception:
+        logger.exception("Failed to write admin audit log")
+
     if status_message:
         await status_message.edit_text(result_text, parse_mode="HTML")
     elif query:
@@ -286,6 +294,9 @@ async def admin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         from services.runtime_diagnostics import render_diagnostics_html
         back = [[InlineKeyboardButton("🔙 لوحة التحكم", callback_data="admin_panel")]]
         await query.edit_message_text(render_diagnostics_html(), parse_mode="HTML", reply_markup=InlineKeyboardMarkup(back))
+    elif data == "admin_audit":
+        _clear_admin_state(user.id)
+        await _show_audit_log(query)
     elif data == "admin_search":
         ADMIN_CONVERSATION_STATES[user.id] = "search"
         keyboard = [[InlineKeyboardButton("🔙 إلغاء", callback_data="admin_panel")]]
@@ -321,11 +332,13 @@ async def admin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif data == "admin_maintenance_on":
         _clear_admin_state(user.id)
         _set_maintenance(True)
+        log_admin_action(user.id, "maintenance_mode", detail="enabled")
         back = [[InlineKeyboardButton("🔙 لوحة التحكم", callback_data="admin_panel")]]
         await query.edit_message_text(t(lang, "maintenance_on"), parse_mode="HTML", reply_markup=InlineKeyboardMarkup(back))
     elif data == "admin_maintenance_off":
         _clear_admin_state(user.id)
         _set_maintenance(False)
+        log_admin_action(user.id, "maintenance_mode", detail="disabled")
         back = [[InlineKeyboardButton("🔙 لوحة التحكم", callback_data="admin_panel")]]
         await query.edit_message_text(t(lang, "maintenance_off"), parse_mode="HTML", reply_markup=InlineKeyboardMarkup(back))
     elif data.startswith("admin_unban_"):
@@ -367,21 +380,53 @@ async def _show_engine_status(query) -> None:
     back = [[InlineKeyboardButton("🔙 لوحة التحكم", callback_data="admin_panel")]]
     await query.edit_message_text(text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(back))
 
+def _format_bytes(size: int) -> str:
+    """Human-readable byte size."""
+    size = int(size or 0)
+    if size < 1024:
+        return f"{size} B"
+    if size < 1024 * 1024:
+        return f"{size / 1024:.1f} KB"
+    if size < 1024 * 1024 * 1024:
+        return f"{size / (1024 * 1024):.1f} MB"
+    return f"{size / (1024 * 1024 * 1024):.2f} GB"
+
+
+def _temp_dir_size() -> int:
+    """Total bytes currently sitting in the temp folder."""
+    try:
+        total = 0
+        for dirpath, _dirnames, filenames in os.walk(TEMP_DIR):
+            for name in filenames:
+                try:
+                    total += os.path.getsize(os.path.join(dirpath, name))
+                except OSError:
+                    continue
+        return total
+    except Exception:
+        return 0
+
+
 def _build_admin_panel(lang: str):
     """Assemble the live, professional admin dashboard from real DB data."""
     total_users = get_total_users()
     new_today = get_new_users_today()
     active_today = get_active_today()
+    active_24h = get_active_24h()
     banned = get_banned_users_count()
     downloads_today = get_downloads_today()
+    downloads_24h = get_downloads_24h()
     downloads_week = get_downloads_week()
     downloads_month = get_downloads_month()
     downloads_total = get_total_downloads()
+    total_data = get_total_data_bytes()
     cache_count = get_cache_count()
     cache_hits = get_cache_hits()
     platform_stats = get_downloads_by_platform()
     top_users = get_top_users(5)
     engines = list_engines()
+    temp_size = _temp_dir_size()
+    audit_entries = get_admin_audit(5)
     try:
         version = get_ytdlp_version()
     except Exception:
@@ -410,21 +455,34 @@ def _build_admin_panel(lang: str):
     else:
         broadcast_lines = "• لا توجد إذاعات مسجلة بعد."
 
+    if audit_entries:
+        audit_lines = "\n".join(
+            f"• <b>{escape(str(e.get('action') or '—'))}</b>"
+            f" • <code>{escape(str(e.get('created_at') or '—')[:16])}</code>"
+            for e in audit_entries
+        )
+    else:
+        audit_lines = "• لا توجد أحداث مسجلة بعد."
+
     text = (
         "👑 <b>لوحة التحكم الرئيسية</b>\n\n"
         "👥 <b>المستخدمون</b>\n"
         f"• الإجمالي: <b>{total_users}</b>\n"
         f"• جديد اليوم: <b>{new_today}</b>\n"
         f"• نشط اليوم: <b>{active_today}</b>\n"
+        f"• نشط آخر 24 ساعة: <b>{active_24h}</b>\n"
         f"• محظور: <b>{banned}</b>\n\n"
         "📥 <b>التحميلات</b>\n"
         f"• اليوم: <b>{downloads_today}</b>\n"
+        f"• آخر 24 ساعة: <b>{downloads_24h}</b>\n"
         f"• آخر ٧ أيام: <b>{downloads_week}</b>\n"
         f"• آخر ٣٠ يومًا: <b>{downloads_month}</b>\n"
-        f"• الإجمالي: <b>{downloads_total}</b>\n\n"
+        f"• الإجمالي: <b>{downloads_total}</b>\n"
+        f"• حجم البيانات الكلي: <b>{_format_bytes(total_data)}</b>\n\n"
         "💾 <b>الكاش</b>\n"
         f"• عناصر مخزنة: <b>{cache_count}</b>\n"
-        f"• ضربات التوصيل: <b>{cache_hits}</b>\n\n"
+        f"• ضربات التوصيل: <b>{cache_hits}</b>\n"
+        f"• التخزين المؤقت (temp): <b>{_format_bytes(temp_size)}</b>\n\n"
         "🧠 <b>محرك التنزيل</b>\n"
         f"• yt-dlp: <code>{escape(version)}</code>\n"
         f"• المحركات النشطة: <b>{len(engines)}</b>\n\n"
@@ -434,6 +492,8 @@ def _build_admin_panel(lang: str):
         f"{top_user_lines}\n\n"
         "📢 <b>الإذاعة</b>\n"
         f"{broadcast_lines}\n\n"
+        "📜 <b>سجل أمان الأدمن</b>\n"
+        f"{audit_lines}\n\n"
         f"🚧 <b>وضع الصيانة:</b> {maintenance}"
     )
 
@@ -452,6 +512,7 @@ def _build_admin_panel(lang: str):
         ],
         [
             InlineKeyboardButton("🔄 تحديث yt-dlp", callback_data="admin_update_ytdlp"),
+            InlineKeyboardButton("📜 سجل الأمان", callback_data="admin_audit"),
         ],
     ]
     return text, InlineKeyboardMarkup(keyboard)
@@ -741,6 +802,7 @@ async def admin_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
             return True
         target = results[0]
         ban_user(target["user_id"])
+        log_admin_action(user_id, "ban_user", target["user_id"])
         name = escape(target.get("first_name") or target.get("username") or str(target["user_id"]))
         await update.message.reply_text(
             f"🚫 <b>تم حظر المستخدم</b>\n\n👤 {name}\n🆔 <code>{target['user_id']}</code>",

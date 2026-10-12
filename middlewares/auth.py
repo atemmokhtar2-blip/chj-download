@@ -8,6 +8,11 @@ def is_admin(user_id: int | None) -> bool:
     return bool(user_id) and int(user_id) in set([OWNER_ID, *ADMIN_IDS])
 
 
+def is_owner(user_id: int | None) -> bool:
+    """Owner-only gate for the most sensitive operations (mass broadcast)."""
+    return bool(user_id) and int(user_id) == int(OWNER_ID)
+
+
 def is_banned(user_id: int | None) -> bool:
     if not user_id:
         return True

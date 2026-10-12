@@ -66,20 +66,36 @@ def unban_user(user_id: int):
         c.execute("UPDATE users SET is_banned = 0 WHERE user_id = ?", (user_id,))
 
 def get_users_page(offset: int = 0, limit: int = 20) -> list[dict]:
+    """User rows with the REAL download count from the downloads table."""
     with db_cursor() as c:
         c.execute("""
-            SELECT user_id, username, first_name, last_name, downloads,
-                   is_banned, language, join_date, last_seen
-            FROM users ORDER BY join_date DESC, user_id DESC LIMIT ? OFFSET ?
+            SELECT u.user_id, u.username, u.first_name, u.last_name,
+                   u.is_banned, u.language, u.join_date, u.last_seen,
+                   COALESCE(d.cnt, 0) AS downloads
+            FROM users u
+            LEFT JOIN (
+                SELECT user_id, COUNT(*) AS cnt
+                FROM downloads
+                GROUP BY user_id
+            ) d ON d.user_id = u.user_id
+            ORDER BY u.join_date DESC, u.user_id DESC
+            LIMIT ? OFFSET ?
         """, (limit, offset))
         return [dict(row) for row in c.fetchall()]
 
 def get_top_users(limit: int = 5) -> list[dict]:
+    """Top downloaders by REAL count from the downloads table."""
     with db_cursor() as c:
         c.execute("""
-            SELECT user_id, first_name, username, downloads
-            FROM users
-            ORDER BY downloads DESC
+            SELECT u.user_id, u.first_name, u.username,
+                   COALESCE(d.cnt, 0) AS downloads
+            FROM users u
+            LEFT JOIN (
+                SELECT user_id, COUNT(*) AS cnt
+                FROM downloads
+                GROUP BY user_id
+            ) d ON d.user_id = u.user_id
+            ORDER BY downloads DESC, u.user_id ASC
             LIMIT ?
         """, (limit,))
         return [dict(row) for row in c.fetchall()]
@@ -87,6 +103,11 @@ def get_top_users(limit: int = 5) -> list[dict]:
 def get_active_today() -> int:
     with db_cursor() as c:
         c.execute("SELECT COUNT(*) AS cnt FROM users WHERE date(last_seen) = date('now')")
+        return c.fetchone()["cnt"]
+
+def get_active_24h() -> int:
+    with db_cursor() as c:
+        c.execute("SELECT COUNT(*) AS cnt FROM users WHERE last_seen >= datetime('now', '-1 day')")
         return c.fetchone()["cnt"]
 
 def search_users(query: str) -> list[dict]:

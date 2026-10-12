@@ -78,6 +78,15 @@ def init_db():
                 created_at  TEXT DEFAULT (datetime('now'))
             );
 
+            CREATE TABLE IF NOT EXISTS admin_audit_log (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                admin_id    INTEGER,
+                action      TEXT,
+                target_id   INTEGER,
+                detail      TEXT,
+                created_at  TEXT DEFAULT (datetime('now'))
+            );
+
             CREATE TABLE IF NOT EXISTS bot_settings (
                 key   TEXT PRIMARY KEY,
                 value TEXT NOT NULL DEFAULT ''
@@ -86,6 +95,7 @@ def init_db():
             CREATE INDEX IF NOT EXISTS idx_downloads_user    ON downloads(user_id);
             CREATE INDEX IF NOT EXISTS idx_downloads_date    ON downloads(created_at);
             CREATE INDEX IF NOT EXISTS idx_cache_hash        ON file_cache(url_hash);
+            CREATE INDEX IF NOT EXISTS idx_admin_audit_date  ON admin_audit_log(created_at);
         """)
     logger.info("Database initialized.")
     ensure_cache_schema()
