@@ -1,21 +1,17 @@
 import logging
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup
-from telegram.ext import ContextTypes, ConversationHandler
+from telegram import Update, ReplyKeyboardMarkup
+from telegram.ext import ContextTypes
 
-from database.users import (
-    get_user, create_user, update_user
-)
+from database.users import get_user, create_user, update_user
 from middlewares.auth import is_admin
 from locales import t
-from utils.helpers import get_display_name
 
 logger = logging.getLogger(__name__)
 
-CHOOSING_LANGUAGE = 1
 
-def get_main_keyboard(lang: str, user_id: int = None) -> ReplyKeyboardMarkup:
-    buttons = [[t(lang, "menu_download")]]
-    return ReplyKeyboardMarkup(buttons, resize_keyboard=True)
+def get_main_keyboard(lang: str = "ar", user_id: int = None) -> ReplyKeyboardMarkup:
+    return ReplyKeyboardMarkup([[t("ar", "menu_download")]], resize_keyboard=True)
+
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
@@ -26,99 +22,74 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             user_id=user.id,
             username=user.username or "",
             first_name=user.first_name or "",
-            last_name=user.last_name or ""
+            last_name=user.last_name or "",
+            language="ar",
         )
+        db_user = get_user(user.id)
 
-        keyboard = [[
-            InlineKeyboardButton("🇺🇸 English", callback_data="lang_en"),
-            InlineKeyboardButton("🇸🇦 العربية", callback_data="lang_ar"),
-        ]]
-        await update.message.reply_text(
-            t("en", "choose_language"),
-            reply_markup=InlineKeyboardMarkup(keyboard),
-            parse_mode="HTML"
-        )
-        return CHOOSING_LANGUAGE
+    # Force Arabic for both new and existing users, including accounts that
+    # previously selected English.
+    update_user(user.id, language="ar")
 
-    lang = db_user.get("language", "en")
-
-    if db_user.get("is_banned"):
-        await update.message.reply_text(t(lang, "banned"))
-        return ConversationHandler.END
+    if db_user and db_user.get("is_banned"):
+        await update.message.reply_text(t("ar", "banned"))
+        return
 
     if is_admin(user.id):
         from handlers.admin import admin_command
         await admin_command(update, context)
-        return ConversationHandler.END
+        return
 
     await update.message.reply_text(
-        t(lang, "welcome_back"),
+        t("ar", "welcome_back"),
         parse_mode="HTML",
-        reply_markup=get_main_keyboard(lang, user.id)
+        reply_markup=get_main_keyboard("ar", user.id),
     )
-    return ConversationHandler.END
+
 
 async def language_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Keep old language buttons harmless; the bot now uses Arabic only."""
     query = update.callback_query
-    user = query.from_user
-    if query.data not in {"lang_en", "lang_ar"}:
-        await query.answer("This button is no longer available.", show_alert=True)
-        return ConversationHandler.END
-    lang = "ar" if query.data == "lang_ar" else "en"
-
-    db_user = get_user(user.id)
-    if not db_user:
-        create_user(
-            user_id=user.id,
-            username=user.username or "",
-            first_name=user.first_name or "",
-            last_name=user.last_name or ""
-        )
-
-    update_user(user.id, language=lang)
-    await query.answer()
-    await query.edit_message_text(t(lang, "language_set"))
-
+    update_user(query.from_user.id, language="ar")
+    await query.answer("اللغة العربية ثابتة في البوت.")
+    try:
+        await query.edit_message_text("✅ تم ضبط لغة البوت على العربية.")
+    except Exception:
+        pass
     await context.bot.send_message(
         chat_id=query.message.chat_id,
-        text=t(lang, "welcome"),
+        text=t("ar", "welcome"),
         parse_mode="HTML",
-        reply_markup=get_main_keyboard(lang, user.id)
+        reply_markup=get_main_keyboard("ar", query.from_user.id),
     )
-    return ConversationHandler.END
+
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     db_user = get_user(user.id)
-    lang = db_user.get("language", "en") if db_user else "en"
-    await update.message.reply_text(t(lang, "help_text"), parse_mode="HTML")
+    if db_user:
+        update_user(user.id, language="ar")
+    await update.message.reply_text(t("ar", "help_text"), parse_mode="HTML")
+
 
 async def settings_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     db_user = get_user(user.id)
-    lang = db_user.get("language", "en") if db_user else "en"
-    lang_display = "العربية" if lang == "ar" else "English"
-    keyboard = [[
-        InlineKeyboardButton(t(lang, "settings_lang_btn"), callback_data="settings_lang")
-    ]]
+    if db_user:
+        update_user(user.id, language="ar")
     await update.message.reply_text(
-        t(lang, "settings_text", language=lang_display),
-        reply_markup=InlineKeyboardMarkup(keyboard),
-        parse_mode="HTML"
+        t("ar", "settings_text", language="العربية"),
+        parse_mode="HTML",
     )
+
 
 async def settings_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     if query.data == "settings_lang":
-        keyboard = [[
-            InlineKeyboardButton("🇺🇸 English", callback_data="lang_en"),
-            InlineKeyboardButton("🇸🇦 العربية", callback_data="lang_ar"),
-        ]]
-        await query.edit_message_text(
-            t("en", "choose_language"),
-            reply_markup=InlineKeyboardMarkup(keyboard),
-            parse_mode="HTML"
-        )
-        await query.answer()
+        await query.answer("اللغة العربية ثابتة في البوت.", show_alert=True)
+        try:
+            await query.edit_message_text("⚙️ لغة البوت ثابتة على العربية.")
+        except Exception:
+            pass
         return
-    await query.answer("This button is no longer available.", show_alert=True)
+    await query.answer("هذا الزر لم يعد متاحًا.", show_alert=True)

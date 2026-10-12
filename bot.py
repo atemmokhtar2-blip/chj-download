@@ -7,8 +7,7 @@ sys.path.insert(0, os.path.dirname(__file__))
 
 from telegram import Update
 from telegram.ext import (
-    Application, CommandHandler, MessageHandler, CallbackQueryHandler,
-    ConversationHandler, filters
+    Application, CommandHandler, MessageHandler, CallbackQueryHandler, filters
 )
 
 from config.settings import BOT_TOKEN
@@ -16,8 +15,8 @@ from database.db import init_db
 from utils.logger import system_logger
 
 from handlers.start import (
-    start_command, language_callback, 
-    help_command, settings_command, settings_callback, CHOOSING_LANGUAGE
+    start_command, language_callback,
+    help_command, settings_command, settings_callback
 )
 from handlers.download import handle_url, download_callback
 from handlers.admin import (
@@ -27,15 +26,13 @@ from handlers.admin import (
 )
 from workers.cleanup import cleanup_temp_files, cleanup_old_cache
 
-# All main-menu button texts (EN + AR) for routing
-MENU_BUTTONS = {
-    "📥 Download",    "📥 تحميل",
-}
+# Arabic-only main menu.
+MENU_BUTTONS = {"📥 تحميل", "📥 Download"}
 
 
 async def ping_command(update: Update, context):
     """Lightweight liveness check for every user."""
-    await update.effective_message.reply_text("🏓 Pong — X Downloader is online.")
+    await update.effective_message.reply_text("🏓 البوت يعمل حاليًا.")
 
 
 async def noop_callback(update: Update, context):
@@ -52,32 +49,31 @@ async def unknown_callback(update: Update, context):
     data = query.data or ""
     user_id = query.from_user.id if query.from_user else "unknown"
     system_logger.warning("Unknown callback received: user=%s data=%r", user_id, data)
-    await query.answer("Session expired. Please use /start again.", show_alert=True)
+    await query.answer("انتهت صلاحية الجلسة. استخدم /start مرة أخرى.", show_alert=True)
 
 
 async def message_router(update: Update, context):
     """Route text messages — handle menu buttons and URLs."""
     text = (update.message.text or "").strip()
 
-    # --- Main menu button routing ---
     if text in MENU_BUTTONS:
-        from database.users import get_user
+        from database.users import get_user, update_user
         from locales import t
-        db_user = get_user(update.effective_user.id)
-        lang = db_user.get("language", "en") if db_user else "en"
-
-        if text in (t("en", "menu_download"), t("ar", "menu_download")):
-            await update.message.reply_text(t(lang, "send_url_prompt"), parse_mode="HTML")
+        user_id = update.effective_user.id
+        db_user = get_user(user_id)
+        if db_user:
+            update_user(user_id, language="ar")
+        if text in (t("ar", "menu_download"), t("en", "menu_download")):
+            await update.message.reply_text(t("ar", "send_url_prompt"), parse_mode="HTML")
         return
 
-    # --- Admin text handler ---
     from handlers.admin import admin_text_handler
     if await admin_text_handler(update, context):
         return
 
-    # --- URL detection ---
     if text.startswith(("http://", "https://")):
         await handle_url(update, context)
+
 
 async def post_init(application: Application):
     system_logger.info("Bot starting up...")
@@ -93,7 +89,7 @@ async def global_error_handler(update: object, context) -> None:
     try:
         if update and getattr(update, "effective_message", None):
             await update.effective_message.reply_text(
-                "⚠️ An unexpected error occurred. Please try again."
+                "⚠️ حدث خطأ غير متوقع. حاول مرة أخرى."
             )
     except Exception:
         pass
@@ -105,25 +101,12 @@ def build_application() -> Application:
 
     app = Application.builder().token(BOT_TOKEN).post_init(post_init).build()
 
-    start_conv = ConversationHandler(
-        entry_points=[CommandHandler("start", start_command)],
-        states={
-            CHOOSING_LANGUAGE: [
-                CallbackQueryHandler(language_callback, pattern="^lang_"),
-            ]
-        },
-        fallbacks=[CommandHandler("start", start_command)],
-        per_user=True,
-        per_chat=True,
-        per_message=False,
-    )
-
-    app.add_handler(start_conv)
-    app.add_handler(CommandHandler("help",     help_command))
+    # No language-selection conversation: /start immediately opens the Arabic bot.
+    app.add_handler(CommandHandler("start", start_command))
+    app.add_handler(CommandHandler("help", help_command))
     app.add_handler(CommandHandler("settings", settings_command))
     app.add_handler(CommandHandler("ping", ping_command))
 
-    # Admin handlers
     app.add_handler(CommandHandler("admin", admin_command))
     app.add_handler(CommandHandler("stats", admin_command))
     app.add_handler(CommandHandler("broadcast", admin_command))
@@ -142,28 +125,28 @@ def build_application() -> Application:
 
     app.add_handler(CallbackQueryHandler(noop_callback, pattern="^noop$"))
     app.add_handler(CallbackQueryHandler(admin_callback, pattern="^admin_"))
-    app.add_handler(CallbackQueryHandler(language_callback,            pattern="^lang_"))
-    app.add_handler(CallbackQueryHandler(settings_callback,            pattern="^settings_"))
-    app.add_handler(CallbackQueryHandler(download_callback,            pattern="^dl_"))
+    # Legacy buttons are handled without allowing a language switch.
+    app.add_handler(CallbackQueryHandler(language_callback, pattern="^lang_"))
+    app.add_handler(CallbackQueryHandler(settings_callback, pattern="^settings_"))
+    app.add_handler(CallbackQueryHandler(download_callback, pattern="^dl_"))
     app.add_handler(CallbackQueryHandler(unknown_callback))
 
-    app.add_handler(MessageHandler(
-        filters.TEXT & ~filters.COMMAND,
-        message_router
-    ))
-
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, message_router))
     app.add_error_handler(global_error_handler)
     return app
+
 
 def main():
     init_db()
     system_logger.info("Database initialized.")
     app = build_application()
     system_logger.info("Bot polling started.")
-    app.run_polling(stop_signals=False,
+    app.run_polling(
+        stop_signals=False,
         allowed_updates=Update.ALL_TYPES,
         drop_pending_updates=True,
     )
+
 
 if __name__ == "__main__":
     main()
