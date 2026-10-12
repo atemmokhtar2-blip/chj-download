@@ -39,6 +39,7 @@ from config.settings import (
     AUTO_SPLIT_LARGE_VIDEOS,
     AUDIO_BITRATE,
     AUDIO_BITRATE_HIGH,
+    BATCH_MAX_URLS,
 )
 from utils.media_split import split_video_parts
 
@@ -46,6 +47,17 @@ logger = logging.getLogger(__name__)
 
 UPLOAD_RETRIES = 3
 UPLOAD_RETRY_DELAY = 2
+_URL_RE = re.compile(r"https?://\S+", re.IGNORECASE)
+
+
+def _extract_urls(text: str) -> list[str]:
+    """Pull every URL from a message, stripping trailing punctuation."""
+    urls = []
+    for raw in _URL_RE.findall(text or ""):
+        url = raw.strip(".,;:!?)]}>»'\"")
+        if is_valid_url(url):
+            urls.append(url)
+    return urls
 
 async def _upload_with_retry(operation):
     """Run a Telegram upload with retries.
@@ -113,6 +125,8 @@ async def process_url(update: Update, context: ContextTypes.DEFAULT_TYPE, user, 
         return
 
     context.user_data["current_info"] = info
+    token = uuid.uuid4().hex[:10]
+    context.user_data[f"info:{token}"] = info
     media_type = info.get("media_type", "video")
     qualities = info.get("qualities", [])
     title = truncate_title(info.get("title", "Unknown"))
@@ -122,7 +136,7 @@ async def process_url(update: Update, context: ContextTypes.DEFAULT_TYPE, user, 
     platform_emoji = get_platform_emoji(platform)
 
     album_count = len(info.get("album_items") or [])
-    keyboard = _build_action_keyboard(media_type, qualities, lang, album_count=album_count, info=info)
+    keyboard = _build_action_keyboard(media_type, qualities, lang, album_count=album_count, info=info, token=token)
     caption = t(lang, "video_info",
                 title=title, uploader=uploader,
                 duration=duration,
@@ -318,13 +332,22 @@ async def download_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     lang = db_user.get("language", "en") if db_user else "en"
     data = query.data
 
+    # Batch/search messages embed a per-message token so each inline keyboard
+    # binds to its own analysis even when several cards are present.
+    token = None
+    if "|" in data:
+        data, token = data.split("|", 1)
+
     if data == "dl_cancel":
         await query.answer()
         edit_fn = query.edit_message_caption if query.message.caption else query.edit_message_text
         await edit_fn(t(lang, "cancelled"))
         return
 
-    info = context.user_data.get("current_info")
+    if token:
+        info = context.user_data.get(f"info:{token}")
+    else:
+        info = context.user_data.get("current_info")
     if not info:
         await query.answer(t(lang, "session_expired"), show_alert=True)
         return
@@ -486,7 +509,8 @@ async def download_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         async with download_slot(timeout=180):
             await _run_download(query, context, info, user, lang, quality_label,
-                                is_audio, is_image, is_album, edit_fn, update_progress)
+                                is_audio, is_image, is_album, edit_fn, update_progress,
+                                audio_bitrate=audio_bitrate)
     except asyncio.TimeoutError:
         await edit_fn(t(lang, "server_busy"))
     except FileTooLargeError:

@@ -7,7 +7,8 @@ sys.path.insert(0, os.path.dirname(__file__))
 
 from telegram import Update
 from telegram.ext import (
-    Application, CommandHandler, MessageHandler, CallbackQueryHandler, filters
+    Application, CommandHandler, MessageHandler, CallbackQueryHandler,
+    InlineQueryHandler, filters
 )
 
 from config.settings import BOT_TOKEN
@@ -18,7 +19,9 @@ from handlers.start import (
     start_command, language_callback,
     help_command, settings_command, settings_callback
 )
-from handlers.download import handle_url, download_callback
+from handlers.download import (
+    handle_url, download_callback, handle_batch_urls, _extract_urls
+)
 from handlers.search import search_command, search_callback, inline_search
 from handlers.admin import (
     admin_command, admin_callback, send_update_announcement,
@@ -72,7 +75,10 @@ async def message_router(update: Update, context):
     if await admin_text_handler(update, context):
         return
 
-    if text.startswith(("http://", "https://")):
+    urls = _extract_urls(text)
+    if len(urls) > 1:
+        await handle_batch_urls(update, context)
+    elif urls:
         await handle_url(update, context)
 
 
@@ -123,6 +129,7 @@ def build_application() -> Application:
     app.add_handler(CommandHandler("health", health_command))
     app.add_handler(CommandHandler("callbacks_health", callbacks_health_command))
     app.add_handler(CommandHandler("commands", commands_command))
+    app.add_handler(CommandHandler("find", search_command))
 
     app.add_handler(CallbackQueryHandler(noop_callback, pattern="^noop$"))
     app.add_handler(CallbackQueryHandler(admin_callback, pattern="^admin_"))

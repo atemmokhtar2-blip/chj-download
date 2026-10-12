@@ -115,7 +115,7 @@ async def search_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     data = query.data or ""
-    if not data.startswith("dl_search_"):
+    if not data.startswith("search_"):
         return
 
     results = context.user_data.get("search_results") or []

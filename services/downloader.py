@@ -501,11 +501,18 @@ def _remux_mp4_faststart(path: str) -> str:
         return path
 
 
-def _prepare_video_for_delivery(path: str | None, *, source: str = "video") -> str | None:
-    """Final guard before Telegram upload/cache: verify audio and optimize MP4."""
+def _prepare_video_for_delivery(path: str | None, *, source: str = "video", allow_large: bool = False) -> str | None:
+    """Final guard before Telegram upload/cache: verify audio and optimize MP4.
+
+    When ``allow_large`` is set we skip the faststart remux (which enforces the
+    size limit) and keep the oversized file intact so the caller can split it
+    into Telegram-friendly parts afterwards.
+    """
     path = _require_audio_or_none(path, source=source)
     if not path:
         return None
+    if allow_large:
+        return path
     return _remux_mp4_faststart(path)
 
 
