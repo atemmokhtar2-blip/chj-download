@@ -4,10 +4,13 @@ import sys
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from database.db import init_db
-from database.users import create_user, get_users_page, get_top_users, get_active_24h
+from database.users import (
+    create_user, get_user, update_user, search_users,
+    get_users_page, get_top_users, get_active_24h,
+)
 from database.downloads import get_downloads_24h, get_total_data_bytes
 from database.admin_audit import log_admin_action, get_admin_audit
-from middlewares.auth import is_owner
+from middlewares.auth import is_admin, is_owner
 import handlers.admin as admin_module
 
 
@@ -62,6 +65,21 @@ def test_owner_gate_exists():
     from config.settings import OWNER_ID
     assert is_owner(int(OWNER_ID)) is True
     assert is_owner(99999999) is False
+    assert is_admin(int(OWNER_ID)) is True
+
+
+def test_update_user_allowlist_blocks_arbitrary_columns():
+    _seed_user(81000010, "أمان", "secure_user")
+    update_user(81000010, **{"first_name = 'x'; DROP TABLE users; --": "evil"})
+    row = get_user(81000010)
+    assert row is not None
+    assert row["first_name"] == "أمان"
+
+
+def test_search_users_handles_nasty_input():
+    init_db()
+    assert search_users("--1") == []
+    assert isinstance(search_users("@@@"), list)
 
 
 if __name__ == "__main__":
@@ -71,4 +89,6 @@ if __name__ == "__main__":
     test_24h_and_data_volume_stats_are_real()
     test_admin_audit_trail_records_actions()
     test_owner_gate_exists()
+    test_update_user_allowlist_blocks_arbitrary_columns()
+    test_search_users_handles_nasty_input()
     print("admin panel tests passed")

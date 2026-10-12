@@ -2,6 +2,13 @@ from __future__ import annotations
 
 from .db import db_cursor
 
+# Allowlist for update_user: prevents SQL injection via arbitrary column names.
+_ALLOWED_USER_FIELDS = {
+    "username", "first_name", "last_name", "language",
+    "is_banned", "is_admin", "role", "downloads", "last_seen",
+}
+
+
 def get_user(user_id: int) -> dict | None:
     with db_cursor() as c:
         c.execute("SELECT * FROM users WHERE user_id = ?", (user_id,))
@@ -21,8 +28,11 @@ def create_user(user_id: int, username: str, first_name: str, last_name: str,
 def update_user(user_id: int, **kwargs):
     if not kwargs:
         return
-    fields = ", ".join(f"{k} = ?" for k in kwargs)
-    values = list(kwargs.values()) + [user_id]
+    safe = {k: v for k, v in kwargs.items() if k in _ALLOWED_USER_FIELDS}
+    if not safe:
+        return
+    fields = ", ".join(f"{k} = ?" for k in safe)
+    values = list(safe.values()) + [user_id]
     with db_cursor() as c:
         c.execute(f"UPDATE users SET {fields} WHERE user_id = ?", values)
 
@@ -111,15 +121,20 @@ def get_active_24h() -> int:
         return c.fetchone()["cnt"]
 
 def search_users(query: str) -> list[dict]:
+    query = (query or "").strip()
+    if not query:
+        return []
     with db_cursor() as c:
         if query.lstrip("-").isdigit():
-            c.execute(
-                "SELECT * FROM users WHERE user_id = ?", (int(query),)
-            )
+            try:
+                user_id = int(query)
+            except ValueError:
+                return []
+            c.execute("SELECT * FROM users WHERE user_id = ?", (user_id,))
         else:
             term = query.lstrip("@").lower()
             c.execute(
                 "SELECT * FROM users WHERE lower(username) = ? OR lower(first_name) LIKE ?",
-                (term, f"%{term}%")
+                (term, f"%{term}%"),
             )
         return [dict(row) for row in c.fetchall()]

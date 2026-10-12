@@ -352,6 +352,10 @@ async def admin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ban_user(target_id)
         await _show_user_detail(query, lang, target_id)
     elif data == "admin_send_broadcast":
+        _clear_admin_state(user.id)
+        if not is_owner(user.id):
+            await query.answer("⛔ الإذاعة الجماعية متاحة للمالك فقط.", show_alert=True)
+            return
         ADMIN_CONVERSATION_STATES[user.id] = "broadcast"
         keyboard = [[InlineKeyboardButton("🔙 إلغاء", callback_data="admin_panel")]]
         await query.edit_message_text(
