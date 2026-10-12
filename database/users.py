@@ -68,9 +68,20 @@ def unban_user(user_id: int):
 def get_users_page(offset: int = 0, limit: int = 20) -> list[dict]:
     with db_cursor() as c:
         c.execute("""
-            SELECT user_id, username, first_name, downloads, is_banned
-            FROM users ORDER BY join_date DESC LIMIT ? OFFSET ?
+            SELECT user_id, username, first_name, last_name, downloads,
+                   is_banned, language, join_date, last_seen
+            FROM users ORDER BY join_date DESC, user_id DESC LIMIT ? OFFSET ?
         """, (limit, offset))
+        return [dict(row) for row in c.fetchall()]
+
+def get_top_users(limit: int = 5) -> list[dict]:
+    with db_cursor() as c:
+        c.execute("""
+            SELECT user_id, first_name, username, downloads
+            FROM users
+            ORDER BY downloads DESC
+            LIMIT ?
+        """, (limit,))
         return [dict(row) for row in c.fetchall()]
 
 def get_active_today() -> int:

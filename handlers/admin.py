@@ -6,6 +6,8 @@ import logging
 import asyncio
 from datetime import datetime
 
+from html import escape
+
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
 
@@ -14,13 +16,14 @@ from locales import t
 from database.users import (
     get_user, get_total_users, get_new_users_today, get_active_today,
     get_banned_users_count, get_users_page, search_users, get_all_user_ids,
-    ban_user, unban_user, update_user,
+    ban_user, unban_user, update_user, get_top_users,
 )
 from database.downloads import (
     get_downloads_today, get_downloads_week, get_downloads_month,
     get_downloads_by_platform, get_total_downloads, get_user_download_stats,
 )
 from database.cache import get_cache_count, get_cache_hits
+from database.broadcast import log_broadcast, get_broadcast_history
 from services.engine_maintenance import get_ytdlp_version, update_ytdlp
 from services.engines import list_engines
 from config.settings import YTDLP_COOKIES_FILE, YTDLP_COOKIES_FROM_BROWSER, DOWNLOAD_PROXY
@@ -28,11 +31,22 @@ from config.settings import YTDLP_COOKIES_FILE, YTDLP_COOKIES_FROM_BROWSER, DOWN
 logger = logging.getLogger(__name__)
 
 ADMIN_CONVERSATION_STATES = {}
+ADMIN_LAST_PAGE: dict[int, int] = {}
 _ADMIN_TEXT_STATES = {"search", "ban", "broadcast"}
 
 
 def _clear_admin_state(user_id: int) -> None:
     ADMIN_CONVERSATION_STATES.pop(user_id, None)
+
+
+def _short_datetime(value: str | None) -> str:
+    """Return 'اليوم' or YYYY-MM-DD from an SQLite datetime string."""
+    if not value:
+        return "—"
+    text = str(value).strip()
+    if text[:10] == datetime.now().strftime("%Y-%m-%d"):
+        return "اليوم"
+    return text[:10]
 
 
 UPDATE_ANNOUNCEMENT_TEXT = """
@@ -41,11 +55,12 @@ UPDATE_ANNOUNCEMENT_TEXT = """
 اضغط <b>Start</b> وافتح البوت من جديد لتجربة التحديثات الأخيرة.
 
 <b>ما الجديد في هذا التحديث؟</b>
-• 🖥 إضافة لوحة تحكم ومراقبة أقوى للأدمن.
-• 📊 إحصائيات أوضح للمستخدمين والتحميلات والكاش.
-• 🔐 تحسين طريقة قراءة التوكن بأمان من متغيرات البيئة.
-• ⚙️ تجهيز البوت لخطوات التطوير القادمة: اشتراكات، Queue، وتحليلات أعمق.
-• 🧹 تحسينات داخلية في الثبات وتجربة التشغيل.
+• 🛡 لوحة أدمن احترافية تُقرأ أرقامها مباشرة من قاعدة البيانات: مستخدمون، تحميلات، كاش، منصات، والأكثر نشاطًا.
+• 👥 قائمة مستخدمين غنية: آخر ظهور، اللغة، تاريخ الانضمام، وعدد التحميلات.
+• 👤 ملف مستخدم كامل مع زر حظر/فك حظر مباشرة.
+• 🔙 أزرار رجوع في كل شاشات لوحة الأدمن.
+• 📢 سجل حقيقي لآخر عمليات الإذاعة داخل اللوحة.
+• 🧹 إصلاح أخطاء كانت تمنع فتح بعض شاشات الأدمن.
 
 لو واجهتك أي مشكلة، ابدأ من جديد بإرسال /start.
 """.strip()
@@ -71,7 +86,7 @@ async def send_update_announcement(update: Update, context: ContextTypes.DEFAULT
         return
 
     status_message = await update.effective_message.reply_text("📢 جاري إرسال إعلان التحديث لكل المستخدمين...")
-    await _broadcast_update_message(context, status_message=status_message)
+    await _broadcast_update_message(context, status_message=status_message, admin_id=user.id)
 
 
 async def engine_status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -158,7 +173,7 @@ async def update_ytdlp_command(update: Update, context: ContextTypes.DEFAULT_TYP
     await msg.edit_text(text, parse_mode="HTML")
 
 
-async def _broadcast_update_message(context: ContextTypes.DEFAULT_TYPE, status_message=None, query=None):
+async def _broadcast_update_message(context: ContextTypes.DEFAULT_TYPE, status_message=None, query=None, admin_id: int | None = None):
     all_ids = get_all_user_ids()
     bot_username = getattr(context.bot, "username", None)
     reply_markup = _build_update_keyboard(bot_username)
@@ -198,6 +213,17 @@ async def _broadcast_update_message(context: ContextTypes.DEFAULT_TYPE, status_m
         f"⏱ الزمن: <b>{elapsed}s</b>"
     )
 
+    try:
+        log_broadcast(
+            admin_id=admin_id or 0,
+            message=UPDATE_ANNOUNCEMENT_TEXT[:300],
+            total=len(all_ids),
+            success=success,
+            failed=failed,
+        )
+    except Exception:
+        logger.exception("Failed to write broadcast_log")
+
     if status_message:
         await status_message.edit_text(result_text, parse_mode="HTML")
     elif query:
@@ -211,37 +237,8 @@ async def admin_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     db_user = get_user(user.id)
     lang = db_user.get("language", "en") if db_user else "en"
 
-    keyboard = [
-        [
-            InlineKeyboardButton("📊 " + t(lang, "admin_panel_btn"), callback_data="admin_panel"),
-            InlineKeyboardButton("👥 " + t(lang, "admin_users_btn"), callback_data="admin_users"),
-        ],
-        [
-            InlineKeyboardButton("🔍 " + t(lang, "admin_search_btn"), callback_data="admin_search"),
-            InlineKeyboardButton("🚫 " + t(lang, "admin_ban_btn"), callback_data="admin_ban"),
-        ],
-        [
-            InlineKeyboardButton("📢 " + t(lang, "admin_broadcast_btn"), callback_data="admin_broadcast"),
-            InlineKeyboardButton("🚀 إعلان تحديث البوت", callback_data="admin_announce_update"),
-        ],
-        [
-            InlineKeyboardButton("🧠 حالة المحرك", callback_data="admin_engine_status"),
-            InlineKeyboardButton("🩺 صحة النظام", callback_data="admin_health"),
-        ],
-        [
-            InlineKeyboardButton("🔄 تحديث yt-dlp", callback_data="admin_update_ytdlp"),
-            InlineKeyboardButton("🚧 " + t(lang, "admin_maintenance_btn"), callback_data="admin_maintenance"),
-        ],
-    ]
-
-    await update.message.reply_text(
-        "<b>🛡 مركز قيادة X Downloader</b>\n\n"
-        "أهلًا بالمدير 👑\n"
-        "هنا تتحكم في كل شيء: الإحصائيات الحية، المستخدمين، الحظر، الإذاعة، والمحرك.\n\n"
-        "<i>كل الأرقام بالأسفل تُقرأ مباشرة من قاعدة البيانات لحظة الضغط.</i>",
-        reply_markup=InlineKeyboardMarkup(keyboard),
-        parse_mode="HTML"
-    )
+    text, keyboard = _build_admin_panel(lang)
+    await update.message.reply_text(text, reply_markup=keyboard, parse_mode="HTML")
 
 async def admin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -269,7 +266,7 @@ async def admin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif data == "admin_announce_update":
         _clear_admin_state(user.id)
         await query.edit_message_text("📢 جاري إرسال إعلان التحديث لكل المستخدمين...", parse_mode="HTML")
-        await _broadcast_update_message(context, query=query)
+        await _broadcast_update_message(context, query=query, admin_id=user.id)
     elif data == "admin_engine_status":
         _clear_admin_state(user.id)
         await _show_engine_status(query)
@@ -370,7 +367,8 @@ async def _show_engine_status(query) -> None:
     back = [[InlineKeyboardButton("🔙 لوحة التحكم", callback_data="admin_panel")]]
     await query.edit_message_text(text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(back))
 
-async def _show_admin_panel(query, lang: str):
+def _build_admin_panel(lang: str):
+    """Assemble the live, professional admin dashboard from real DB data."""
     total_users = get_total_users()
     new_today = get_new_users_today()
     active_today = get_active_today()
@@ -382,6 +380,7 @@ async def _show_admin_panel(query, lang: str):
     cache_count = get_cache_count()
     cache_hits = get_cache_hits()
     platform_stats = get_downloads_by_platform()
+    top_users = get_top_users(5)
     engines = list_engines()
     try:
         version = get_ytdlp_version()
@@ -395,6 +394,21 @@ async def _show_admin_panel(query, lang: str):
     platform_lines = "\n".join(
         f"• <b>{escape(str(p))}</b>: {c} تحميل" for p, c in top
     ) or "• لا توجد تحميلات مسجلة بعد."
+
+    top_user_lines = "\n".join(
+        f"• <b>{escape(str(u.get('first_name') or str(u.get('user_id'))))}</b> — {u.get('downloads', 0)} تحميل"
+        for u in top_users
+    ) or "• لا يوجد نشاط بعد."
+
+    history = get_broadcast_history(3)
+    if history:
+        last = history[0]
+        broadcast_lines = (
+            f"• آخر إذاعة: <b>{last.get('success', 0)}</b>/<b>{last.get('total', 0)}</b> نجاح"
+            f" • <code>{escape(str(last.get('created_at') or '—')[:16])}</code>"
+        )
+    else:
+        broadcast_lines = "• لا توجد إذاعات مسجلة بعد."
 
     text = (
         "👑 <b>لوحة التحكم الرئيسية</b>\n\n"
@@ -416,6 +430,10 @@ async def _show_admin_panel(query, lang: str):
         f"• المحركات النشطة: <b>{len(engines)}</b>\n\n"
         "🌍 <b>أكثر المنصات استخدامًا</b>\n"
         f"{platform_lines}\n\n"
+        "👑 <b>الأكثر نشاطًا</b>\n"
+        f"{top_user_lines}\n\n"
+        "📢 <b>الإذاعة</b>\n"
+        f"{broadcast_lines}\n\n"
         f"🚧 <b>وضع الصيانة:</b> {maintenance}"
     )
 
@@ -436,7 +454,12 @@ async def _show_admin_panel(query, lang: str):
             InlineKeyboardButton("🔄 تحديث yt-dlp", callback_data="admin_update_ytdlp"),
         ],
     ]
-    await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML")
+    return text, InlineKeyboardMarkup(keyboard)
+
+
+async def _show_admin_panel(query, lang: str):
+    text, keyboard = _build_admin_panel(lang)
+    await query.edit_message_text(text, reply_markup=keyboard, parse_mode="HTML")
 
 async def _show_users_page(query, lang: str, page: int = 0):
     per_page = 8
@@ -463,9 +486,11 @@ async def _show_users_page(query, lang: str, page: int = 0):
         name = escape(u.get("first_name") or "بدون اسم")
         username = escape(u.get("username") or "—")
         downloads = u.get("downloads", 0)
+        language = escape(u.get("language") or "—")
+        last_seen = _short_datetime(u.get("last_seen"))
         lines.append(
             f"{status} <b>{name}</b> @{username}\n"
-            f"    🆔 <code>{u['user_id']}</code> • 📥 <b>{downloads}</b> تحميل"
+            f"    🆔 <code>{u['user_id']}</code> • 📥 <b>{downloads}</b> • 🌐 {language} • 🕑 {last_seen}"
         )
 
     text = (
@@ -492,7 +517,7 @@ async def _show_users_page(query, lang: str, page: int = 0):
     if nav:
         keyboard.append(nav)
 
-    keyboard.append([InlineKeyboardButton("🔙 لوحة التحكم", callback_data="admin_panel")])
+    keyboard.append([InlineKeyboardButton("🔙 رجوع للوحة", callback_data="admin_panel")])
     await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML")
 
 def _render_user_detail(target_id: int, admin_id: int | None = None):
@@ -682,6 +707,18 @@ async def admin_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
                     await asyncio.sleep(1)
             except Exception:
                 pass
+
+        try:
+            log_broadcast(
+                admin_id=user_id,
+                message=text[:300],
+                total=len(all_ids),
+                success=count,
+                failed=max(len(all_ids) - count, 0),
+            )
+        except Exception:
+            logger.exception("Failed to write broadcast_log")
+
         await update.message.reply_text(
             f"✅ تم إرسال الإذاعة إلى <b>{count}</b> مستخدم.",
             parse_mode="HTML",
