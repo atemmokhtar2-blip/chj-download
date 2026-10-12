@@ -820,29 +820,40 @@ def download_hls_video(play_url: str, out_path: str) -> str | None:
         if not ffmpeg:
             logger.info("HLS pin skipped: no ffmpeg available")
             return None
-        proc = subprocess.run(
-            [
-                ffmpeg, "-y", "-hide_banner", "-loglevel", "error",
-                "-i", play_url,
-                "-c", "copy",
-                "-movflags", "+faststart",
-                path,
-            ],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            timeout=120,
-            check=False,
-        )
-        if proc.returncode != 0 or not os.path.exists(path) or os.path.getsize(path) < 2048:
-            logger.info("HLS pin download failed: %s", proc.stderr[-300:])
-            try:
-                if os.path.exists(path):
+        for attempt in (1, 2):
+            if os.path.exists(path):
+                try:
                     os.remove(path)
+                except OSError:
+                    pass
+            try:
+                proc = subprocess.run(
+                    [
+                        ffmpeg, "-y", "-hide_banner", "-loglevel", "error",
+                        "-i", play_url,
+                        "-c", "copy",
+                        "-movflags", "+faststart",
+                        path,
+                    ],
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                    timeout=240,
+                    check=False,
+                )
+            except subprocess.TimeoutExpired:
+                logger.info("HLS pin download attempt %s timed out", attempt)
+                continue
+            last_stderr = (proc.stderr or "") if proc else ""
+            if proc and proc.returncode == 0 and os.path.exists(path) and os.path.getsize(path) >= 2048:
+                return path
+            logger.info("HLS pin download attempt %s failed: %s", attempt, last_stderr[-300:])
+        if os.path.exists(path):
+            try:
+                os.remove(path)
             except OSError:
                 pass
-            return None
-        return path
+        return None
     except Exception as exc:
         logger.info("HLS pin download crashed: %s", exc)
         try:

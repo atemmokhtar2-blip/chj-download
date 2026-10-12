@@ -65,12 +65,19 @@ def _platform(url: str) -> str:
     return host or "Generic"
 
 
-YOUTUBE_PLAYER_CLIENTS = {"android", "web", "ios", "mweb", "tv", "tv_embedded", "web_creator", "web_safari"}
+YOUTUBE_PLAYER_CLIENTS = {
+    "android", "android_music", "ios", "ios_music", "web", "mweb",
+    "tv", "tv_embedded", "web_creator", "web_embedded", "web_music",
+    "web_safari", "mediaconnect",
+}
 
 
 def _safe_youtube_clients() -> list[str]:
     """Filter env config to valid yt-dlp YouTube player_client values only."""
-    candidates = [YTDLP_CLIENT, "android", "ios", "web", "mweb", "tv_embedded", "web_creator", "web_safari"]
+    candidates = [
+        YTDLP_CLIENT, "android", "ios", "web", "mweb", "tv_embedded",
+        "web_creator", "web_safari", "web_music", "mediaconnect",
+    ]
     out: list[str] = []
     for raw in candidates:
         item = str(raw or "").strip()
@@ -80,11 +87,13 @@ def _safe_youtube_clients() -> list[str]:
 
 
 def _youtube_client_profiles() -> list[tuple[str, list[str]]]:
-    """World-class YouTube fallback matrix: mobile, web, TV, creator surfaces.
+    """World-class YouTube fallback matrix: mobile, web, TV, music, embedded.
 
     yt-dlp frequently succeeds or fails based on the player surface, not the URL.
     Trying profile groups gives the extractor more player JSON options per pass,
-    while still keeping attempts bounded.
+    while still keeping attempts bounded. The music/embedded surfaces are
+    essential for audio downloads and videos embedded off-site, where plain web
+    or android clients are often throttled or blocked.
     """
     preferred = _safe_youtube_clients()
     profiles: list[tuple[str, list[str]]] = [
@@ -94,7 +103,10 @@ def _youtube_client_profiles() -> list[tuple[str, list[str]]]:
         ("tv-embedded", ["tv_embedded", "web"]),
         ("creator-web", ["web_creator", "web"]),
         ("safari-web", ["web_safari", "web"]),
-        ("full-matrix", ["android", "ios", "web", "mweb", "tv_embedded", "web_creator"]),
+        ("music", ["web_music", "android_music", "ios_music", "web"]),
+        ("embedded", ["web_embedded", "tv_embedded", "web"]),
+        ("mediaconnect", ["mediaconnect", "web"]),
+        ("full-matrix", ["android", "ios", "web", "mweb", "tv_embedded", "web_creator", "web_music"]),
     ]
     seen: set[tuple[str, ...]] = set()
     out: list[tuple[str, list[str]]] = []
@@ -130,7 +142,12 @@ def _base_opts(progress=None, loop: asyncio.AbstractEventLoop | None = None) -> 
         },
         "extractor_args": {
             "youtube": {"player_client": _safe_youtube_clients()},
-            "tiktok": {"api_hostname": ["api16-normal-c-useast1a.tiktokv.com"]},
+            "tiktok": {"api_hostname": [
+                "api16-normal-c-useast1a.tiktokv.com",
+                "api22-normal-c-useast1a.tiktokv.com",
+                "api19-normal-c-useast1a.tiktokv.com",
+                "api16-va.tiktokv.com",
+            ]},
         },
     }
     if DOWNLOAD_PROXY:

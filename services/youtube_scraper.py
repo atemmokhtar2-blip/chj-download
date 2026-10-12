@@ -140,6 +140,8 @@ def _extract_sync(url: str) -> dict:
         ("tv", {"extractor_args": {"youtube": {"player_client": ["tv", "tv_embedded"]}}}),
         ("web_music", {"extractor_args": {"youtube": {"player_client": ["web_music", "web"]}}}),
         ("mediaconnect", {"extractor_args": {"youtube": {"player_client": ["mediaconnect", "web"]}}}),
+        ("android_music", {"extractor_args": {"youtube": {"player_client": ["android_music", "android"]}}}),
+        ("web_embedded", {"extractor_args": {"youtube": {"player_client": ["web_embedded", "web"]}}}),
     ]
     last_err: Exception | None = None
     for profile_name, extra in profiles:
