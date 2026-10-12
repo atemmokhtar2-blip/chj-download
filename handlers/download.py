@@ -356,11 +356,14 @@ def _build_action_keyboard(
         keyboard.append([
             InlineKeyboardButton("🎵 MP3 320kbps — أعلى نقاء", callback_data=f"dl_audio_320{suffix}"),
         ])
-        if qualities:
-            for q in qualities[-3:]:
-                keyboard.append([
-                    InlineKeyboardButton(f"📹 {q['label']}", callback_data=f"dl_video_{q['label']}{suffix}"),
-                ])
+        real_qualities = [
+            q for q in (qualities or [])
+            if _quality_height(q.get("label", "")) > 0
+        ]
+        for q in real_qualities:
+            keyboard.append([
+                InlineKeyboardButton(f"📹 {q['label']}", callback_data=f"dl_video_{q['label']}{suffix}"),
+            ])
     elif media_type == "audio":
         keyboard.append([InlineKeyboardButton(t(lang, "download_audio"), callback_data=f"dl_audio{suffix}")])
     elif media_type == "image":

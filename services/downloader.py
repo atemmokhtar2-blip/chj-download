@@ -4,6 +4,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -21,7 +22,83 @@ from config.settings import (
 from services.content_intelligence import build_content_intelligence
 
 ALBUM_MAX_ITEMS = 10
+QUALITY_MAX_ROWS = 6
+_STANDARD_HEIGHTS = (2160, 1440, 1080, 720, 480, 360, 240, 144)
 logger = logging.getLogger(__name__)
+
+
+def _quality_height(label) -> int:
+    """Extract a numeric height from a quality label ('1080p60' -> 1080, 'Best' -> 0)."""
+    match = re.search(r"(\d{3,4})", str(label or ""))
+    return int(match.group(1)) if match else 0
+
+
+def _standard_height(value) -> int | None:
+    """Map any probed height to the nearest Telegram-safe standard resolution."""
+    try:
+        v = int(value)
+    except (TypeError, ValueError):
+        return None
+    if v < 144:
+        return None
+    if v >= 2000:
+        return 2160
+    if v >= 1400:
+        return 1440
+    if v >= 1000:
+        return 1080
+    if v >= 700:
+        return 720
+    if v >= 450:
+        return 480
+    if v >= 360:
+        return 360
+    if v >= 240:
+        return 240
+    return 144
+
+
+def normalize_qualities(qualities) -> list:
+    """Keep only real, standard video resolutions and drop fake quality rows.
+
+    Scrapers for single-file platforms (TikTok/Instagram/Facebook/X/Reddit/
+    Pinterest) attach labels like ``Best`` or ``HD`` that would render as
+    "📹 Best" buttons even though no resolution probe was performed. Those are
+    removed here. Non-standard heights (e.g. 768p, 1916p) are bucketed to the
+    nearest standard resolution and deduped, so the inline keyboard only ever
+    advertises qualities that really exist on the media.
+    """
+    buckets: dict[str, dict] = {}
+    for candidate in qualities or []:
+        if not isinstance(candidate, dict):
+            continue
+        raw = _quality_height(candidate.get("label"))
+        if not raw and candidate.get("height") is not None:
+            raw = _quality_height(f"{candidate.get('height')}p")
+        std = _standard_height(raw) if raw else None
+        if not std:
+            continue
+
+        label = f"{std}p"
+        format_id = str(candidate.get("format_id") or "best").strip() or "best"
+        entry = buckets.get(label)
+        if entry is None:
+            entry = {"label": label, "format_id": format_id}
+            if candidate.get("has_audio") is not None:
+                entry["has_audio"] = bool(candidate.get("has_audio"))
+            buckets[label] = entry
+            continue
+        if (not entry.get("format_id") or entry.get("format_id") == "best") and format_id != "best":
+            entry["format_id"] = format_id
+        if entry.get("has_audio") is None and candidate.get("has_audio") is not None:
+            entry["has_audio"] = bool(candidate.get("has_audio"))
+
+    ordered = sorted(buckets.values(), key=lambda q: _quality_height(q["label"]))
+    if len(ordered) > QUALITY_MAX_ROWS:
+        ordered = ordered[-QUALITY_MAX_ROWS:]
+    return ordered
+
+
 
 
 class FileTooLargeError(Exception):
@@ -797,13 +874,41 @@ def _select_engine(url: str):
     return first_match(url, registered_engines(), UniversalEngine())
 
 
+def _finalize_analysis(info: dict | None) -> dict | None:
+    """Sanitize qualities for every platform before the result reaches the UI.
+
+    Only standard, real resolutions (144p–2160p) survive; scraper-provided
+    labels like ``Best`` / ``HD`` are dropped so the keyboard never advertises
+    a quality that was not actually probed on the media. The intelligence card
+    is kept in sync with the sanitized list.
+    """
+    if not info:
+        return None
+    info["qualities"] = normalize_qualities(info.get("qualities") or [])
+
+    intel = info.get("intelligence")
+    if isinstance(intel, dict):
+        qs = info["qualities"]
+        best = qs[-1]["label"] if qs else "best"
+        intel["best_quality"] = best
+        details = []
+        for detail in intel.get("details") or []:
+            if isinstance(detail, str) and detail.startswith("Best quality:"):
+                details.append(f"Best quality: {best}")
+            else:
+                details.append(detail)
+        intel["details"] = details
+    return info
+
+
 async def analyze_url(url: str) -> dict | None:
     engine = _select_engine(url)
     try:
-        return await engine.analyze(url)
+        info = await engine.analyze(url)
     except Exception as exc:
         logger.warning("Engine analyze failed (%s) for %s: %s", getattr(engine, "name", "unknown"), url[:120], exc)
-        return await _generic_analyze_url(url)
+        info = await _generic_analyze_url(url)
+    return _finalize_analysis(info)
 
 
 async def download_video(url: str, format_id: str = "best", quality_label: str = "best", progress=None, play_url: str | None = None, allow_large: bool = False) -> str | None:
