@@ -11,22 +11,27 @@ from html import escape
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
 
-from middlewares.auth import is_admin
+from middlewares.auth import is_admin, is_owner
 from locales import t
 from database.users import (
     get_user, get_total_users, get_new_users_today, get_active_today,
-    get_banned_users_count, get_users_page, search_users, get_all_user_ids,
-    ban_user, unban_user, update_user, get_top_users,
+    get_active_24h, get_banned_users_count, get_users_page, search_users,
+    get_all_user_ids, ban_user, unban_user, update_user, get_top_users,
 )
 from database.downloads import (
     get_downloads_today, get_downloads_week, get_downloads_month,
     get_downloads_by_platform, get_total_downloads, get_user_download_stats,
+    get_downloads_24h, get_total_data_bytes,
 )
 from database.cache import get_cache_count, get_cache_hits
 from database.broadcast import log_broadcast, get_broadcast_history
+from database.admin_audit import log_admin_action, get_admin_audit, get_admin_audit_stats
 from services.engine_maintenance import get_ytdlp_version, update_ytdlp
 from services.engines import list_engines
-from config.settings import YTDLP_COOKIES_FILE, YTDLP_COOKIES_FROM_BROWSER, DOWNLOAD_PROXY
+from config.settings import (
+    YTDLP_COOKIES_FILE, YTDLP_COOKIES_FROM_BROWSER, DOWNLOAD_PROXY, TEMP_DIR,
+    OWNER_ID, ADMIN_IDS,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -80,9 +85,9 @@ def _build_update_keyboard(bot_username: str | None) -> InlineKeyboardMarkup:
 async def send_update_announcement(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Send the latest release announcement to every known bot user."""
     user = update.effective_user
-    if not user or not is_admin(user.id):
+    if not user or not is_owner(user.id):
         if update.effective_message:
-            await update.effective_message.reply_text("⛔ هذا الأمر متاح للمسؤولين فقط.")
+            await update.effective_message.reply_text("🔒 الإعلان الجماعي متاح للمالك فقط.")
         return
 
     status_message = await update.effective_message.reply_text("📢 جاري إرسال إعلان التحديث لكل المستخدمين...")
@@ -170,6 +175,7 @@ async def update_ytdlp_command(update: Update, context: ContextTypes.DEFAULT_TYP
     if not result["ok"]:
         text += f"\n\n<pre>{(result.get('stderr') or result.get('stdout') or '')[:1000]}</pre>"
     text += "\n\n⚠️ لو كان التحديث كبيرًا، أعد تشغيل السيرفر ليستخدم النسخة الجديدة داخل العملية الحالية."
+    log_admin_action(user.id, "update_ytdlp", detail=f"ok={result['ok']}")
     await msg.edit_text(text, parse_mode="HTML")
 
 
@@ -273,6 +279,9 @@ async def admin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await _show_broadcast_form(query, lang)
     elif data == "admin_announce_update":
         _clear_admin_state(user.id)
+        if not is_owner(user.id):
+            await query.answer("🔒 الإعلان الجماعي متاح للمالك فقط.", show_alert=True)
+            return
         await query.edit_message_text("📢 جاري إرسال إعلان التحديث لكل المستخدمين...", parse_mode="HTML")
         await _broadcast_update_message(context, query=query, admin_id=user.id)
     elif data == "admin_engine_status":
@@ -287,6 +296,7 @@ async def admin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not result["ok"]:
             text += f"\n\n<pre>{(result.get('stderr') or result.get('stdout') or '')[:1000]}</pre>"
         text += "\n\n⚠️ لو كان التحديث كبيرًا، أعد تشغيل السيرفر ليستخدم النسخة الجديدة داخل العملية الحالية."
+        log_admin_action(user.id, "update_ytdlp", detail=f"ok={result['ok']}")
         back = [[InlineKeyboardButton("🔙 لوحة التحكم", callback_data="admin_panel")]]
         await query.edit_message_text(text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(back))
     elif data == "admin_health":
@@ -297,6 +307,9 @@ async def admin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif data == "admin_audit":
         _clear_admin_state(user.id)
         await _show_audit_log(query)
+    elif data == "admin_security":
+        _clear_admin_state(user.id)
+        await _show_security_scan(query)
     elif data == "admin_search":
         ADMIN_CONVERSATION_STATES[user.id] = "search"
         keyboard = [[InlineKeyboardButton("🔙 إلغاء", callback_data="admin_panel")]]
@@ -345,11 +358,13 @@ async def admin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         _clear_admin_state(user.id)
         target_id = _callback_int_suffix(data)
         unban_user(target_id)
+        log_admin_action(user.id, "unban_user", target_id)
         await _show_user_detail(query, lang, target_id)
     elif data.startswith("admin_ban_confirm_"):
         _clear_admin_state(user.id)
         target_id = _callback_int_suffix(data)
         ban_user(target_id)
+        log_admin_action(user.id, "ban_user", target_id)
         await _show_user_detail(query, lang, target_id)
     elif data == "admin_send_broadcast":
         _clear_admin_state(user.id)
@@ -518,6 +533,9 @@ def _build_admin_panel(lang: str):
             InlineKeyboardButton("🔄 تحديث yt-dlp", callback_data="admin_update_ytdlp"),
             InlineKeyboardButton("📜 سجل الأمان", callback_data="admin_audit"),
         ],
+        [
+            InlineKeyboardButton("🔐 فحص الأمان", callback_data="admin_security"),
+        ],
     ]
     return text, InlineKeyboardMarkup(keyboard)
 
@@ -525,6 +543,80 @@ def _build_admin_panel(lang: str):
 async def _show_admin_panel(query, lang: str):
     text, keyboard = _build_admin_panel(lang)
     await query.edit_message_text(text, reply_markup=keyboard, parse_mode="HTML")
+
+
+async def _show_audit_log(query) -> None:
+    """Security audit trail screen: who did what, when, with real totals."""
+    stats = get_admin_audit_stats()
+    entries = get_admin_audit(12)
+    total = stats.get("total", 0)
+    actions = stats.get("actions", {})
+
+    if total == 0:
+        text = (
+            "📜 <b>سجل أمان الأدمن</b>\n\n"
+            "لا توجد أحداث مسجلة بعد.\n"
+            "أي عملية حساسة (حظر، فك حظر، إذاعة، صيانة، تحديث محرك) ستُسجل هنا تلقائيًا."
+        )
+    else:
+        action_lines = "\n".join(
+            f"• <b>{escape(str(a))}</b>: {c} عملية"
+            for a, c in list(actions.items())[:8]
+        )
+        entry_lines = []
+        for idx, e in enumerate(entries, 1):
+            action = escape(str(e.get("action") or "—"))
+            admin = escape(str(e.get("admin_id") or "—"))
+            target = e.get("target_id")
+            detail = escape(str(e.get("detail") or ""))
+            created = escape(str(e.get("created_at") or "—")[:16])
+            line = f"{idx}. <b>{action}</b> • أدمن <code>{admin}</code>"
+            if target is not None and str(target) != "":
+                line += f" • هدف <code>{target}</code>"
+            line += f"\n   🕑 {created}"
+            if detail:
+                line += f" • {detail}"
+            entry_lines.append(line)
+
+        text = (
+            "📜 <b>سجل أمان الأدمن</b>\n\n"
+            f"إجمالي العمليات المسجلة: <b>{total}</b>\n\n"
+            f"<b>ملخص العمليات</b>\n{action_lines}\n\n"
+            f"<b>آخر {len(entries)} عملية</b>\n" + "\n\n".join(entry_lines)
+        )
+
+    back = [[InlineKeyboardButton("🔙 لوحة التحكم", callback_data="admin_panel")]]
+    await query.edit_message_text(text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(back))
+
+
+async def _show_security_scan(query) -> None:
+    """Live security posture checklist for the owner/admin."""
+    from config.settings import BOT_TOKEN
+    from database.users import _ALLOWED_USER_FIELDS
+
+    checks = []
+    checks.append(("بوابة المالك (OWNER_ID)", bool(OWNER_ID)))
+    checks.append(("فلترة الحقول ضد حقن SQL", bool(_ALLOWED_USER_FIELDS)))
+    checks.append(("حماية HTML ضد الحقن", callable(escape)))
+    checks.append(("قائمة الأدمن محددة", bool(ADMIN_IDS)))
+    checks.append(("توكن البوت محمّل", bool(BOT_TOKEN)))
+    checks.append(("سجل التدقيق الأمني يعمل", get_admin_audit_stats() is not None))
+
+    lines = []
+    for label, ok in checks:
+        icon = "✅" if ok else "❌"
+        lines.append(f"{icon} {label}")
+
+    stats = get_admin_audit_stats()
+    text = (
+        "🔐 <b>فحص أمان لوحة الأدمن</b>\n\n"
+        + "\n".join(lines)
+        + f"\n\n🕵️ إجمالي العمليات المسجلة في السجل: <b>{stats.get('total', 0)}</b>\n"
+        f"👤 المالك: <code>{OWNER_ID}</code> • الأدمن: <code>{len(ADMIN_IDS)}</code>"
+    )
+    back = [[InlineKeyboardButton("🔙 لوحة التحكم", callback_data="admin_panel")]]
+    await query.edit_message_text(text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(back))
+
 
 async def _show_users_page(query, lang: str, page: int = 0):
     per_page = 8
@@ -701,7 +793,7 @@ def _invalid_admin_callback(data: str) -> bool:
         "admin_panel", "admin_users", "admin_broadcast", "admin_announce_update",
         "admin_engine_status", "admin_update_ytdlp", "admin_search", "admin_maintenance",
         "admin_ban", "admin_maintenance_on", "admin_maintenance_off", "admin_send_broadcast",
-        "admin_health",
+        "admin_health", "admin_audit", "admin_security",
     }
     return data not in known
 
@@ -783,6 +875,11 @@ async def admin_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
             )
         except Exception:
             logger.exception("Failed to write broadcast_log")
+
+        try:
+            log_admin_action(user_id, "manual_broadcast", detail=f"success={count}")
+        except Exception:
+            logger.exception("Failed to write admin audit log")
 
         await update.message.reply_text(
             f"✅ تم إرسال الإذاعة إلى <b>{count}</b> مستخدم.",

@@ -23,3 +23,15 @@ def get_admin_audit(limit: int = 12) -> list[dict]:
             (limit,),
         )
         return [dict(row) for row in c.fetchall()]
+
+
+def get_admin_audit_stats() -> dict:
+    """Return totals + per-action breakdown for the security audit screen."""
+    with db_cursor() as c:
+        c.execute(
+            "SELECT action, COUNT(*) AS cnt FROM admin_audit_log GROUP BY action ORDER BY cnt DESC"
+        )
+        actions = {row["action"]: row["cnt"] for row in c.fetchall()}
+        c.execute("SELECT COUNT(*) AS total FROM admin_audit_log")
+        total = int(c.fetchone()["total"] or 0)
+    return {"total": total, "actions": actions}

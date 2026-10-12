@@ -13,7 +13,11 @@ from urllib.parse import urlparse
 
 import yt_dlp
 
-from config.settings import MAX_FILE_SIZE_BYTES, TEMP_DIR, DOWNLOAD_TIMEOUT, DOWNLOAD_PROXY, YTDLP_COOKIES_FILE, YTDLP_COOKIES_FROM_BROWSER, YTDLP_CLIENT
+from config.settings import (
+    MAX_FILE_SIZE_BYTES, TEMP_DIR, DOWNLOAD_TIMEOUT, DOWNLOAD_PROXY,
+    YTDLP_COOKIES_FILE, YTDLP_COOKIES_FROM_BROWSER, YTDLP_CLIENT,
+    AUDIO_BITRATE, AUDIO_BITRATE_HIGH,
+)
 from services.content_intelligence import build_content_intelligence
 
 ALBUM_MAX_ITEMS = 10

@@ -14,6 +14,7 @@ from telegram.ext import (
 from config.settings import BOT_TOKEN
 from database.db import init_db
 from utils.logger import system_logger
+from utils.helpers import summarize_error
 
 from handlers.start import (
     start_command, language_callback,
