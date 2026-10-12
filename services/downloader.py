@@ -159,6 +159,13 @@ def _base_opts(progress=None, loop: asyncio.AbstractEventLoop | None = None) -> 
             except RuntimeError as exc:
                 logger.debug("Progress hook skipped: %s", exc)
         opts["progress_hooks"] = [hook]
+
+    # Use the system ffmpeg when present; otherwise point yt-dlp at the
+    # imageio-ffmpeg bundled binary so video merging and MP3 extraction keep
+    # working on hosts that don't install a system ffmpeg.
+    ffmpeg_bin = _ffmpeg_path()
+    if ffmpeg_bin:
+        opts["ffmpeg_location"] = ffmpeg_bin
     return opts
 
 
