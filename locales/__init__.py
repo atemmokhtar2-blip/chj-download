@@ -107,7 +107,7 @@ TRANSLATIONS = {
         "admin_ban_btn": "حظر",
         "admin_maintenance_btn": "صيانة",
         "admin_welcome": "🛡 <b>مركز تحكم الأدمن</b>",
-        "admin_search_prompt": "أرسل ID المستخدم أو username للبحث.",
+        "admin_search_prompt": "أرسل ID المستخدم أو اسم المستخدم للبحث.",
         "admin_ban_prompt": "أرسل ID المستخدم للحظر.",
         "admin_unbanned": "تم فك الحظر.",
         "maintenance_on": "🚧 تم تفعيل وضع الصيانة.",
@@ -117,8 +117,8 @@ TRANSLATIONS = {
 
 
 def t(lang: str, key: str, **kwargs) -> str:
-    lang = lang if lang in TRANSLATIONS else "en"
-    text = TRANSLATIONS.get(lang, {}).get(key) or TRANSLATIONS["en"].get(key) or key.replace("_", " ").title()
+    # Ignore saved or caller-supplied language: the bot is Arabic-only.
+    text = TRANSLATIONS["ar"].get(key) or TRANSLATIONS["en"].get(key) or key.replace("_", " ").title()
     try:
         return text.format(**kwargs)
     except Exception:
