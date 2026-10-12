@@ -33,8 +33,14 @@ from config.settings import (
     YTDLP_COOKIES_FILE, YTDLP_COOKIES_FROM_BROWSER, DOWNLOAD_PROXY, TEMP_DIR,
     OWNER_ID, ADMIN_IDS, REDIS_URL, STORAGE_CHANNEL_ID,
 )
+from utils.telegram_safe import safe_edit
 
 logger = logging.getLogger(__name__)
+
+
+async def _edit(query, text, **kwargs):
+    """Edit an admin callback message, ignoring the benign not-modified error."""
+    return await safe_edit(query.edit_message_text, text=text, **kwargs)
 
 ADMIN_CONVERSATION_STATES = {}
 ADMIN_LAST_PAGE: dict[int, int] = {}
@@ -178,7 +184,7 @@ async def update_ytdlp_command(update: Update, context: ContextTypes.DEFAULT_TYP
         text += f"\n\n<pre>{(result.get('stderr') or result.get('stdout') or '')[:1000]}</pre>"
     text += "\n\n⚠️ لو كان التحديث كبيرًا، أعد تشغيل السيرفر ليستخدم النسخة الجديدة داخل العملية الحالية."
     log_admin_action(user.id, "update_ytdlp", detail=f"ok={result['ok']}")
-    await msg.edit_text(text, parse_mode="HTML")
+    await safe_edit(msg.edit_text, text=text, parse_mode="HTML")
 
 
 async def _broadcast_update_message(context: ContextTypes.DEFAULT_TYPE, status_message=None, query=None, admin_id: int | None = None):
@@ -241,9 +247,9 @@ async def _broadcast_update_message(context: ContextTypes.DEFAULT_TYPE, status_m
         logger.exception("Failed to write admin audit log")
 
     if status_message:
-        await status_message.edit_text(result_text, parse_mode="HTML")
+        await safe_edit(status_message.edit_text, text=result_text, parse_mode="HTML")
     elif query:
-        await query.edit_message_text(result_text, parse_mode="HTML")
+        await _edit(query, result_text, parse_mode="HTML")
 
 async def admin_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
@@ -276,6 +282,12 @@ async def admin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif data == "admin_users":
         _clear_admin_state(user.id)
         await _show_users_page(query, lang, page=0)
+    elif data == "admin_users_active":
+        _clear_admin_state(user.id)
+        await _show_users_page(query, lang, page=0, status="active")
+    elif data == "admin_users_banned":
+        _clear_admin_state(user.id)
+        await _show_users_page(query, lang, page=0, status="banned")
     elif data == "admin_broadcast":
         _clear_admin_state(user.id)
         await _show_broadcast_form(query, lang)
@@ -284,14 +296,14 @@ async def admin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not is_owner(user.id):
             await query.answer("🔒 الإعلان الجماعي متاح للمالك فقط.", show_alert=True)
             return
-        await query.edit_message_text("📢 جاري إرسال إعلان التحديث لكل المستخدمين...", parse_mode="HTML")
+        await _edit(query, "📢 جاري إرسال إعلان التحديث لكل المستخدمين...", parse_mode="HTML")
         await _broadcast_update_message(context, query=query, admin_id=user.id)
     elif data == "admin_engine_status":
         _clear_admin_state(user.id)
         await _show_engine_status(query)
     elif data == "admin_update_ytdlp":
         _clear_admin_state(user.id)
-        await query.edit_message_text("🔄 جاري تحديث yt-dlp... قد يستغرق دقيقة.", parse_mode="HTML")
+        await _edit(query, "🔄 جاري تحديث yt-dlp... قد يستغرق دقيقة.", parse_mode="HTML")
         result = await asyncio.get_running_loop().run_in_executor(None, update_ytdlp)
         text = "✅ <b>تم تحديث yt-dlp</b>" if result["ok"] else "❌ <b>فشل تحديث yt-dlp</b>"
         text += f"\n\nقبل: <code>{result['before']}</code>\nبعد/الحالي: <code>{result['after']}</code>"
@@ -300,12 +312,12 @@ async def admin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         text += "\n\n⚠️ لو كان التحديث كبيرًا، أعد تشغيل السيرفر ليستخدم النسخة الجديدة داخل العملية الحالية."
         log_admin_action(user.id, "update_ytdlp", detail=f"ok={result['ok']}")
         back = [[InlineKeyboardButton("🔙 لوحة التحكم", callback_data="admin_panel")]]
-        await query.edit_message_text(text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(back))
+        await _edit(query, text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(back))
     elif data == "admin_health":
         _clear_admin_state(user.id)
         from services.runtime_diagnostics import render_diagnostics_html
         back = [[InlineKeyboardButton("🔙 لوحة التحكم", callback_data="admin_panel")]]
-        await query.edit_message_text(render_diagnostics_html(), parse_mode="HTML", reply_markup=InlineKeyboardMarkup(back))
+        await _edit(query, render_diagnostics_html(), parse_mode="HTML", reply_markup=InlineKeyboardMarkup(back))
     elif data == "admin_audit":
         _clear_admin_state(user.id)
         await _show_audit_log(query)
@@ -315,7 +327,7 @@ async def admin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif data == "admin_search":
         ADMIN_CONVERSATION_STATES[user.id] = "search"
         keyboard = [[InlineKeyboardButton("🔙 إلغاء", callback_data="admin_panel")]]
-        await query.edit_message_text(
+        await _edit(query, 
             "🔍 <b>بحث عن مستخدم</b>\n\n"
             "أرسل الآن:\n"
             "• <code>ID</code> المستخدم\n"
@@ -330,7 +342,7 @@ async def admin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif data == "admin_ban":
         ADMIN_CONVERSATION_STATES[user.id] = "ban"
         keyboard = [[InlineKeyboardButton("🔙 إلغاء", callback_data="admin_panel")]]
-        await query.edit_message_text(
+        await _edit(query, 
             "🚫 <b>حظر مستخدم</b>\n\n"
             "أرسل <code>ID</code> المستخدم أو <code>@username</code> لحظره فورًا.",
             parse_mode="HTML",
@@ -339,7 +351,8 @@ async def admin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif data.startswith("admin_users_page_"):
         _clear_admin_state(user.id)
         page = _callback_int_suffix(data)
-        await _show_users_page(query, lang, page=page or 0)
+        status = ADMIN_USER_FILTER.get(user.id, "all")
+        await _show_users_page(query, lang, page=page or 0, status=status)
     elif data.startswith("admin_user_detail_"):
         _clear_admin_state(user.id)
         target_id = _callback_int_suffix(data)
@@ -349,13 +362,13 @@ async def admin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         _set_maintenance(True)
         log_admin_action(user.id, "maintenance_mode", detail="enabled")
         back = [[InlineKeyboardButton("🔙 لوحة التحكم", callback_data="admin_panel")]]
-        await query.edit_message_text(t(lang, "maintenance_on"), parse_mode="HTML", reply_markup=InlineKeyboardMarkup(back))
+        await _edit(query, t(lang, "maintenance_on"), parse_mode="HTML", reply_markup=InlineKeyboardMarkup(back))
     elif data == "admin_maintenance_off":
         _clear_admin_state(user.id)
         _set_maintenance(False)
         log_admin_action(user.id, "maintenance_mode", detail="disabled")
         back = [[InlineKeyboardButton("🔙 لوحة التحكم", callback_data="admin_panel")]]
-        await query.edit_message_text(t(lang, "maintenance_off"), parse_mode="HTML", reply_markup=InlineKeyboardMarkup(back))
+        await _edit(query, t(lang, "maintenance_off"), parse_mode="HTML", reply_markup=InlineKeyboardMarkup(back))
     elif data.startswith("admin_unban_"):
         _clear_admin_state(user.id)
         target_id = _callback_int_suffix(data)
@@ -375,7 +388,7 @@ async def admin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
         ADMIN_CONVERSATION_STATES[user.id] = "broadcast"
         keyboard = [[InlineKeyboardButton("🔙 إلغاء", callback_data="admin_panel")]]
-        await query.edit_message_text(
+        await _edit(query, 
             "📢 أرسل الآن الرسالة التي تريد إذاعتها لكل المستخدمين.",
             reply_markup=InlineKeyboardMarkup(keyboard),
         )
@@ -399,7 +412,7 @@ async def _show_engine_status(query) -> None:
         "<code>/update_ytdlp</code> لتحديث المحرك."
     )
     back = [[InlineKeyboardButton("🔙 لوحة التحكم", callback_data="admin_panel")]]
-    await query.edit_message_text(text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(back))
+    await _edit(query, text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(back))
 
 def _format_bytes(size: int) -> str:
     """Human-readable byte size."""
@@ -552,7 +565,7 @@ def _build_admin_panel(lang: str):
 
 async def _show_admin_panel(query, lang: str):
     text, keyboard = _build_admin_panel(lang)
-    await query.edit_message_text(text, reply_markup=keyboard, parse_mode="HTML")
+    await _edit(query, text, reply_markup=keyboard, parse_mode="HTML")
 
 
 async def _show_audit_log(query) -> None:
@@ -596,7 +609,7 @@ async def _show_audit_log(query) -> None:
         )
 
     back = [[InlineKeyboardButton("🔙 لوحة التحكم", callback_data="admin_panel")]]
-    await query.edit_message_text(text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(back))
+    await _edit(query, text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(back))
 
 
 async def _show_security_scan(query) -> None:
@@ -625,7 +638,7 @@ async def _show_security_scan(query) -> None:
         f"👤 المالك: <code>{OWNER_ID}</code> • الأدمن: <code>{len(ADMIN_IDS)}</code>"
     )
     back = [[InlineKeyboardButton("🔙 لوحة التحكم", callback_data="admin_panel")]]
-    await query.edit_message_text(text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(back))
+    await _edit(query, text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(back))
 
 
 async def _show_users_page(query, lang: str, page: int = 0, status: str = "all"):
@@ -648,7 +661,7 @@ async def _show_users_page(query, lang: str, page: int = 0, status: str = "all")
             ],
             [InlineKeyboardButton("🔙 لوحة التحكم", callback_data="admin_panel")],
         ]
-        await query.edit_message_text(
+        await _edit(query, 
             f"👥 <b>المستخدمون — {status_label}</b>\n\n"
             "لا يوجد مستخدمون في هذه الفئة حاليًا.",
             parse_mode="HTML",
@@ -702,7 +715,7 @@ async def _show_users_page(query, lang: str, page: int = 0, status: str = "all")
         InlineKeyboardButton("🚫 محظور", callback_data="admin_users_banned"),
     ])
     keyboard.append([InlineKeyboardButton("🔙 رجوع للوحة", callback_data="admin_panel")])
-    await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML")
+    await _edit(query, text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML")
 
 def _render_user_detail(target_id: int, admin_id: int | None = None):
     """Build a full professional user profile (text + keyboard)."""
@@ -760,14 +773,14 @@ async def _show_user_detail(query, lang: str, target_id: int):
     rendered = _render_user_detail(target_id, admin_id)
     if rendered is None:
         keyboard = [[InlineKeyboardButton("🔙 المستخدمون", callback_data="admin_users")]]
-        await query.edit_message_text(
+        await _edit(query, 
             "❌ <b>المستخدم غير موجود.</b>",
             parse_mode="HTML",
             reply_markup=InlineKeyboardMarkup(keyboard),
         )
         return
     text, keyboard = rendered
-    await query.edit_message_text(text, parse_mode="HTML", reply_markup=keyboard)
+    await _edit(query, text, parse_mode="HTML", reply_markup=keyboard)
 
 async def _show_broadcast_form(query, lang: str):
     keyboard = [
@@ -780,7 +793,7 @@ async def _show_broadcast_form(query, lang: str):
         "سيتم نسخها كما هي تمامًا:\n"
         "• نص ✍️\n• صورة 🖼\n• فيديو 🎬\n• ملف 📁\n• أو مجموعة صور 📚"
     )
-    await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML")
+    await _edit(query, text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML")
 
 async def _show_maintenance_toggle(query, lang: str):
     from utils.maintenance import is_maintenance_mode
@@ -796,7 +809,7 @@ async def _show_maintenance_toggle(query, lang: str):
         [InlineKeyboardButton("🟢 إيقاف وضع الصيانة", callback_data="admin_maintenance_off")],
         [InlineKeyboardButton("🔙 لوحة التحكم", callback_data="admin_panel")],
     ]
-    await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML")
+    await _edit(query, text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML")
 
 def _set_maintenance(enabled: bool):
     from utils.maintenance import set_maintenance_mode

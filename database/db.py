@@ -1,9 +1,54 @@
 import sqlite3
 import logging
+import os
+import shutil
 from contextlib import contextmanager
 from config.settings import DATABASE_PATH
 
 logger = logging.getLogger(__name__)
+
+
+def _has_users(path: str) -> bool:
+    """True when the SQLite file at ``path`` has at least one row in ``users``."""
+    if not path or not os.path.exists(path):
+        return False
+    try:
+        con = sqlite3.connect(path)
+        try:
+            row = con.execute("SELECT COUNT(*) FROM users").fetchone()
+            return bool(row and row[0] and int(row[0]) > 0)
+        finally:
+            con.close()
+    except Exception:
+        return False
+
+
+def _migrate_legacy_database() -> None:
+    """One-time copy of the repo-relative DB to the persistent location.
+
+    Older deployments stored ``database/bot.db`` next to the code, which is
+    wiped on every rebuild. When the process now points at a persistent path
+    (``/data/bot.db`` or ``DATABASE_PATH``) and the persistent file is empty or
+    missing while the legacy file still has users, copy the legacy file over so
+    no accumulated users are lost during the switch.
+    """
+    legacy = os.path.join(os.getcwd(), "database", "bot.db")
+    try:
+        same = os.path.abspath(legacy) == os.path.abspath(DATABASE_PATH)
+    except Exception:
+        same = True
+    if same:
+        return
+    if not _has_users(legacy):
+        return
+    if _has_users(DATABASE_PATH):
+        return
+    try:
+        os.makedirs(os.path.dirname(DATABASE_PATH) or ".", exist_ok=True)
+        shutil.copy2(legacy, DATABASE_PATH)
+        logger.info("Migrated legacy database %s -> %s", legacy, DATABASE_PATH)
+    except Exception:
+        logger.exception("Failed to migrate legacy database; starting fresh at %s", DATABASE_PATH)
 
 def get_connection():
     conn = sqlite3.connect(DATABASE_PATH, check_same_thread=False, timeout=10)
@@ -26,6 +71,7 @@ def db_cursor():
         conn.close()
 
 def init_db():
+    _migrate_legacy_database()
     with db_cursor() as c:
         c.executescript("""
             CREATE TABLE IF NOT EXISTS users (

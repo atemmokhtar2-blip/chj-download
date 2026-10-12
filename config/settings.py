@@ -22,7 +22,33 @@ if not BOT_TOKEN:
 ADMIN_IDS = [int(x) for x in os.getenv("ADMIN_IDS", "7631249810").split(",") if x.strip().isdigit()]
 OWNER_ID = int(os.getenv("OWNER_ID", "7631249810")) if os.getenv("OWNER_ID", "7631249810").isdigit() else 7631249810
 
-DATABASE_PATH = os.path.join(os.getcwd(), "database", "bot.db")
+def _resolve_database_path() -> str:
+    """Persistent SQLite location across redeploys/restarts.
+
+    Hosts like Hugging Face Spaces / Render mount persistent disks at ``/data``
+    while the app directory itself is rebuilt from git on every deploy, so a
+    default ``database/bot.db`` next to the code is wiped each time and users
+    "disappear". Priority:
+      1. ``DATABASE_PATH`` env var (explicit, any host)
+      2. ``DATA_DIR`` env var (a directory that is already a persistent volume)
+      3. ``/data`` when the platform exposes it
+      4. the legacy repo-relative path (local development)
+    """
+    explicit = os.getenv("DATABASE_PATH", "").strip()
+    if explicit:
+        return explicit
+
+    data_dir = os.getenv("DATA_DIR", "").strip()
+    if data_dir:
+        return os.path.join(data_dir, "bot.db")
+
+    if os.path.isdir("/data"):
+        return os.path.join("/data", "bot.db")
+
+    return os.path.join(os.getcwd(), "database", "bot.db")
+
+
+DATABASE_PATH = _resolve_database_path()
 TEMP_DIR = os.path.join(os.getcwd(), "temp")
 LOGS_DIR = os.path.join(os.getcwd(), "logs")
 
