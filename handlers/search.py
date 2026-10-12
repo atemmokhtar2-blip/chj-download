@@ -15,6 +15,7 @@ from telegram.ext import ContextTypes
 from middlewares.auth import is_banned
 from middlewares.concurrency import get_executor
 from locales import t
+from utils.telegram_safe import safe_edit
 
 logger = logging.getLogger(__name__)
 
