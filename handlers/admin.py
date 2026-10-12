@@ -13,8 +13,8 @@ from middlewares.auth import is_admin
 from locales import t
 from database.users import (
     get_user, get_total_users, get_new_users_today, get_active_today,
-    get_users_page, search_users, get_all_user_ids, ban_user, unban_user,
-    update_user,
+    get_banned_users_count, get_users_page, search_users, get_all_user_ids,
+    ban_user, unban_user, update_user,
 )
 from database.downloads import (
     get_downloads_today, get_downloads_week, get_downloads_month,
@@ -217,24 +217,28 @@ async def admin_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             InlineKeyboardButton("👥 " + t(lang, "admin_users_btn"), callback_data="admin_users"),
         ],
         [
-            InlineKeyboardButton("📢 " + t(lang, "admin_broadcast_btn"), callback_data="admin_broadcast"),
-            InlineKeyboardButton("🚀 إعلان تحديث البوت", callback_data="admin_announce_update"),
-        ],
-        [
             InlineKeyboardButton("🔍 " + t(lang, "admin_search_btn"), callback_data="admin_search"),
             InlineKeyboardButton("🚫 " + t(lang, "admin_ban_btn"), callback_data="admin_ban"),
         ],
         [
-            InlineKeyboardButton("🧠 حالة المحرك", callback_data="admin_engine_status"),
-            InlineKeyboardButton("🔄 تحديث yt-dlp", callback_data="admin_update_ytdlp"),
+            InlineKeyboardButton("📢 " + t(lang, "admin_broadcast_btn"), callback_data="admin_broadcast"),
+            InlineKeyboardButton("🚀 إعلان تحديث البوت", callback_data="admin_announce_update"),
         ],
         [
+            InlineKeyboardButton("🧠 حالة المحرك", callback_data="admin_engine_status"),
+            InlineKeyboardButton("🩺 صحة النظام", callback_data="admin_health"),
+        ],
+        [
+            InlineKeyboardButton("🔄 تحديث yt-dlp", callback_data="admin_update_ytdlp"),
             InlineKeyboardButton("🚧 " + t(lang, "admin_maintenance_btn"), callback_data="admin_maintenance"),
         ],
     ]
 
     await update.message.reply_text(
-        t(lang, "admin_welcome"),
+        "<b>🛡 مركز قيادة X Downloader</b>\n\n"
+        "أهلًا بالمدير 👑\n"
+        "هنا تتحكم في كل شيء: الإحصائيات الحية، المستخدمين، الحظر، الإذاعة، والمحرك.\n\n"
+        "<i>كل الأرقام بالأسفل تُقرأ مباشرة من قاعدة البيانات لحظة الضغط.</i>",
         reply_markup=InlineKeyboardMarkup(keyboard),
         parse_mode="HTML"
     )
@@ -268,18 +272,7 @@ async def admin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await _broadcast_update_message(context, query=query)
     elif data == "admin_engine_status":
         _clear_admin_state(user.id)
-        cookies_ready = bool(YTDLP_COOKIES_FROM_BROWSER or (YTDLP_COOKIES_FILE and os.path.exists(YTDLP_COOKIES_FILE)))
-        engines = list_engines()
-        engine_lines = "\n".join(f"• <code>{e['name']}</code>" for e in engines)
-        await query.edit_message_text(
-            "🧠 <b>حالة محرك التنزيل</b>\n\n"
-            f"yt-dlp: <code>{get_ytdlp_version()}</code>\n"
-            f"Cookies: <b>{'مفعلة' if cookies_ready else 'غير مفعلة'}</b>\n"
-            f"Proxy: <b>{'مفعل' if DOWNLOAD_PROXY else 'غير مفعل'}</b>\n"
-            f"Engines: <b>{len(engines)}</b>\n"
-            f"{engine_lines}",
-            parse_mode="HTML",
-        )
+        await _show_engine_status(query)
     elif data == "admin_update_ytdlp":
         _clear_admin_state(user.id)
         await query.edit_message_text("🔄 جاري تحديث yt-dlp... قد يستغرق دقيقة.", parse_mode="HTML")
@@ -289,22 +282,41 @@ async def admin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not result["ok"]:
             text += f"\n\n<pre>{(result.get('stderr') or result.get('stdout') or '')[:1000]}</pre>"
         text += "\n\n⚠️ لو كان التحديث كبيرًا، أعد تشغيل السيرفر ليستخدم النسخة الجديدة داخل العملية الحالية."
-        await query.edit_message_text(text, parse_mode="HTML")
+        back = [[InlineKeyboardButton("🔙 لوحة التحكم", callback_data="admin_panel")]]
+        await query.edit_message_text(text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(back))
+    elif data == "admin_health":
+        _clear_admin_state(user.id)
+        from services.runtime_diagnostics import render_diagnostics_html
+        back = [[InlineKeyboardButton("🔙 لوحة التحكم", callback_data="admin_panel")]]
+        await query.edit_message_text(render_diagnostics_html(), parse_mode="HTML", reply_markup=InlineKeyboardMarkup(back))
     elif data == "admin_search":
         ADMIN_CONVERSATION_STATES[user.id] = "search"
-        keyboard = [[InlineKeyboardButton("🔙 رجوع", callback_data="admin_panel")]]
-        await query.edit_message_text(t(lang, "admin_search_prompt"), reply_markup=InlineKeyboardMarkup(keyboard))
+        keyboard = [[InlineKeyboardButton("🔙 إلغاء", callback_data="admin_panel")]]
+        await query.edit_message_text(
+            "🔍 <b>بحث عن مستخدم</b>\n\n"
+            "أرسل الآن:\n"
+            "• <code>ID</code> المستخدم\n"
+            "• أو <code>@username</code>\n"
+            "• أو الاسم الأول للمستخدم",
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup(keyboard),
+        )
     elif data == "admin_maintenance":
         _clear_admin_state(user.id)
         await _show_maintenance_toggle(query, lang)
     elif data == "admin_ban":
         ADMIN_CONVERSATION_STATES[user.id] = "ban"
-        keyboard = [[InlineKeyboardButton("🔙 رجوع", callback_data="admin_panel")]]
-        await query.edit_message_text(t(lang, "admin_ban_prompt"), reply_markup=InlineKeyboardMarkup(keyboard))
+        keyboard = [[InlineKeyboardButton("🔙 إلغاء", callback_data="admin_panel")]]
+        await query.edit_message_text(
+            "🚫 <b>حظر مستخدم</b>\n\n"
+            "أرسل <code>ID</code> المستخدم أو <code>@username</code> لحظره فورًا.",
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup(keyboard),
+        )
     elif data.startswith("admin_users_page_"):
         _clear_admin_state(user.id)
         page = _callback_int_suffix(data)
-        await _show_users_page(query, lang, page=page)
+        await _show_users_page(query, lang, page=page or 0)
     elif data.startswith("admin_user_detail_"):
         _clear_admin_state(user.id)
         target_id = _callback_int_suffix(data)
@@ -312,11 +324,13 @@ async def admin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif data == "admin_maintenance_on":
         _clear_admin_state(user.id)
         _set_maintenance(True)
-        await query.edit_message_text(t(lang, "maintenance_on"))
+        back = [[InlineKeyboardButton("🔙 لوحة التحكم", callback_data="admin_panel")]]
+        await query.edit_message_text(t(lang, "maintenance_on"), parse_mode="HTML", reply_markup=InlineKeyboardMarkup(back))
     elif data == "admin_maintenance_off":
         _clear_admin_state(user.id)
         _set_maintenance(False)
-        await query.edit_message_text(t(lang, "maintenance_off"))
+        back = [[InlineKeyboardButton("🔙 لوحة التحكم", callback_data="admin_panel")]]
+        await query.edit_message_text(t(lang, "maintenance_off"), parse_mode="HTML", reply_markup=InlineKeyboardMarkup(back))
     elif data.startswith("admin_unban_"):
         _clear_admin_state(user.id)
         target_id = _callback_int_suffix(data)
@@ -329,55 +343,137 @@ async def admin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await _show_user_detail(query, lang, target_id)
     elif data == "admin_send_broadcast":
         ADMIN_CONVERSATION_STATES[user.id] = "broadcast"
-        keyboard = [[InlineKeyboardButton("🔙 رجوع", callback_data="admin_panel")]]
-        await query.edit_message_text(t(lang, "admin_broadcast_message_prompt"), reply_markup=InlineKeyboardMarkup(keyboard))
+        keyboard = [[InlineKeyboardButton("🔙 إلغاء", callback_data="admin_panel")]]
+        await query.edit_message_text(
+            "📢 أرسل الآن الرسالة التي تريد إذاعتها لكل المستخدمين.",
+            reply_markup=InlineKeyboardMarkup(keyboard),
+        )
     else:
         logger.warning("Unhandled admin callback after validation: %s", data)
 
+
+async def _show_engine_status(query) -> None:
+    """Professional engine status screen with a back button."""
+    cookies_ready = bool(YTDLP_COOKIES_FROM_BROWSER or (YTDLP_COOKIES_FILE and os.path.exists(YTDLP_COOKIES_FILE)))
+    engines = list_engines()
+    engine_lines = "\n".join(f"• <code>{e['name']}</code>" for e in engines)
+    text = (
+        "🧠 <b>حالة محرك التنزيل</b>\n\n"
+        f"• yt-dlp: <code>{get_ytdlp_version()}</code>\n"
+        f"• Cookies: <b>{'مفعّلة' if cookies_ready else 'غير مفعّلة'}</b>\n"
+        f"• Proxy: <b>{'مفعّل' if DOWNLOAD_PROXY else 'غير مفعّل'}</b>\n"
+        f"• المحركات النشطة: <b>{len(engines)}</b>\n\n"
+        f"{engine_lines}\n\n"
+        "💡 عند فشل منصات مثل Instagram/Facebook/YouTube:\n"
+        "<code>/update_ytdlp</code> لتحديث المحرك."
+    )
+    back = [[InlineKeyboardButton("🔙 لوحة التحكم", callback_data="admin_panel")]]
+    await query.edit_message_text(text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(back))
+
 async def _show_admin_panel(query, lang: str):
     total_users = get_total_users()
+    new_today = get_new_users_today()
     active_today = get_active_today()
+    banned = get_banned_users_count()
     downloads_today = get_downloads_today()
-    platform_stats = get_downloads_by_platform()
+    downloads_week = get_downloads_week()
+    downloads_month = get_downloads_month()
+    downloads_total = get_total_downloads()
+    cache_count = get_cache_count()
     cache_hits = get_cache_hits()
-    
-    keyboard = [
-        [
-            InlineKeyboardButton(t(lang, "admin_users_btn"), callback_data="admin_users"),
-            InlineKeyboardButton(t(lang, "admin_broadcast_btn"), callback_data="admin_broadcast"),
-        ],
-        [
-            InlineKeyboardButton("🚀 إعلان تحديث البوت", callback_data="admin_announce_update"),
-        ],
-        [
-            InlineKeyboardButton(t(lang, "admin_search_btn"), callback_data="admin_search"),
-            InlineKeyboardButton(t(lang, "admin_maintenance_btn"), callback_data="admin_maintenance"),
-        ],
-    ]
+    platform_stats = get_downloads_by_platform()
+    engines = list_engines()
+    try:
+        version = get_ytdlp_version()
+    except Exception:
+        version = "غير متاح"
+
+    from utils.maintenance import is_maintenance_mode
+    maintenance = "🔴 مفعّل" if is_maintenance_mode() else "🟢 معطّل"
+
+    top = sorted(platform_stats.items(), key=lambda kv: kv[1], reverse=True)[:6]
+    platform_lines = "\n".join(
+        f"• <b>{escape(str(p))}</b>: {c} تحميل" for p, c in top
+    ) or "• لا توجد تحميلات مسجلة بعد."
 
     text = (
-        f"👑 <b>لوحة التحكم</b>\n\n"
-        f"👥 إجمالي المستخدمين: <b>{total_users}</b>\n"
-        f"🟢 نشط اليوم: <b>{active_today}</b>\n"
-        f"📥 تحميلات اليوم: <b>{downloads_today}</b>\n"
-        f"💾 ضربات الكاش: <b>{cache_hits}</b>\n\n"
-        f"🎬 يوتيوب: <b>{platform_stats.get('YouTube', 0)}</b>\n"
-        f"🎵 تيك توك: <b>{platform_stats.get('TikTok', 0)}</b>\n"
-        f"📌 بينترست: <b>{platform_stats.get('Pinterest', 0)}</b>"
+        "👑 <b>لوحة التحكم الرئيسية</b>\n\n"
+        "👥 <b>المستخدمون</b>\n"
+        f"• الإجمالي: <b>{total_users}</b>\n"
+        f"• جديد اليوم: <b>{new_today}</b>\n"
+        f"• نشط اليوم: <b>{active_today}</b>\n"
+        f"• محظور: <b>{banned}</b>\n\n"
+        "📥 <b>التحميلات</b>\n"
+        f"• اليوم: <b>{downloads_today}</b>\n"
+        f"• آخر ٧ أيام: <b>{downloads_week}</b>\n"
+        f"• آخر ٣٠ يومًا: <b>{downloads_month}</b>\n"
+        f"• الإجمالي: <b>{downloads_total}</b>\n\n"
+        "💾 <b>الكاش</b>\n"
+        f"• عناصر مخزنة: <b>{cache_count}</b>\n"
+        f"• ضربات التوصيل: <b>{cache_hits}</b>\n\n"
+        "🧠 <b>محرك التنزيل</b>\n"
+        f"• yt-dlp: <code>{escape(version)}</code>\n"
+        f"• المحركات النشطة: <b>{len(engines)}</b>\n\n"
+        "🌍 <b>أكثر المنصات استخدامًا</b>\n"
+        f"{platform_lines}\n\n"
+        f"🚧 <b>وضع الصيانة:</b> {maintenance}"
     )
+
+    keyboard = [
+        [
+            InlineKeyboardButton("👥 المستخدمون", callback_data="admin_users"),
+            InlineKeyboardButton("🔍 بحث عن مستخدم", callback_data="admin_search"),
+        ],
+        [
+            InlineKeyboardButton("📢 إذاعة", callback_data="admin_broadcast"),
+            InlineKeyboardButton("🚧 وضع الصيانة", callback_data="admin_maintenance"),
+        ],
+        [
+            InlineKeyboardButton("🧠 حالة المحرك", callback_data="admin_engine_status"),
+            InlineKeyboardButton("🩺 صحة النظام", callback_data="admin_health"),
+        ],
+        [
+            InlineKeyboardButton("🔄 تحديث yt-dlp", callback_data="admin_update_ytdlp"),
+        ],
+    ]
     await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML")
 
 async def _show_users_page(query, lang: str, page: int = 0):
-    per_page = 10
+    per_page = 8
+    total = get_total_users()
+    total_pages = max(1, (total + per_page - 1) // per_page)
+    page = max(0, min(page or 0, total_pages - 1))
     users = get_users_page(offset=page * per_page, limit=per_page)
+
     if not users:
-        await query.edit_message_text(t(lang, "admin_no_users"))
+        keyboard = [[InlineKeyboardButton("🔙 لوحة التحكم", callback_data="admin_panel")]]
+        await query.edit_message_text(
+            "👥 <b>المستخدمون</b>\n\nلا يوجد مستخدمون مسجلون حتى الآن.\n"
+            "بمجرد أن يرسل أحدهم /start سيظهر هنا فورًا.",
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup(keyboard),
+        )
         return
+
+    ADMIN_LAST_PAGE[query.from_user.id] = page
+
     lines = []
     for u in users:
         status = "🚫" if u.get("is_banned") else "✅"
-        lines.append(f"{status} <code>{u['user_id']}</code> — {u.get('first_name', '?')} (@{u.get('username', '?')})")
-    text = t(lang, "admin_users_title") + "\n\n" + "\n".join(lines)
+        name = escape(u.get("first_name") or "بدون اسم")
+        username = escape(u.get("username") or "—")
+        downloads = u.get("downloads", 0)
+        lines.append(
+            f"{status} <b>{name}</b> @{username}\n"
+            f"    🆔 <code>{u['user_id']}</code> • 📥 <b>{downloads}</b> تحميل"
+        )
+
+    text = (
+        f"👥 <b>قائمة المستخدمين</b>\n"
+        f"الصفحة <b>{page + 1}</b> من <b>{total_pages}</b> • الإجمالي: <b>{total}</b>\n\n"
+        + "\n".join(lines)
+    )
+
     keyboard = []
     row = []
     for u in users:
@@ -385,53 +481,111 @@ async def _show_users_page(query, lang: str, page: int = 0):
         if len(row) >= 2:
             keyboard.append(row)
             row = []
-    if row: keyboard.append(row)
-    nav_row = []
-    if page > 0: nav_row.append(InlineKeyboardButton("◀️", callback_data=f"admin_users_page_{page - 1}"))
-    nav_row.append(InlineKeyboardButton(f"📄 {page + 1}", callback_data="noop"))
-    nav_row.append(InlineKeyboardButton("▶️", callback_data=f"admin_users_page_{page + 1}"))
-    keyboard.append(nav_row)
-    keyboard.append([InlineKeyboardButton("🔙", callback_data="admin_panel")])
+    if row:
+        keyboard.append(row)
+
+    nav = []
+    if page > 0:
+        nav.append(InlineKeyboardButton("⬅️ السابق", callback_data=f"admin_users_page_{page - 1}"))
+    if page < total_pages - 1:
+        nav.append(InlineKeyboardButton("التالي ➡️", callback_data=f"admin_users_page_{page + 1}"))
+    if nav:
+        keyboard.append(nav)
+
+    keyboard.append([InlineKeyboardButton("🔙 لوحة التحكم", callback_data="admin_panel")])
     await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML")
 
-async def _show_user_detail(query, lang: str, target_id: int):
+def _render_user_detail(target_id: int, admin_id: int | None = None):
+    """Build a full professional user profile (text + keyboard)."""
     user = get_user(target_id)
     if not user:
-        await query.edit_message_text(t(lang, "admin_user_not_found"))
-        return
+        return None
+
     is_banned = user.get("is_banned", 0)
+    stats = get_user_download_stats(target_id)
+    page = ADMIN_LAST_PAGE.get(admin_id, 0) if admin_id else 0
+
+    full_name = " ".join(
+        str(part) for part in [user.get("first_name"), user.get("last_name")] if part
+    ) or "—"
+    username = user.get("username") or "—"
+    language = user.get("language") or "—"
+    role = user.get("role") or "user"
+    join_date = user.get("join_date") or "—"
+    last_seen = user.get("last_seen") or "—"
+
+    total = stats.get("total", 0)
+    video = stats.get("video", 0)
+    audio = stats.get("audio", 0)
+    other = max(total - video - audio, 0)
+
     text = (
-        f"👤 <b>تفاصيل المستخدم</b>\n\n"
+        "👤 <b>ملف المستخدم الكامل</b>\n\n"
         f"🆔 المعرف: <code>{target_id}</code>\n"
-        f"👤 الاسم: <b>{user.get('first_name', '?')}</b>\n"
-        f"🔖 اليوزر: @{user.get('username', '-')}\n"
-        f"📥 التحميلات: <b>{user.get('downloads', 0)}</b>\n"
-        f"🚫 محظور: <b>{'نعم' if is_banned else 'لا'}</b>\n"
-        f"📅 انضم في: {user.get('join_date', '?')}"
+        f"👤 الاسم: <b>{escape(full_name)}</b>\n"
+        f"🔖 اليوزر: @{escape(username)}\n"
+        f"🌐 اللغة: <b>{escape(language)}</b>\n"
+        f"🏷 الدور: <b>{escape(role)}</b>\n"
+        f"📅 تاريخ الانضمام: <code>{escape(join_date)}</code>\n"
+        f"🕑 آخر ظهور: <code>{escape(last_seen)}</code>\n"
+        f"🚫 الحالة: <b>{'محظور 🚫' if is_banned else 'نشط ✅'}</b>\n\n"
+        "📥 <b>نشاط التحميل</b>\n"
+        f"• الإجمالي: <b>{total}</b>\n"
+        f"• فيديو: <b>{video}</b>\n"
+        f"• صوت MP3: <b>{audio}</b>\n"
+        f"• صور/أخرى: <b>{other}</b>"
     )
+
     keyboard = []
     if is_banned:
         keyboard.append([InlineKeyboardButton("✅ فك الحظر", callback_data=f"admin_unban_{target_id}")])
     else:
-        keyboard.append([InlineKeyboardButton("🚫 حظر", callback_data=f"admin_ban_confirm_{target_id}")])
-    keyboard.append([InlineKeyboardButton("🔙 المستخدمون", callback_data="admin_users")])
-    await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML")
+        keyboard.append([InlineKeyboardButton("🚫 حظر المستخدم", callback_data=f"admin_ban_confirm_{target_id}")])
+    keyboard.append([InlineKeyboardButton("🔙 رجوع للمستخدمين", callback_data=f"admin_users_page_{page}")])
+
+    return text, InlineKeyboardMarkup(keyboard)
+
+
+async def _show_user_detail(query, lang: str, target_id: int):
+    admin_id = query.from_user.id if query.from_user else None
+    rendered = _render_user_detail(target_id, admin_id)
+    if rendered is None:
+        keyboard = [[InlineKeyboardButton("🔙 المستخدمون", callback_data="admin_users")]]
+        await query.edit_message_text(
+            "❌ <b>المستخدم غير موجود.</b>",
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup(keyboard),
+        )
+        return
+    text, keyboard = rendered
+    await query.edit_message_text(text, parse_mode="HTML", reply_markup=keyboard)
 
 async def _show_broadcast_form(query, lang: str):
     keyboard = [
-        [InlineKeyboardButton(t(lang, "admin_broadcast_send"), callback_data="admin_send_broadcast")],
-        [InlineKeyboardButton("🔙", callback_data="admin_panel")],
+        [InlineKeyboardButton("📨 جاهز — أرسل الرسالة الآن", callback_data="admin_send_broadcast")],
+        [InlineKeyboardButton("🔙 لوحة التحكم", callback_data="admin_panel")],
     ]
-    await query.edit_message_text(t(lang, "admin_broadcast_intro"), reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML")
+    text = (
+        "📢 <b>الإذاعة العامة</b>\n\n"
+        "اضغط الزر بالأسفل ثم أرسل الرسالة التي تريد إرسالها لكل المستخدمين.\n\n"
+        "سيتم نسخها كما هي تمامًا:\n"
+        "• نص ✍️\n• صورة 🖼\n• فيديو 🎬\n• ملف 📁\n• أو مجموعة صور 📚"
+    )
+    await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML")
 
 async def _show_maintenance_toggle(query, lang: str):
     from utils.maintenance import is_maintenance_mode
-    status = "🔴 مفعل" if is_maintenance_mode() else "🟢 معطل"
-    text = f"🚧 <b>وضع الصيانة</b>\n\nالحالة الحالية: <b>{status}</b>"
+    status = "🔴 مفعّل" if is_maintenance_mode() else "🟢 معطّل"
+    text = (
+        "🚧 <b>وضع الصيانة</b>\n\n"
+        f"الحالة الحالية: <b>{status}</b>\n\n"
+        "عند تفعيل وضع الصيانة، يتوقف المستخدمون العاديون عن التحميل، "
+        "بينما يظل الأدمن قادرًا على استخدام البوت بشكل كامل."
+    )
     keyboard = [
-        [InlineKeyboardButton("🔴 تفعيل", callback_data="admin_maintenance_on"),
-         InlineKeyboardButton("🟢 تعطيل", callback_data="admin_maintenance_off")],
-        [InlineKeyboardButton("🔙", callback_data="admin_panel")]
+        [InlineKeyboardButton("🔴 تفعيل وضع الصيانة", callback_data="admin_maintenance_on")],
+        [InlineKeyboardButton("🟢 إيقاف وضع الصيانة", callback_data="admin_maintenance_off")],
+        [InlineKeyboardButton("🔙 لوحة التحكم", callback_data="admin_panel")],
     ]
     await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML")
 
@@ -457,6 +611,7 @@ def _invalid_admin_callback(data: str) -> bool:
         "admin_panel", "admin_users", "admin_broadcast", "admin_announce_update",
         "admin_engine_status", "admin_update_ytdlp", "admin_search", "admin_maintenance",
         "admin_ban", "admin_maintenance_on", "admin_maintenance_off", "admin_send_broadcast",
+        "admin_health",
     }
     return data not in known
 
@@ -470,29 +625,92 @@ async def admin_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
     if state not in _ADMIN_TEXT_STATES:
         logger.warning("Dropped unknown admin text state for user=%s: %s", user_id, state)
         return False
-    text = update.message.text.strip()
+    text = (update.message.text or "").strip()
+    if not text:
+        await update.message.reply_text("⚠️ أرسل نصًا صالحًا (ID أو @username أو اسم).")
+        return True
+
     if state == "search":
         results = search_users(text)
         if not results:
-            await update.message.reply_text("❌ لم يتم العثور على مستخدمين.")
+            await update.message.reply_text(
+                "❌ <b>لا توجد نتائج</b> لهذا البحث.\nجرّب رقمًا أو اسمًا آخر.",
+                parse_mode="HTML",
+                reply_markup=InlineKeyboardMarkup(
+                    [[InlineKeyboardButton("🔙 لوحة التحكم", callback_data="admin_panel")]]
+                ),
+            )
             return True
-        await update.message.reply_text(f"🔍 تم العثور على {len(results)} مستخدمين. استخدم /admin لعرضهم.")
+
+        if len(results) == 1:
+            rendered = _render_user_detail(results[0]["user_id"], user_id)
+            if rendered:
+                msg_text, keyboard = rendered
+                await update.message.reply_text(msg_text, parse_mode="HTML", reply_markup=keyboard)
+            return True
+
+        lines = []
+        keyboard = []
+        for r in results[:10]:
+            name = escape(r.get("first_name") or "بدون اسم")
+            username = escape(r.get("username") or "—")
+            status = "🚫" if r.get("is_banned") else "✅"
+            lines.append(f"{status} <b>{name}</b> @{username} • <code>{r['user_id']}</code>")
+            keyboard.append([
+                InlineKeyboardButton(
+                    f"👤 {r['user_id']} — {name[:12]}",
+                    callback_data=f"admin_user_detail_{r['user_id']}",
+                )
+            ])
+        keyboard.append([InlineKeyboardButton("🔙 لوحة التحكم", callback_data="admin_panel")])
+        msg_text = f"🔍 <b>نتائج البحث ({len(results)})</b>\n\n" + "\n".join(lines)
+        await update.message.reply_text(msg_text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard))
+        return True
+
     elif state == "broadcast":
         all_ids = get_all_user_ids()
         count = 0
         for uid in all_ids:
             try:
-                await context.bot.copy_message(chat_id=uid, from_chat_id=update.message.chat_id, message_id=update.message.message_id)
+                await context.bot.copy_message(
+                    chat_id=uid,
+                    from_chat_id=update.message.chat_id,
+                    message_id=update.message.message_id,
+                )
                 count += 1
-                if count % 20 == 0: await asyncio.sleep(1)
-            except Exception: pass
-        await update.message.reply_text(f"✅ تم إرسال الإذاعة إلى {count} مستخدم.")
+                if count % 20 == 0:
+                    await asyncio.sleep(1)
+            except Exception:
+                pass
+        await update.message.reply_text(
+            f"✅ تم إرسال الإذاعة إلى <b>{count}</b> مستخدم.",
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup(
+                [[InlineKeyboardButton("🔙 لوحة التحكم", callback_data="admin_panel")]]
+            ),
+        )
+        return True
+
     elif state == "ban":
         results = search_users(text)
         if not results:
-            await update.message.reply_text("❌ لم يتم العثور على المستخدم.")
+            await update.message.reply_text(
+                "❌ <b>لا يوجد مستخدم</b> بهذا الرقم/الاسم.",
+                parse_mode="HTML",
+                reply_markup=InlineKeyboardMarkup(
+                    [[InlineKeyboardButton("🔙 لوحة التحكم", callback_data="admin_panel")]]
+                ),
+            )
             return True
-        target = results[0]['user_id']
-        ban_user(target)
-        await update.message.reply_text(f"🚫 تم حظر المستخدم {target} بنجاح.")
+        target = results[0]
+        ban_user(target["user_id"])
+        name = escape(target.get("first_name") or target.get("username") or str(target["user_id"]))
+        await update.message.reply_text(
+            f"🚫 <b>تم حظر المستخدم</b>\n\n👤 {name}\n🆔 <code>{target['user_id']}</code>",
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup(
+                [[InlineKeyboardButton("🔙 لوحة التحكم", callback_data="admin_panel")]]
+            ),
+        )
+        return True
     return True

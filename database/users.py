@@ -44,6 +44,14 @@ def get_total_users() -> int:
         c.execute("SELECT COUNT(*) as cnt FROM users")
         return c.fetchone()["cnt"]
 
+def get_banned_users_count() -> int:
+    with db_cursor() as c:
+        c.execute("SELECT COUNT(*) as cnt FROM users WHERE is_banned = 1")
+        return c.fetchone()["cnt"]
+
+def get_users_count() -> int:
+    return get_total_users()
+
 def get_new_users_today() -> int:
     with db_cursor() as c:
         c.execute("SELECT COUNT(*) as cnt FROM users WHERE date(join_date) = date('now')")
