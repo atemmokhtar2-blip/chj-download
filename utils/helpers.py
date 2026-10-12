@@ -50,12 +50,17 @@ def format_size(size: int | float | None) -> str:
     return f"{size:.1f} TB"
 
 
+_BOT_TOKEN_RE = re.compile(r"\b\d{6,12}:[A-Za-z0-9_-]{30,50}\b")
+_URL_AUTH_RE = re.compile(r"(https?://)([^/@\s]+)@")
+
+
 def summarize_error(error, max_len: int = 220) -> str:
     """Return a short, safe, single-line reason for user-facing error messages.
 
-    Never leaks credentials: tokens/keys embedded in an exception keep their
-    value, which is fine for Telegram (the user owns their own session), but we
-    still collapse newlines and trim extreme lengths so messages stay readable.
+    Credential-like material is redacted before the text reaches a chat:
+    Telegram-style bot tokens and ``user:pass@host`` URL credentials are
+    replaced with placeholders. Newlines are collapsed and extreme lengths are
+    trimmed so the message stays readable.
     """
     if error is None:
         text = "Unknown error"
@@ -63,7 +68,9 @@ def summarize_error(error, max_len: int = 220) -> str:
         text = str(error) or error.__class__.__name__
     else:
         text = str(error)
-    text = re.sub(r"\s+", " ", text or "").strip() or "Unknown error"
+    text = _BOT_TOKEN_RE.sub("<token-redacted>", str(text or ""))
+    text = _URL_AUTH_RE.sub(r"\1<user-redacted>@", text)
+    text = re.sub(r"\s+", " ", text).strip() or "Unknown error"
     if len(text) > max_len:
         text = text[: max_len - 1].rstrip() + "…"
     return text

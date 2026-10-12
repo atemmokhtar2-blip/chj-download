@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from html import escape
 
 from telegram import (
     Update,
@@ -102,7 +103,7 @@ async def search_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         for idx, item in enumerate(results[:SEARCH_RESULT_LIMIT], start=1)
     ]
     text = "🔎 <b>نتائج البحث:</b>\n\n" + "\n".join(
-        f"<b>{idx}.</b> {item['title'][:70]} • {item['duration'] or '?'}"
+        f"<b>{idx}.</b> {escape(item['title'][:70])} • {escape(item['duration'] or '?')}"
         for idx, item in enumerate(results[:SEARCH_RESULT_LIMIT], start=1)
     )
     await status.edit_text(text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(rows))

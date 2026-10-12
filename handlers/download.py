@@ -32,6 +32,7 @@ from middlewares.user_locks import is_user_busy, try_acquire_user_download, rele
 from middlewares.auth import is_banned
 from locales import t
 from utils.helpers import is_valid_url, is_supported_url, truncate_title, make_progress_bar, format_size, get_platform_emoji, summarize_error
+from utils.url_safety import is_public_url
 from config.settings import (
     MAX_FILE_SIZE_MB,
     HOURLY_DOWNLOAD_LIMIT,
@@ -131,6 +132,19 @@ async def process_url(update: Update, context: ContextTypes.DEFAULT_TYPE, user, 
         await msg.reply_text(t(lang, "invalid_url"))
         return
 
+    # SSRF guard: never let the downloader fetch localhost, cloud metadata or
+    # any other internal address. DNS resolution runs in a worker thread, and a
+    # slow resolver fails closed (the URL is rejected) rather than blocking.
+    try:
+        safe_url, _block_reason = await asyncio.wait_for(
+            asyncio.to_thread(is_public_url, url), timeout=6
+        )
+    except asyncio.TimeoutError:
+        safe_url = False
+    if not safe_url:
+        await msg.reply_text(t(lang, "blocked_url"))
+        return
+
     rl = check_rate_limit_detailed(user.id)
     if not rl.allowed:
         if rl.reason == "daily":
@@ -183,9 +197,9 @@ async def process_url(update: Update, context: ContextTypes.DEFAULT_TYPE, user, 
     album_count = len(info.get("album_items") or [])
     keyboard = _build_action_keyboard(media_type, qualities, lang, album_count=album_count, info=info, token=token)
     caption = t(lang, "video_info",
-                title=title, uploader=uploader,
-                duration=duration,
-                platform=f"{platform_emoji} {platform}")
+                title=escape(title), uploader=escape(uploader),
+                duration=escape(duration),
+                platform=escape(f"{platform_emoji} {platform}"))
     caption += render_intelligence_html(info.get("intelligence"), lang)
     if media_type == "album" and album_count:
         caption += f"\n📂 <b>Items:</b> {album_count}"
