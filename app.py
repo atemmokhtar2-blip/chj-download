@@ -120,13 +120,16 @@ def collect_dashboard_data():
     )
     recent_downloads = safe_rows(
         """
-        SELECT created_at, user_id, COALESCE(platform, 'unknown') AS platform,
+        SELECT created_at, COALESCE(platform, 'unknown') AS platform,
                COALESCE(title, url) AS item, COALESCE(media_type, '-') AS media_type
         FROM downloads
         ORDER BY id DESC
         """,
         12,
     )
+    for row in recent_downloads:
+        item = str(row.get("item") or "")
+        row["item"] = (item[:80] + "…") if len(item) > 80 else item
     status_icon = "🟢" if BOT_HEALTH["status"] == "running" else "🟡" if BOT_HEALTH["status"] == "starting" else "🔴"
     temp_size = directory_size(TEMP_DIR)
 
@@ -143,7 +146,7 @@ def collect_dashboard_data():
     }
     config_summary = {
         "Token Loaded": "Yes" if BOT_TOKEN else "No",
-        "Admins": ", ".join(map(str, ADMIN_IDS)) or "None",
+        "Admins": f"{len(ADMIN_IDS)} admin account(s)" if ADMIN_IDS else "None",
         "Supported Domains": len(SUPPORTED_DOMAINS),
         "Max File Size": f"{MAX_FILE_SIZE_MB} MB",
         "Rate Limit": f"{RATE_LIMIT_BURST} request(s) / {RATE_LIMIT_SECONDS}s",
@@ -426,4 +429,15 @@ if __name__ == "__main__":
         dashboard_auth = (dash_user, dash_pass)
 
     logger.info("Starting Gradio server on 0.0.0.0:%s", server_port)
-    demo.launch(server_name="0.0.0.0", server_port=server_port, auth=dashboard_auth)
+    # Hardening: Gradio's /file= endpoint can otherwise serve ANY file under the
+    # app directory (e.g. .env, cookies.txt, database/*.db). Restrict it to the
+    # media temp dir so a dashboard visitor — or an auth-bypass exploit — can
+    # never exfiltrate secrets or user data. show_error=False keeps server
+    # tracebacks (paths, env names) out of the browser.
+    demo.launch(
+        server_name="0.0.0.0",
+        server_port=server_port,
+        auth=dashboard_auth,
+        show_error=False,
+        allowed_paths=[TEMP_DIR],
+    )
