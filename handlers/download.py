@@ -8,9 +8,10 @@ import logging
 import time
 from html import escape
 from telegram import (
-    Update, InlineKeyboardButton, InlineKeyboardMarkup, InputFile,
+    Update, InlineKeyboardMarkup, InputFile,
     InputMediaPhoto, InputMediaVideo,
 )
+from utils.button_text import inline_button
 from telegram.ext import ContextTypes
 from telegram.error import TelegramError, NetworkError
 
@@ -456,18 +457,18 @@ def _build_action_keyboard(
     suffix = f"|{token}" if token else ""
     keyboard = []
     if info and info.get("downloadable") is False:
-        keyboard.append([InlineKeyboardButton(t(lang, "why_no_download"), callback_data=f"dl_unavailable{suffix}")])
+        keyboard.append([inline_button(t(lang, "why_no_download"), callback_data=f"dl_unavailable{suffix}")])
         return keyboard
     if media_type == "video":
         keyboard.append([
-            InlineKeyboardButton("⚡ Smart Download", callback_data=f"dl_smart{suffix}"),
+            inline_button("⚡ Smart Download", callback_data=f"dl_smart{suffix}"),
         ])
         keyboard.append([
-            InlineKeyboardButton(t(lang, "best_quality"), callback_data=f"dl_video_best{suffix}"),
-            InlineKeyboardButton("🎧 MP3 / صوت فقط", callback_data=f"dl_audio{suffix}"),
+            inline_button(t(lang, "best_quality"), callback_data=f"dl_video_best{suffix}"),
+            inline_button("🎧 MP3 / صوت فقط", callback_data=f"dl_audio{suffix}"),
         ])
         keyboard.append([
-            InlineKeyboardButton("🎵 MP3 320kbps — أعلى نقاء", callback_data=f"dl_audio_320{suffix}"),
+            inline_button("🎵 MP3 320kbps — أعلى نقاء", callback_data=f"dl_audio_320{suffix}"),
         ])
         real_qualities = [
             q for q in (qualities or [])
@@ -475,17 +476,17 @@ def _build_action_keyboard(
         ]
         for q in real_qualities:
             keyboard.append([
-                InlineKeyboardButton(f"📹 {q['label']}", callback_data=f"dl_video_{q['label']}{suffix}"),
+                inline_button(f"📹 {q['label']}", callback_data=f"dl_video_{q['label']}{suffix}"),
             ])
     elif media_type == "audio":
-        keyboard.append([InlineKeyboardButton(t(lang, "download_audio"), callback_data=f"dl_audio{suffix}")])
+        keyboard.append([inline_button(t(lang, "download_audio"), callback_data=f"dl_audio{suffix}")])
     elif media_type == "image":
-        keyboard.append([InlineKeyboardButton(t(lang, "download_image"), callback_data=f"dl_image{suffix}")])
+        keyboard.append([inline_button(t(lang, "download_image"), callback_data=f"dl_image{suffix}")])
     elif media_type == "album":
         label = t(lang, "download_album")
         if album_count:
             label = f"{label} ({album_count})"
-        keyboard.append([InlineKeyboardButton(label, callback_data=f"dl_album{suffix}")])
+        keyboard.append([inline_button(label, callback_data=f"dl_album{suffix}")])
     return keyboard
 
 async def download_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
