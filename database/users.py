@@ -43,6 +43,14 @@ def update_last_seen(user_id: int):
 def increment_downloads(user_id: int):
     with db_cursor() as c:
         c.execute("UPDATE users SET downloads = downloads + 1 WHERE user_id = ?", (user_id,))
+    # Referral rule (a) — coverage for cache-hit deliveries, which increment
+    # the counter without going through log_download. Idempotent: a referral
+    # can only be qualified once (status moves pending -> qualified atomically).
+    try:
+        from services import referral
+        referral.on_successful_download(user_id)
+    except Exception:
+        pass
 
 def get_all_user_ids() -> list[int]:
     with db_cursor() as c:

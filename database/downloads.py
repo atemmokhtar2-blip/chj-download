@@ -7,7 +7,17 @@ def log_download(user_id: int, url: str, title: str, platform: str,
             INSERT INTO downloads (user_id, url, title, platform, quality, media_type, file_size)
             VALUES (?, ?, ?, ?, ?, ?, ?)
         """, (user_id, url, title, platform, quality, media_type, file_size))
-        return c.lastrowid
+        row_id = c.lastrowid
+
+    # Referral rule (a): a user's FIRST successful download qualifies their
+    # pending referral. Hooked here because every successful delivery path
+    # funnels through log_download — one choke point, no missed paths.
+    try:
+        from services import referral
+        referral.on_successful_download(user_id)
+    except Exception:
+        pass
+    return row_id
 
 def get_downloads_today() -> int:
     with db_cursor() as c:

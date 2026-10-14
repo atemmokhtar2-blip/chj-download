@@ -1,0 +1,469 @@
+"""Referral & clone-instance reward engine.
+
+Core rules (exactly as specified):
+  * Every Telegram account counts ONCE — ``referrals.referred_id`` is UNIQUE.
+  * Nobody can refer themselves, and a binding can never be moved to another
+    referrer after the fact.
+  * The user must actually START the bot (binding only happens on /start with
+    a ref_ code, for brand-new accounts).
+  * A referral becomes QUALIFIED when the referred user either
+      (a) completes their FIRST successful download, or
+      (b) uses the bot on 2 different UTC days.
+  * Anti-fraud: binding velocity per referrer is capped per hour (excess
+    bindings are marked ``suspicious`` and never count), banned users are
+    rejected, and reward claims are atomic (a reward can never be granted
+    twice even if the button is pressed 10 times).
+
+Tokens are secrets with full bot privileges:
+  * stored ONLY encrypted (Fernet/AES128-CBC+HMAC via ``cryptography``),
+  * a sha256 hash guarantees a token is never linked to two instances,
+  * the plaintext never appears in logs, and callers delete the user's
+    message immediately after capture.
+"""
+
+from __future__ import annotations
+
+import base64
+import hashlib
+import logging
+import os
+import re
+import secrets
+import string
+from datetime import datetime, timezone
+
+from database import pg
+from config.settings import (
+    BOT_TOKEN, MAIN_BOT_USERNAME, REFERRAL_TARGET, BOT_SECRETS_KEY,
+)
+
+logger = logging.getLogger(__name__)
+
+# ---- anti-fraud knobs --------------------------------------------------------
+MAX_BINDS_PER_HOUR = int(os.getenv("REFERRAL_MAX_BINDS_PER_HOUR", "20"))
+CODE_LEN = 6
+_CODE_ALPHABET = string.ascii_uppercase + string.digits
+
+_TOKEN_RE = re.compile(r"^\d{5,}:[A-Za-z0-9_-]{30,}$")
+
+
+# ---- token crypto ------------------------------------------------------------
+
+def _fernet_key() -> bytes:
+    """32-byte urlsafe key. Prefers BOT_SECRETS_KEY; else derives from the
+    main bot token (never logged)."""
+    if BOT_SECRETS_KEY:
+        digest = hashlib.sha256(BOT_SECRETS_KEY.encode()).digest()
+    else:
+        digest = hashlib.sha256(("chj::" + (BOT_TOKEN or "dev")).encode()).digest()
+    return base64.urlsafe_b64encode(digest)
+
+
+def encrypt_token(plaintext: str) -> str:
+    from cryptography.fernet import Fernet
+    return Fernet(_fernet_key()).encrypt(plaintext.encode()).decode()
+
+
+def decrypt_token(ciphertext: str) -> str:
+    from cryptography.fernet import Fernet
+    return Fernet(_fernet_key()).decrypt(ciphertext.encode()).decode()
+
+
+def hash_token(plaintext: str) -> str:
+    return hashlib.sha256(plaintext.strip().encode()).hexdigest()
+
+
+def looks_like_token(text: str) -> bool:
+    return bool(_TOKEN_RE.match((text or "").strip()))
+
+
+# ---- codes & links ------------------------------------------------------------
+
+def get_or_create_code(owner_id: int) -> str:
+    """Permanent per-user referral code (created once, reused forever)."""
+    row = pg.fetchone("SELECT code FROM referral_codes WHERE owner_id = ?", (owner_id,))
+    if row:
+        return row["code"]
+    for _ in range(8):
+        code = "ref_" + "".join(secrets.choice(_CODE_ALPHABET) for _ in range(CODE_LEN))
+        try:
+            pg.execute(
+                "INSERT INTO referral_codes (owner_id, code) VALUES (?, ?)",
+                (owner_id, code),
+            )
+            return code
+        except Exception:
+            # UNIQUE collision on either owner or code — re-read / retry.
+            row = pg.fetchone("SELECT code FROM referral_codes WHERE owner_id = ?", (owner_id,))
+            if row:
+                return row["code"]
+    raise RuntimeError("Could not allocate a referral code")
+
+
+def referral_link(owner_id: int, bot_username: str | None = None) -> str:
+    username = (bot_username or MAIN_BOT_USERNAME or "").strip().lstrip("@")
+    code = get_or_create_code(owner_id)
+    if username:
+        return f"https://t.me/{username}?start={code}"
+    return code  # username unknown (clone without MAIN_BOT_USERNAME set)
+
+
+# ---- user registry & activity --------------------------------------------------
+
+def _today() -> str:
+    return datetime.now(timezone.utc).strftime("%Y-%m-%d")
+
+
+def register_user(tg_user, is_new: bool, source: str = "main") -> None:
+    """Upsert the referral-network user mirror + record today's activity."""
+    uid = int(tg_user.id)
+    today = _today()
+    now_iso = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    existing = pg.fetchone("SELECT activity_days FROM ref_users WHERE telegram_id = ?", (uid,))
+    if existing is None:
+        pg.execute(
+            "INSERT INTO ref_users (telegram_id, username, first_name, source, registered_at, last_active_at, activity_days) "
+            "VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP, ?, ?)",
+            (uid, (tg_user.username or "")[:64], (tg_user.first_name or "")[:64], source[:40], now_iso, today),
+        )
+    else:
+        days = set(d for d in (existing.get("activity_days") or "").split(",") if d)
+        days.add(today)
+        days_str = ",".join(sorted(days))[-400:]
+        pg.execute(
+            "UPDATE ref_users SET last_active_at = ?, activity_days = ?, username = ?, first_name = ? WHERE telegram_id = ?",
+            (now_iso, days_str, (tg_user.username or "")[:64], (tg_user.first_name or "")[:64], uid),
+        )
+    if not is_new:
+        # Returning user: 2 distinct activity days can qualify a pending referral.
+        _maybe_qualify_by_activity(uid)
+
+
+def _is_banned(user_id: int) -> bool:
+    try:
+        from database.users import get_user
+        u = get_user(user_id)
+        return bool(u and u.get("is_banned"))
+    except Exception:
+        return False
+
+
+def bind_referral(code: str | None, new_user_id: int) -> str:
+    """Attribute a BRAND-NEW user to a referrer. Returns a status string:
+    bound | suspicious | self | dup | bad_code | banned | flood | no_code
+    """
+    if not code:
+        return "no_code"
+    code = str(code).strip()
+    if not code.startswith("ref_"):
+        return "bad_code"
+    row = pg.fetchone("SELECT owner_id FROM referral_codes WHERE code = ?", (code,))
+    if not row:
+        return "bad_code"
+    referrer_id = int(row["owner_id"])
+    if referrer_id == int(new_user_id):
+        return "self"
+    if _is_banned(referrer_id) or _is_banned(new_user_id):
+        return "banned"
+
+    # Velocity guard: too many fresh bindings per hour -> suspicious (never counted).
+    recent = pg.fetchone(
+        "SELECT COUNT(*) AS cnt FROM referrals WHERE referrer_id = ? AND bound_at >= CURRENT_TIMESTAMP - INTERVAL '1 hour'",
+        (referrer_id,),
+    ) if pg.BACKEND == "postgres" else pg.fetchone(
+        "SELECT COUNT(*) AS cnt FROM referrals WHERE referrer_id = ? AND bound_at >= datetime('now', '-1 hour')",
+        (referrer_id,),
+    )
+    status = "pending"
+    if recent and int(recent["cnt"]) >= MAX_BINDS_PER_HOUR:
+        status = "suspicious"
+        log_activation(referrer_id, None, "referral_flood_flag",
+                       f"referred={new_user_id} binds_last_hour={recent['cnt']}")
+
+    try:
+        pg.execute(
+            "INSERT INTO referrals (referrer_id, referred_id, code, status) VALUES (?, ?, ?, ?)",
+            (referrer_id, int(new_user_id), code, status),
+        )
+    except Exception:
+        return "dup"  # referred_id UNIQUE — account already attributed once.
+    _ensure_reward_row(referrer_id)
+    return status
+
+
+# ---- qualification -------------------------------------------------------------
+
+def _ensure_reward_row(user_id: int) -> None:
+    pg.execute(
+        "INSERT INTO referral_rewards (user_id, qualified_count, status) VALUES (?, 0, 'progress') "
+        "ON CONFLICT (user_id) DO NOTHING",
+        (user_id,),
+    )
+
+
+def _recount_and_update_reward(referrer_id: int) -> dict:
+    row = pg.fetchone(
+        "SELECT COUNT(*) AS cnt FROM referrals WHERE referrer_id = ? AND status = 'qualified'",
+        (referrer_id,),
+    )
+    count = int(row["cnt"]) if row else 0
+    _ensure_reward_row(referrer_id)
+    reward = pg.fetchone("SELECT status FROM referral_rewards WHERE user_id = ?", (referrer_id,))
+    new_status = (reward or {}).get("status", "progress")
+    if new_status == "progress" and count >= REFERRAL_TARGET:
+        new_status = "eligible"
+        log_activation(referrer_id, None, "reward_eligible", f"qualified={count}")
+    pg.execute(
+        "UPDATE referral_rewards SET qualified_count = ?, status = ? WHERE user_id = ? AND status IN ('progress', 'eligible')",
+        (count, new_status, referrer_id),
+    )
+    return {"qualified": count, "status": new_status}
+
+
+def _qualify_referral(referred_id: int, reason: str) -> bool:
+    """Move a pending referral to qualified (once), then refresh the reward."""
+    row = pg.fetchone("SELECT referrer_id, status FROM referrals WHERE referred_id = ?", (int(referred_id),))
+    if not row or row["status"] != "pending":
+        return False
+    affected = pg.execute(
+        "UPDATE referrals SET status = 'qualified', qualified_at = CURRENT_TIMESTAMP "
+        "WHERE referred_id = ? AND status = 'pending'",
+        (int(referred_id),),
+    )
+    if not affected:
+        return False
+    referrer_id = int(row["referrer_id"])
+    result = _recount_and_update_reward(referrer_id)
+    log_activation(referrer_id, None, "referral_qualified",
+                   f"referred={referred_id} reason={reason} total={result['qualified']}")
+    return True
+
+
+def on_successful_download(user_id: int) -> None:
+    """Rule (a): first successful download qualifies the referral."""
+    try:
+        _qualify_referral(user_id, "first_download")
+    except Exception:
+        logger.exception("referral qualify (download) failed uid=%s", user_id)
+
+
+def _maybe_qualify_by_activity(user_id: int) -> None:
+    """Rule (b): activity on 2+ distinct UTC days qualifies the referral."""
+    try:
+        row = pg.fetchone("SELECT activity_days FROM ref_users WHERE telegram_id = ?", (int(user_id),))
+        if not row:
+            return
+        days = [d for d in (row.get("activity_days") or "").split(",") if d]
+        if len(days) >= 2:
+            _qualify_referral(user_id, "two_active_days")
+    except Exception:
+        logger.exception("referral qualify (activity) failed uid=%s", user_id)
+
+
+# ---- stats ------------------------------------------------------------------------
+
+def get_stats(user_id: int) -> dict:
+    uid = int(user_id)
+    _ensure_reward_row(uid)
+    reward = pg.fetchone("SELECT * FROM referral_rewards WHERE user_id = ?", (uid,)) or {}
+    qualified = pg.fetchone(
+        "SELECT COUNT(*) AS cnt FROM referrals WHERE referrer_id = ? AND status = 'qualified'", (uid,)
+    )["cnt"]
+    pending = pg.fetchone(
+        "SELECT COUNT(*) AS cnt FROM referrals WHERE referrer_id = ? AND status = 'pending'", (uid,)
+    )["cnt"]
+    suspicious = pg.fetchone(
+        "SELECT COUNT(*) AS cnt FROM referrals WHERE referrer_id = ? AND status = 'suspicious'", (uid,)
+    )["cnt"]
+    qualified = int(qualified or 0)
+    target = REFERRAL_TARGET
+    pct = min(100.0, round(qualified * 100.0 / target, 1)) if target else 0.0
+    instance = pg.fetchone(
+        "SELECT id, bot_username, status FROM bot_instances WHERE owner_id = ? ORDER BY id DESC LIMIT 1", (uid,)
+    )
+    return {
+        "qualified": qualified,
+        "pending": int(pending or 0),
+        "suspicious": int(suspicious or 0),
+        "target": target,
+        "percent": pct,
+        "reward_status": reward.get("status", "progress"),
+        "instance": instance,
+        "code": get_or_create_code(uid),
+    }
+
+
+def get_referrals_list(user_id: int, limit: int = 10, offset: int = 0) -> list[dict]:
+    return pg.fetchall(
+        "SELECT referred_id, status, bound_at, qualified_at FROM referrals "
+        "WHERE referrer_id = ? ORDER BY id DESC LIMIT ? OFFSET ?",
+        (int(user_id), limit, offset),
+    )
+
+
+# ---- reward claim (atomic, single-shot) --------------------------------------------
+
+def claim_reward(user_id: int) -> tuple[bool, str]:
+    """Atomically move eligible -> awaiting_token. Only ONE call ever wins,
+    even under double-taps or retries. Returns (ok, reason)."""
+    uid = int(user_id)
+    _ensure_reward_row(uid)
+    reward = pg.fetchone("SELECT status, qualified_count FROM referral_rewards WHERE user_id = ?", (uid,)) or {}
+    status = reward.get("status", "progress")
+    if status in ("awaiting_token", "claimed"):
+        return True, status  # already in the flow — idempotent
+    if status != "eligible":
+        return False, "not_eligible"
+    affected = pg.execute(
+        "UPDATE referral_rewards SET status = 'awaiting_token' WHERE user_id = ? AND status = 'eligible'",
+        (uid,),
+    )
+    if not affected:
+        # Lost a race against another press — re-read; treat as already claimed.
+        reward = pg.fetchone("SELECT status FROM referral_rewards WHERE user_id = ?", (uid,)) or {}
+        return True, reward.get("status", "awaiting_token")
+    instance_id = pg.insert_returning_id(
+        "INSERT INTO bot_instances (owner_id, status) VALUES (?, 'pending_token')", (uid,)
+    )
+    pg.execute(
+        "UPDATE referral_rewards SET instance_id = ? WHERE user_id = ?", (instance_id, uid)
+    )
+    log_activation(uid, instance_id, "reward_claimed", f"qualified={reward.get('qualified_count')}")
+    return True, "awaiting_token"
+
+
+# ---- token verification & instance activation ----------------------------------------
+
+def _tg_get_me(token: str) -> dict:
+    """Call Telegram getMe. Raises RuntimeError with a SAFE message (the token
+    itself must never appear in exceptions or logs)."""
+    import json
+    import urllib.request
+    import urllib.error
+    url = f"https://api.telegram.org/bot{token}/getMe"
+    req = urllib.request.Request(url, headers={"User-Agent": "chj-referral/1.0"})
+    try:
+        with urllib.request.urlopen(req, timeout=20) as resp:
+            data = json.loads(resp.read().decode())
+    except urllib.error.HTTPError as he:
+        try:
+            detail = json.loads(he.read().decode()).get("description", "")
+        except Exception:
+            detail = ""
+        raise RuntimeError(detail or "invalid_token")
+    except Exception:
+        raise RuntimeError("network_error")
+    if not data.get("ok"):
+        raise RuntimeError("invalid_token")
+    return data["result"]
+
+
+def verify_and_link_token(owner_id: int, token_text: str) -> dict:
+    """Full verification pipeline. Returns a dict:
+    {ok: True, instance_id, bot_username, bot_id} or {ok: False, reason}.
+    Reasons: invalid_token | network_error | already_linked | not_claimed |
+             main_bot_token | shape
+    """
+    uid = int(owner_id)
+    token_text = (token_text or "").strip()
+    if not looks_like_token(token_text):
+        return {"ok": False, "reason": "shape"}
+    if BOT_TOKEN and token_text == BOT_TOKEN.strip():
+        return {"ok": False, "reason": "main_bot_token"}
+
+    reward = pg.fetchone("SELECT status, instance_id FROM referral_rewards WHERE user_id = ?", (uid,)) or {}
+    if reward.get("status") not in ("awaiting_token", "claimed"):
+        return {"ok": False, "reason": "not_claimed"}
+    instance_id = reward.get("instance_id")
+    if not instance_id:
+        return {"ok": False, "reason": "not_claimed"}
+
+    try:
+        me = _tg_get_me(token_text)
+    except RuntimeError as exc:
+        reason = str(exc)
+        log_activation(uid, instance_id, "token_verify_failed", reason[:120])
+        return {"ok": False, "reason": "invalid_token" if "token" in reason or "Unauthorized" in reason else "network_error"}
+
+    bot_id = int(me["id"])
+    bot_username = me.get("username", "")
+
+    thash = hash_token(token_text)
+    if pg.fetchone("SELECT instance_id FROM bot_secrets WHERE token_hash = ?", (thash,)):
+        return {"ok": False, "reason": "already_linked"}
+    existing = pg.fetchone(
+        "SELECT id, owner_id FROM bot_instances WHERE bot_id = ? AND status = 'active'", (bot_id,)
+    )
+    if existing:
+        return {"ok": False, "reason": "already_linked"}
+
+    try:
+        # Upsert: re-linking the SAME instance with a fresh token (e.g. the
+        # owner revoked the old one in BotFather) must replace the secret,
+        # while token_hash UNIQUE still blocks one token serving two clones.
+        pg.execute(
+            "INSERT INTO bot_secrets (instance_id, token_encrypted, token_hash) VALUES (?, ?, ?) "
+            "ON CONFLICT (instance_id) DO UPDATE SET token_encrypted = EXCLUDED.token_encrypted, token_hash = EXCLUDED.token_hash",
+            (instance_id, encrypt_token(token_text), thash),
+        )
+    except Exception:
+        return {"ok": False, "reason": "already_linked"}
+
+    pg.execute(
+        "UPDATE bot_instances SET bot_id = ?, bot_username = ?, status = 'active', "
+        "activated_at = CURRENT_TIMESTAMP, last_error = '' WHERE id = ?",
+        (bot_id, bot_username[:64], instance_id),
+    )
+    for key, value in (
+        ("clone_mode", "1"),
+        ("owner_id", str(uid)),
+        ("back_to_main", MAIN_BOT_USERNAME or ""),
+    ):
+        pg.execute(
+            "INSERT INTO bot_settings (instance_id, key, value) VALUES (?, ?, ?) "
+            "ON CONFLICT (instance_id, key) DO UPDATE SET value = EXCLUDED.value",
+            (instance_id, key, value),
+        )
+    pg.execute(
+        "UPDATE referral_rewards SET status = 'claimed', claimed_at = CURRENT_TIMESTAMP WHERE user_id = ?",
+        (uid,),
+    )
+    log_activation(uid, instance_id, "instance_activated", f"bot=@{bot_username} bot_id={bot_id}")
+    return {"ok": True, "instance_id": instance_id, "bot_username": bot_username, "bot_id": bot_id}
+
+
+def load_instance_token(instance_id: int) -> str | None:
+    row = pg.fetchone("SELECT token_encrypted FROM bot_secrets WHERE instance_id = ?", (int(instance_id),))
+    if not row:
+        return None
+    try:
+        token = decrypt_token(row["token_encrypted"])
+        pg.execute("UPDATE bot_secrets SET last_used_at = CURRENT_TIMESTAMP WHERE instance_id = ?", (int(instance_id),))
+        return token
+    except Exception:
+        logger.exception("Token decrypt failed for instance %s", instance_id)
+        return None
+
+
+def list_active_instances() -> list[dict]:
+    return pg.fetchall("SELECT * FROM bot_instances WHERE status = 'active' ORDER BY id ASC")
+
+
+def set_instance_error(instance_id: int, error: str) -> None:
+    try:
+        pg.execute("UPDATE bot_instances SET last_error = ? WHERE id = ?", (error[:300], int(instance_id)))
+    except Exception:
+        pass
+
+
+# ---- audit -------------------------------------------------------------------------
+
+def log_activation(owner_id, instance_id, action: str, details: str = "") -> None:
+    """Append-only audit trail for every activation-related operation."""
+    try:
+        pg.execute(
+            "INSERT INTO activation_log (owner_id, instance_id, action, details) VALUES (?, ?, ?, ?)",
+            (owner_id, instance_id, action[:60], (details or "")[:300]),
+        )
+    except Exception:
+        logger.exception("activation log failed action=%s", action)

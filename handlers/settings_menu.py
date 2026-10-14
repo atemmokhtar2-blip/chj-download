@@ -161,6 +161,7 @@ def build_home(settings: dict) -> tuple[str, list]:
         "اختار القسم اللي عايز تعدّله:"
     )
     rows = [
+        [("🟢 🎁 اكسب نسختك من البوت", "settings:referral")],
         [("🔵 🎯 الجودة والحجم", "settings:quality")],
         [("🔵 📦 طريقة الاستلام", "settings:delivery")],
         [("🔵 ⚡ مدير التحميلات", "settings:queue")],
@@ -527,6 +528,13 @@ async def settings_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.message.delete()
         except Exception:
             pass
+        return
+
+    # 🎁 Referral center — its own async module (pages, reward claim, and the
+    # secure token-linking flow live in handlers/referral.py).
+    if data == "settings:referral":
+        from handlers.referral import referral_page
+        await referral_page(update, context, edit=True)
         return
 
     # Re-download from history must actually START a download, so it lives in

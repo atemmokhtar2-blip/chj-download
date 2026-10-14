@@ -77,6 +77,22 @@ YTDLP_CLIENT = os.getenv("YTDLP_CLIENT", "android").strip()
 CACHE_TTL_SECONDS = int(os.getenv("CACHE_TTL_SECONDS", "86400"))
 CACHE_MAX_SIZE = int(os.getenv("CACHE_MAX_SIZE", "1000"))
 
+# ---- Referral network & clone instances ------------------------------------
+# MAIN_BOT_USERNAME: the official bot's @username (no @). Used for referral
+# deep links and the "العودة إلى البوت الأساسي" button inside every clone.
+MAIN_BOT_USERNAME = os.getenv("MAIN_BOT_USERNAME", "").strip().lstrip("@")
+# Qualified referrals required to earn a clone instance.
+REFERRAL_TARGET = int(os.getenv("REFERRAL_TARGET", "70"))
+# Encryption key for stored clone bot tokens (any long random string).
+# If empty, a key is derived from TELEGRAM_BOT_TOKEN — setting this explicitly
+# is strongly recommended in production.
+BOT_SECRETS_KEY = os.getenv("BOT_SECRETS_KEY", "").strip()
+# Master switch for running earned clone instances in this process.
+ENABLE_CLONE_INSTANCES = os.getenv("ENABLE_CLONE_INSTANCES", "1") == "1"
+# Neon/Postgres DSN is resolved in database/pg.py from NEON_DATABASE_URL /
+# POSTGRES_URL / DATABASE_URL (postgres:// prefix). Without one, the referral
+# tables live in the same SQLite file as the rest of the bot.
+
 SUPPORTED_DOMAINS = [
     "youtube.com", "youtu.be", "youtube-nocookie.com", "m.youtube.com", "music.youtube.com",
     "tiktok.com", "vm.tiktok.com", "vt.tiktok.com", "m.tiktok.com",

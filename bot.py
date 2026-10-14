@@ -30,6 +30,7 @@ from handlers.admin import (
     engine_status_command, update_ytdlp_command, health_command,
     callbacks_health_command, commands_command,
 )
+from handlers.referral import referral_callback, try_handle_token_message
 from workers.cleanup import cleanup_temp_files, cleanup_old_cache, cleanup_old_history
 
 # Arabic-only main menu.
@@ -62,6 +63,12 @@ async def message_router(update: Update, context):
     """Route text messages — handle menu buttons and URLs."""
     text = (update.message.text or "").strip()
 
+    # Secure clone-token capture runs FIRST: while a user is in the
+    # awaiting-token state, any text they send is treated as the token,
+    # deleted immediately, and never routed anywhere else.
+    if await try_handle_token_message(update, context):
+        return
+
     if await try_handle_settings_text(update, context):
         return
 
@@ -92,12 +99,30 @@ async def message_router(update: Update, context):
         await handle_url(update, context)
 
 
-async def post_init(application: Application):
-    system_logger.info("Bot starting up...")
-    asyncio.create_task(cleanup_temp_files())
-    asyncio.create_task(cleanup_old_cache())
-    asyncio.create_task(cleanup_old_history())
-    system_logger.info("Background workers started.")
+def _make_post_init(is_clone: bool):
+    """post_init factory: workers + clone-network boot run ONLY in the main bot.
+
+    Clone instances share this process and codebase; running cleanup workers
+    or the instance spawner inside every clone would duplicate work and could
+    recursively spawn instances. Clones just log that they are up.
+    """
+    async def post_init(application: Application):
+        if is_clone:
+            system_logger.info("Clone bot @%s started.", application.bot.username)
+            return
+        system_logger.info("Bot starting up...")
+        asyncio.create_task(cleanup_temp_files())
+        asyncio.create_task(cleanup_old_cache())
+        asyncio.create_task(cleanup_old_history())
+        system_logger.info("Background workers started.")
+        # Boot the clone network: start every ACTIVE earned instance inside
+        # this process (referral schema is already initialized in main()).
+        try:
+            from services.instance_manager import start_active_instances
+            asyncio.create_task(start_active_instances())
+        except Exception:
+            system_logger.exception("Clone instance bootstrap failed")
+    return post_init
 
 
 async def global_error_handler(update: object, context) -> None:
@@ -124,11 +149,18 @@ async def global_error_handler(update: object, context) -> None:
         pass
 
 
-def build_application() -> Application:
-    if not BOT_TOKEN:
+def build_application(token: str | None = None, clone: bool = False) -> Application:
+    """Build one Application.
+
+    ``token=None`` → the main bot (TELEGRAM_BOT_TOKEN). ``clone=True`` marks a
+    referral-earned instance: identical handler wiring, but no duplicated
+    background workers and no recursive instance spawning (see _make_post_init).
+    """
+    bot_token = (token or BOT_TOKEN or "").strip()
+    if not bot_token:
         raise ValueError("TELEGRAM_BOT_TOKEN is not set.")
 
-    app = Application.builder().token(BOT_TOKEN).post_init(post_init).build()
+    app = Application.builder().token(bot_token).post_init(_make_post_init(clone)).build()
 
     # No language-selection conversation: /start immediately opens the Arabic bot.
     app.add_handler(CommandHandler("start", start_command))
@@ -155,6 +187,7 @@ def build_application() -> Application:
 
     app.add_handler(CallbackQueryHandler(noop_callback, pattern="^noop$"))
     app.add_handler(CallbackQueryHandler(admin_callback, pattern="^admin_"))
+    app.add_handler(CallbackQueryHandler(referral_callback, pattern="^ref:"))
     # Legacy buttons are handled without allowing a language switch.
     app.add_handler(CallbackQueryHandler(language_callback, pattern="^lang_"))
     app.add_handler(CallbackQueryHandler(settings_callback, pattern="^settings"))
@@ -171,6 +204,15 @@ def build_application() -> Application:
 def main():
     init_db()
     system_logger.info("Database initialized.")
+    # Referral/clone tables (Neon Postgres when NEON_DATABASE_URL is set,
+    # otherwise the local SQLite file) must exist before the first /start
+    # attribution or any claim attempt.
+    try:
+        from database.pg import init_referral_schema, backend_name
+        init_referral_schema()
+        system_logger.info("Referral schema ready (backend=%s).", backend_name())
+    except Exception:
+        system_logger.exception("Referral schema init failed — referral features degraded.")
     app = build_application()
     system_logger.info("Bot polling started.")
     app.run_polling(
