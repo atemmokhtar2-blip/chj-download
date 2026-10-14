@@ -81,39 +81,6 @@ class TikTokEngine(PlatformEngine):
             fallback["engine_profile"] = "yt-dlp-generic-fallback"
         return self._tag(fallback)
 
-    async def download_audio(self, url: str, progress_callback: Callable | None = None) -> str | None:
-        """Try the original TikTok music CDN first, then fall back to yt-dlp merge."""
-        from services import downloader
-        from services.tiktok_scraper import scrape_tiktok, download_tiktok_audio_direct
-        from middlewares.concurrency import get_executor
-        import asyncio
-
-        loop = asyncio.get_running_loop()
-        try:
-            meta = await loop.run_in_executor(get_executor(), scrape_tiktok, url)
-            music = (meta or {}).get("music_url")
-            if music:
-                safe_name = sanitize_filename(f"tiktok_music_{hash(url) % 100000}")
-                out_path = os.path.join(TEMP_DIR, safe_name)
-                path = await loop.run_in_executor(
-                    get_executor(),
-                    download_tiktok_audio_direct,
-                    music,
-                    out_path,
-                )
-                if path:
-                    if progress_callback:
-                        try:
-                            await progress_callback({"pct": 100, "downloaded": 1, "total": 1, "speed": 0, "eta": 0})
-                        except Exception:
-                            pass
-                    download_logger.info("TikTokEnginePro used direct music CDN: %s", str(music)[:100])
-                    return path
-        except Exception as exc:
-            download_logger.warning("TikTokEnginePro direct audio failed: %s", exc)
-
-        return await downloader._generic_download_audio(url, progress_callback)
-
     async def download_video(
         self,
         url: str,
@@ -363,6 +330,7 @@ class FacebookEngine(PlatformEngine):
         loop = asyncio.get_running_loop()
         candidate = play_url
         prefer_page_download = False
+        direct_has_audio = False
         normalized_url = url
         if not candidate:
             try:
@@ -370,16 +338,21 @@ class FacebookEngine(PlatformEngine):
                 if meta:
                     normalized_url = meta.get("webpage_url") or meta.get("url") or url
                     prefer_page_download = bool(meta.get("prefer_page_download"))
+                    direct_has_audio = bool(meta.get("direct_has_audio"))
                     candidate = meta.get("hd_url") if format_id == "hd" else meta.get("play_url")
                     candidate = candidate or meta.get("play_url")
                     download_logger.info(
                         "FacebookEnginePro selected source=%s score=%s direct_has_audio=%s prefer_page=%s",
-                        meta.get("source"), meta.get("provider_score"), meta.get("direct_has_audio"), prefer_page_download,
+                        meta.get("source"), meta.get("provider_score"), direct_has_audio, prefer_page_download,
                     )
             except Exception as exc:
                 error_logger.error("FacebookEnginePro resolve before download failed: %s", exc)
 
-        if candidate and not prefer_page_download:
+        # Facebook splits video and audio into separate DASH streams. A direct
+        # CDN URL is trusted only when a provider explicitly verified that it
+        # carries audio; otherwise force the yt-dlp page download so audio gets
+        # merged instead of delivering a silent video.
+        if candidate and direct_has_audio and not prefer_page_download:
             try:
                 direct_path = await loop.run_in_executor(
                     get_executor(),

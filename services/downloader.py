@@ -587,7 +587,12 @@ def _has_audio_stream(path: str) -> bool | None:
 
 
 def _require_audio_or_none(path: str | None, *, source: str = "direct") -> str | None:
-    """Reject verified silent/video-only files so callers can fall back to yt-dlp merge."""
+    """Reject silent or unverifiable video files so callers fall back to yt-dlp merge.
+
+    Fail-closed: if we cannot prove the file has an audio stream we drop it.
+    Delivering a silent video is always worse than retrying through a path that
+    can merge audio (yt-dlp progressive or bestvideo+bestaudio).
+    """
     if not path:
         return None
     has_audio = _has_audio_stream(path)
@@ -595,7 +600,7 @@ def _require_audio_or_none(path: str | None, *, source: str = "direct") -> str |
         logger.warning("Rejected %s download without audio stream: %s", source, path)
         _safe_remove(path)
         return None
-    if has_audio is None and _ffmpeg_path():
+    if has_audio is None:
         logger.warning("Rejected %s download because audio stream could not be verified: %s", source, path)
         _safe_remove(path)
         return None
