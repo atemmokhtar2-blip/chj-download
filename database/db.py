@@ -138,6 +138,23 @@ def init_db():
                 value TEXT NOT NULL DEFAULT ''
             );
 
+            CREATE TABLE IF NOT EXISTS user_settings (
+                user_id                INTEGER PRIMARY KEY,
+                video_quality          TEXT    DEFAULT 'auto',
+                audio_quality          TEXT    DEFAULT 'normal',
+                max_file_size_mb       INTEGER DEFAULT 0,
+                delivery_mode          TEXT    DEFAULT 'video',
+                auto_cleanup           INTEGER DEFAULT 1,
+                history_retention_days INTEGER DEFAULT 30,
+                notify_complete        INTEGER DEFAULT 1,
+                notify_failure         INTEGER DEFAULT 1,
+                notify_progress        INTEGER DEFAULT 1,
+                notify_queue           INTEGER DEFAULT 1,
+                quiet_mode             INTEGER DEFAULT 0,
+                updated_at             TEXT    DEFAULT (datetime('now')),
+                FOREIGN KEY (user_id) REFERENCES users(user_id)
+            );
+
             CREATE INDEX IF NOT EXISTS idx_downloads_user    ON downloads(user_id);
             CREATE INDEX IF NOT EXISTS idx_downloads_date    ON downloads(created_at);
             CREATE INDEX IF NOT EXISTS idx_cache_hash        ON file_cache(url_hash);

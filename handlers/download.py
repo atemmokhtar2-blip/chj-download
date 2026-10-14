@@ -16,6 +16,7 @@ from telegram.error import TelegramError, NetworkError
 
 from database.users import get_user, increment_downloads
 from database.downloads import log_download
+from database.user_settings import get_user_settings, AUDIO_QUALITY_BITRATE
 from database.cache import (
     get_cached, set_cache, invalidate_cache, get_cached_album, set_cache_album,
     resolve_cached_delivery, set_cache_with_meta, make_fingerprint,
@@ -299,8 +300,14 @@ def _quality_height(label: str) -> int:
         return 0
 
 
-def _pick_smart_download(info: dict) -> tuple[bool, bool, bool, str]:
-    """Return (is_audio, is_image, is_album, quality_label) for one-tap smart mode."""
+def _pick_smart_download(info: dict, settings: dict | None = None) -> tuple[bool, bool, bool, str]:
+    """Return (is_audio, is_image, is_album, quality_label) for one-tap smart mode.
+
+    Honors the user's saved preferences: delivery_mode=audio forces MP3
+    extraction, video_quality selects a specific default, audio_quality is
+    applied by the caller (bitrate mapping).
+    """
+    settings = settings or {}
     media_type = info.get("media_type", "video")
     if media_type == "audio":
         return True, False, False, "audio"
@@ -309,27 +316,49 @@ def _pick_smart_download(info: dict) -> tuple[bool, bool, bool, str]:
     if media_type == "album":
         return False, False, True, "album"
 
-    intel = info.get("intelligence") or {}
-    risk = str(intel.get("risk") or "unknown").lower()
-    qualities = info.get("qualities") or []
-
-    if risk == "high" or "Long video" in " • ".join(intel.get("badges") or []):
+    # User chose "استخراج الصوت" as the default delivery for videos.
+    if str(settings.get("delivery_mode") or "video") == "audio":
         return True, False, False, "audio"
 
-    if risk == "medium" and qualities:
-        safe_quality = None
-        for q in sorted(qualities, key=lambda item: _quality_height(item.get("label", "0p")), reverse=True):
-            label = q.get("label", "")
-            if _quality_height(label) <= 720:
-                safe_quality = label
-                break
-        if safe_quality:
-            return False, False, False, safe_quality
+    vq = str(settings.get("video_quality") or "auto").lower()
+    qualities = info.get("qualities") or []
 
-    best_quality = intel.get("best_quality") or "best"
-    if not best_quality or best_quality == "best":
+    if vq in ("highest", "best", "max"):
         return False, False, False, "best"
-    return False, False, False, str(best_quality)
+
+    if vq == "auto":
+        intel = info.get("intelligence") or {}
+        risk = str(intel.get("risk") or "unknown").lower()
+        if risk == "high" or "Long video" in " • ".join(intel.get("badges") or []):
+            return True, False, False, "audio"
+        if risk == "medium" and qualities:
+            safe_quality = None
+            for q in sorted(qualities, key=lambda item: _quality_height(item.get("label", "0p")), reverse=True):
+                label = q.get("label", "")
+                if _quality_height(label) <= 720:
+                    safe_quality = label
+                    break
+            if safe_quality:
+                return False, False, False, safe_quality
+        best_quality = intel.get("best_quality") or "best"
+        if not best_quality or best_quality == "best":
+            return False, False, False, "best"
+        return False, False, False, str(best_quality)
+
+    # Specific choices: 360p / 480p / 720p / 1080p — exact match, else the
+    # nearest available height under it, else the lowest available.
+    wanted = _quality_height(vq)
+    exact = next((q.get("label") for q in qualities if str(q.get("label", "")).lower() == vq), None)
+    if exact:
+        return False, False, False, exact
+    lower = [q for q in qualities if 0 < _quality_height(q.get("label", "")) <= wanted]
+    if lower:
+        chosen = max(lower, key=lambda q: _quality_height(q.get("label", "0p")))
+        return False, False, False, chosen.get("label", "best")
+    if qualities:
+        chosen = min(qualities, key=lambda q: (_quality_height(q.get("label", "0p")) or 10 ** 9))
+        return False, False, False, chosen.get("label", "best")
+    return False, False, False, "best"
 
 
 def _callback_matches_media(data: str, info: dict) -> bool:
@@ -394,6 +423,7 @@ async def download_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = query.from_user
     db_user = get_user(user.id)
     lang = db_user.get("language", "en") if db_user else "en"
+    settings = get_user_settings(user.id)
     data = query.data
 
     # Batch/search messages embed a per-message token so each inline keyboard
@@ -449,20 +479,23 @@ async def download_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     await query.answer()
+    user_audio_br = str(AUDIO_QUALITY_BITRATE.get(settings.get("audio_quality", "normal"), 192))
     smart_mode = data == "dl_smart"
     if smart_mode:
-        is_audio, is_image, is_album, quality_label = _pick_smart_download(info)
-        audio_bitrate = AUDIO_BITRATE
+        is_audio, is_image, is_album, quality_label = _pick_smart_download(info, settings)
+        audio_bitrate = user_audio_br
+        delivery_mode = str(settings.get("delivery_mode") or "video")
     else:
         is_audio = data in {"dl_audio", "dl_audio_320"}
         is_image = data == "dl_image"
         is_album = data == "dl_album"
+        delivery_mode = "video"
         if is_audio:
             quality_label = "audio_320" if data == "dl_audio_320" else "audio"
-            audio_bitrate = AUDIO_BITRATE_HIGH if data == "dl_audio_320" else AUDIO_BITRATE
+            audio_bitrate = AUDIO_BITRATE_HIGH if data == "dl_audio_320" else user_audio_br
         else:
             quality_label = "image" if is_image else data.replace("dl_video_", "")
-            audio_bitrate = AUDIO_BITRATE
+            audio_bitrate = user_audio_br
 
     if smart_mode and not is_audio:
         try:
@@ -521,6 +554,8 @@ async def download_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     await query.message.reply_audio(audio=fid, caption=brand_caption)
                 elif is_image:
                     await query.message.reply_photo(photo=fid, caption=brand_caption)
+                elif delivery_mode == "file":
+                    await query.message.reply_document(document=fid, caption=brand_caption)
                 else:
                     await query.message.reply_video(video=fid, caption=brand_caption)
             _safe_store(increment_downloads, user.id)
@@ -542,12 +577,13 @@ async def download_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     edit_fn = query.edit_message_caption if progress_msg.caption else progress_msg.edit_text
 
     # Global concurrency gate — wait for a free slot (do not overwhelm server)
-    try:
-        in_use, max_slots = active_global_slots()
-        if in_use >= max_slots:
-            await _quiet_edit(edit_fn, t(lang, "queue_wait", current=in_use, maximum=max_slots), parse_mode="HTML")
-    except Exception:
-        pass
+    if bool(settings.get("notify_queue", 1)):
+        try:
+            in_use, max_slots = active_global_slots()
+            if in_use >= max_slots:
+                await _quiet_edit(edit_fn, t(lang, "queue_wait", current=in_use, maximum=max_slots), parse_mode="HTML")
+        except Exception:
+            pass
 
     progress_state = {"last_ts": 0.0, "last_pct": -1}
 
@@ -571,23 +607,36 @@ async def download_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception:
             pass
 
+    quiet = bool(settings.get("quiet_mode")) or not bool(settings.get("notify_progress", 1))
+    async def _noop_progress(prog):
+        pass
+    if quiet:
+        update_progress = _noop_progress
+
     try:
         async with download_slot(timeout=180):
             await _run_download(query, context, info, user, lang, quality_label,
                                 is_audio, is_image, is_album, edit_fn, update_progress,
-                                audio_bitrate=audio_bitrate)
+                                audio_bitrate=audio_bitrate, delivery_mode=delivery_mode,
+                                settings=settings)
     except asyncio.TimeoutError:
         await _quiet_edit(edit_fn, t(lang, "server_busy"))
     except FileTooLargeError:
-        await _quiet_edit(edit_fn, t(lang, "file_too_large", max_size=f"{MAX_FILE_SIZE_MB}MB"))
+        user_max = int(settings.get("max_file_size_mb") or 0)
+        limit_text = f"{user_max}MB" if user_max > 0 else f"{MAX_FILE_SIZE_MB}MB"
+        await _quiet_edit(edit_fn, t(lang, "file_too_large", max_size=limit_text))
     except Exception as e:
         logger.exception("Download error for user=%s url=%s: %s", user.id, str(info.get("url", ""))[:120], e)
         reason = summarize_error(e)
+        show_detail = bool(settings.get("notify_failure", 1))
         try:
-            await _quiet_edit(edit_fn, 
-                t(lang, "download_failed_reason", reason=escape(reason)),
-                parse_mode="HTML",
-            )
+            if show_detail:
+                await _quiet_edit(edit_fn,
+                    t(lang, "download_failed_reason", reason=escape(reason)),
+                    parse_mode="HTML",
+                )
+            else:
+                await _quiet_edit(edit_fn, t(lang, "download_failed"))
         except Exception:
             # Never let a failed status edit mask the original download error.
             try:
@@ -602,7 +651,8 @@ async def download_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def _run_download(query, context, info, user, lang, quality_label,
                         is_audio, is_image, is_album, edit_fn, update_progress,
-                        audio_bitrate: str | None = None):
+                        audio_bitrate: str | None = None, delivery_mode: str = "video",
+                        settings: dict | None = None):
     file_path = None
     try:
         title = info.get("title", "Unknown")
@@ -801,6 +851,10 @@ async def _run_download(query, context, info, user, lang, quality_label,
             if not file_path:
                 raise Exception("Download failed")
 
+            user_max_mb = int((settings or {}).get("max_file_size_mb") or 0)
+            if user_max_mb > 0 and os.path.getsize(file_path) > user_max_mb * 1024 * 1024:
+                raise FileTooLargeError(os.path.getsize(file_path), user_max_mb * 1024 * 1024)
+
             if AUTO_SPLIT_LARGE_VIDEOS and os.path.getsize(file_path) > MAX_FILE_SIZE_BYTES:
                 await _quiet_edit(edit_fn, t(lang, "splitting_video"), parse_mode="HTML")
                 parts = split_video_parts(file_path, MAX_FILE_SIZE_BYTES)
@@ -830,6 +884,11 @@ async def _run_download(query, context, info, user, lang, quality_label,
 
                 async def _send_video():
                     with open(file_path, "rb") as f:
+                        if delivery_mode == "file":
+                            return await query.message.reply_document(
+                                document=InputFile(f, filename=f"{safe_title}.mp4"),
+                                caption=t(lang, "completed", bot_name=BOT_DISPLAY_NAME),
+                            )
                         return await query.message.reply_video(
                             video=InputFile(f, filename=f"{safe_title}.mp4"),
                             caption=t(lang, "completed", bot_name=BOT_DISPLAY_NAME),
@@ -837,7 +896,7 @@ async def _run_download(query, context, info, user, lang, quality_label,
                         )
 
                 sent = await _upload_with_retry(_send_video)
-                _fid = sent.video.file_id
+                _fid = sent.video.file_id if sent.video else sent.document.file_id
                 _vault = await _safe_vault(context, sent)
                 _safe_store(
                     set_cache_with_meta,

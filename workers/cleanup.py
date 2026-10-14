@@ -23,3 +23,17 @@ async def cleanup_temp_files(max_age_seconds: int = 3600):
 async def cleanup_old_cache():
     while True:
         await asyncio.sleep(3600)
+
+
+async def cleanup_old_history():
+    """Apply each user's history-retention preference periodically."""
+    while True:
+        try:
+            from database.user_settings import prune_expired_history
+            removed = prune_expired_history()
+            if removed:
+                import logging
+                logging.getLogger(__name__).info("Pruned %s expired history rows", removed)
+        except Exception:
+            pass
+        await asyncio.sleep(3600)

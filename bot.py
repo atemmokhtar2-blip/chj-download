@@ -18,8 +18,9 @@ from utils.helpers import summarize_error
 
 from handlers.start import (
     start_command, language_callback,
-    help_command, settings_command, settings_callback
+    help_command,
 )
+from handlers.settings_menu import settings_command, settings_callback, try_handle_settings_text
 from handlers.download import (
     handle_url, download_callback, handle_batch_urls, _extract_urls
 )
@@ -29,7 +30,7 @@ from handlers.admin import (
     engine_status_command, update_ytdlp_command, health_command,
     callbacks_health_command, commands_command,
 )
-from workers.cleanup import cleanup_temp_files, cleanup_old_cache
+from workers.cleanup import cleanup_temp_files, cleanup_old_cache, cleanup_old_history
 
 # Arabic-only main menu.
 MENU_BUTTONS = {"📥 تحميل", "📥 Download"}
@@ -61,6 +62,9 @@ async def message_router(update: Update, context):
     """Route text messages — handle menu buttons and URLs."""
     text = (update.message.text or "").strip()
 
+    if await try_handle_settings_text(update, context):
+        return
+
     if text in MENU_BUTTONS:
         from database.users import get_user, update_user
         from locales import t
@@ -87,6 +91,7 @@ async def post_init(application: Application):
     system_logger.info("Bot starting up...")
     asyncio.create_task(cleanup_temp_files())
     asyncio.create_task(cleanup_old_cache())
+    asyncio.create_task(cleanup_old_history())
     system_logger.info("Background workers started.")
 
 
@@ -147,7 +152,7 @@ def build_application() -> Application:
     app.add_handler(CallbackQueryHandler(admin_callback, pattern="^admin_"))
     # Legacy buttons are handled without allowing a language switch.
     app.add_handler(CallbackQueryHandler(language_callback, pattern="^lang_"))
-    app.add_handler(CallbackQueryHandler(settings_callback, pattern="^settings_"))
+    app.add_handler(CallbackQueryHandler(settings_callback, pattern="^settings"))
     app.add_handler(CallbackQueryHandler(search_callback, pattern="^search_"))
     app.add_handler(CallbackQueryHandler(download_callback, pattern="^dl_"))
     app.add_handler(CallbackQueryHandler(unknown_callback))
