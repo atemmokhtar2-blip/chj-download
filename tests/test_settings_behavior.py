@@ -204,6 +204,86 @@ def test_smart_download_honors_highest_choice():
     assert quality == "best"
 
 
+def test_audio_button_maps_to_bitrate_specific_cache_label():
+    from handlers.download import _resolve_download_choice
+
+    info = {"media_type": "video", "qualities": []}
+    # audio_quality low/normal/high must produce DISTINCT cache/history labels,
+    # otherwise a stale cached MP3 (e.g. 320) is served after the user asks for
+    # a different bitrate — i.e. the button is saved but has no real effect.
+    _, _, _, label_low, br_low, _ = _resolve_download_choice(
+        "dl_audio", info, {"audio_quality": "low", "delivery_mode": "video"}
+    )
+    _, _, _, label_mid, br_mid, _ = _resolve_download_choice(
+        "dl_audio", info, {"audio_quality": "normal"}
+    )
+    _, _, _, label_high, br_high, _ = _resolve_download_choice(
+        "dl_audio", info, {"audio_quality": "high"}
+    )
+    assert (label_low, br_low) == ("audio_128", "128")
+    assert (label_mid, br_mid) == ("audio_192", "192")
+    assert (label_high, br_high) == ("audio_320", "320")
+    assert len({label_low, label_mid, label_high}) == 3
+
+
+def test_audio_320_button_is_always_320_regardless_of_setting():
+    from handlers.download import _resolve_download_choice
+
+    info = {"media_type": "video", "qualities": []}
+    _, _, _, label, br, _ = _resolve_download_choice(
+        "dl_audio_320", info, {"audio_quality": "low"}
+    )
+    assert (label, br) == ("audio_320", "320")
+
+
+def test_smart_audio_honors_audio_quality_setting():
+    from handlers.download import _resolve_download_choice
+
+    info = {"media_type": "video", "qualities": []}
+    _, _, _, label_hi, br_hi, _ = _resolve_download_choice(
+        "dl_smart", info, {"delivery_mode": "audio", "audio_quality": "high"}
+    )
+    _, _, _, label_lo, br_lo, _ = _resolve_download_choice(
+        "dl_smart", info, {"delivery_mode": "audio", "audio_quality": "low"}
+    )
+    assert (label_hi, br_hi) == ("audio_320", "320")
+    assert (label_lo, br_lo) == ("audio_128", "128")
+
+
+def test_explicit_video_button_is_not_overridden_by_default_quality():
+    from handlers.download import _resolve_download_choice
+
+    info = {"media_type": "video", "qualities": [{"label": "1080p"}, {"label": "720p"}]}
+    _, _, _, smart_label, _, _ = _resolve_download_choice(
+        "dl_smart", info, {"video_quality": "720p", "delivery_mode": "video"}
+    )
+    _, _, _, explicit_label, _, _ = _resolve_download_choice(
+        "dl_video_1080p", info, {"video_quality": "360p", "delivery_mode": "video"}
+    )
+    assert smart_label == "720p"
+    assert explicit_label == "1080p"
+
+
+def test_delivery_mode_file_and_audio_guard_mapping():
+    from handlers.download import _resolve_download_choice
+
+    info = {"media_type": "video", "qualities": [{"label": "720p"}]}
+    _, _, _, _, _, delivery_smart = _resolve_download_choice(
+        "dl_smart", info, {"delivery_mode": "file"}
+    )
+    _, _, _, _, _, delivery_explicit_file = _resolve_download_choice(
+        "dl_video_best", info, {"delivery_mode": "file"}
+    )
+    # An explicit video button must never silently become an MP3 even when the
+    # saved default delivery mode is audio.
+    _, _, _, _, _, delivery_explicit_audio_guard = _resolve_download_choice(
+        "dl_video_best", info, {"delivery_mode": "audio"}
+    )
+    assert delivery_smart == "file"
+    assert delivery_explicit_file == "file"
+    assert delivery_explicit_audio_guard == "video"
+
+
 def test_validate_clamps_every_field():
     from database.user_settings import _validate
 

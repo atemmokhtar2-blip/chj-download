@@ -388,6 +388,49 @@ def _pick_smart_download(info: dict, settings: dict | None = None) -> tuple[bool
     return False, False, False, "best"
 
 
+def _resolve_download_choice(data: str, info: dict, settings: dict | None) -> tuple[bool, bool, bool, str, str, str]:
+    """Decide (is_audio, is_image, is_album, quality_label, audio_bitrate, delivery_mode).
+
+    Pure of the Telegram query so every button mapping is unit-testable:
+
+      * Smart Download honors ``video_quality`` + ``delivery_mode=audio`` +
+        the auto-intelligence downgrade logic.
+      * Explicit video/image/album buttons are their own quality and are never
+        silently converted into MP3 by the delivery-mode default.
+      * Audio ``quality_label`` is bitrate-specific (``audio_128``/``audio_192``/
+        ``audio_320``) — the cache, history, and content-fingerprint keys all use
+        this label, so a 320kbps cached file is never served back to a user who
+        has since lowered ``audio_quality``. Without this, the audio-quality
+        button would be saved but have NO real effect on cache hits.
+    """
+    settings = settings or {}
+    user_audio_br = str(AUDIO_QUALITY_BITRATE.get(settings.get("audio_quality", "normal"), 192))
+    preferred_delivery = str(settings.get("delivery_mode") or "video")
+
+    if data == "dl_smart":
+        is_audio, is_image, is_album, quality_label = _pick_smart_download(info, settings)
+        audio_bitrate = user_audio_br
+        delivery_mode = preferred_delivery
+        if is_audio:
+            quality_label = f"audio_{audio_bitrate}"
+        return is_audio, is_image, is_album, quality_label, audio_bitrate, delivery_mode
+
+    is_audio = data in {"dl_audio", "dl_audio_320"}
+    is_image = data == "dl_image"
+    is_album = data == "dl_album"
+    # "إرسال كملف" honored for explicit video choices too; only "استخراج
+    # الصوت" stays Smart-Download-only (an explicit video button must never
+    # silently turn into an MP3).
+    delivery_mode = "video" if preferred_delivery == "audio" else preferred_delivery
+    if is_audio:
+        audio_bitrate = AUDIO_BITRATE_HIGH if data == "dl_audio_320" else user_audio_br
+        quality_label = f"audio_{audio_bitrate}"
+    else:
+        quality_label = "image" if is_image else data.replace("dl_video_", "")
+        audio_bitrate = user_audio_br
+    return is_audio, is_image, is_album, quality_label, audio_bitrate, delivery_mode
+
+
 def _callback_matches_media(data: str, info: dict) -> bool:
     media_type = info.get("media_type", "video")
     if data in {"dl_unavailable", "dl_cancel"}:
@@ -906,13 +949,21 @@ async def _run_download(query, context, info, user, lang, quality_label,
 
                 total = len(parts)
                 safe_title = _safe_upload_name(title)
+                # Honor notify_complete: when completion captions are off, split
+                # parts are sent silently instead of stamping the brand on every
+                # chunk.
+                show_brand = complete_caption is not None
                 try:
                     for idx, part_path in enumerate(parts, start=1):
                         async def _send_part(p=part_path, i=idx):
                             with open(p, "rb") as f:
+                                part_label = (
+                                    t(lang, "video_part", idx=i, total=total, bot_name=BOT_DISPLAY_NAME)
+                                    if show_brand else None
+                                )
                                 return await query.message.reply_video(
                                     video=InputFile(f, filename=f"{safe_title}_part{i}.mp4"),
-                                    caption=t(lang, "video_part", idx=i, total=total, bot_name=BOT_DISPLAY_NAME),
+                                    caption=part_label,
                                     supports_streaming=True,
                                 )
 
