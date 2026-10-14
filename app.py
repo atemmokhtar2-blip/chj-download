@@ -16,24 +16,13 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[logging.StreamHandler(sys.stdout)]
 )
-logger = logging.getLogger("HF_APP")
+logger = logging.getLogger("APP")
 APP_STARTED_AT = time.time()
 BOT_HEALTH = {
     "status": "starting",
     "last_error": "",
     "started_at": "",
 }
-
-# ZeroGPU mandatory import
-try:
-    import spaces
-    logger.info("Successfully imported spaces")
-except ImportError:
-    class spaces:
-        @staticmethod
-        def GPU(func):
-            return func
-    logger.info("Spaces import failed, using fallback")
 
 # Add current dir to path
 current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -60,10 +49,6 @@ try:
     ENGINE_COUNT = len(_registered_engines())
 except Exception:
     ENGINE_COUNT = 29
-
-@spaces.GPU
-def dummy_gpu_task():
-    return "GPU Initialized"
 
 def format_uptime(seconds: float) -> str:
     seconds = int(seconds)
@@ -118,7 +103,6 @@ def human_size(size: int) -> str:
 
 
 def collect_dashboard_data():
-    dummy_gpu_task()
     total_users = safe_scalar("SELECT COUNT(*) FROM users")
     banned_users = safe_scalar("SELECT COUNT(*) FROM users WHERE is_banned = 1")
     total_downloads = safe_scalar("SELECT COUNT(*) FROM downloads")

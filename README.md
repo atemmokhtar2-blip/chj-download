@@ -1,15 +1,3 @@
----
-title: Chj Download
-emoji: 🚀
-colorFrom: green
-colorTo: blue
-sdk: gradio
-sdk_version: 6.20.0
-python_version: '3.12'
-app_file: app.py
-pinned: true
----
-
 # 🤖 X Downloader Bot - بوت تحميل الوسائط الاحترافي
 
 أقوى بوت على تلغرام لتحميل الفيديوهات، الصور، والمقاطع الصوتية من أكثر من 13 منصة عالمية بجودة عالية جداً وسرعة فائقة.
@@ -182,7 +170,7 @@ export TELEGRAM_BOT_TOKEN="your-token"
 export ADMIN_IDS="123456789,987654321"
 ```
 
-يوجد fallback إلى `token.txt` للتوافق مع النشر القديم، لكن لا يُنصح بالاعتماد عليه في الإنتاج.
+يُضبط التوكن عبر متغير البيئة `TELEGRAM_BOT_TOKEN` فقط (بيئة الإنتاج مثل Railway).
 
 ## 🚀 ابدأ الآن
 يمكنك العثور على البوت على تلغرام عبر المعرف الخاص به والاستمتاع بتجربة تحميل لا مثيل لها.

@@ -24,7 +24,7 @@ def _fail(label: str, value: str) -> dict[str, str]:
 def collect_runtime_diagnostics() -> list[dict[str, str]]:
     checks: list[dict[str, str]] = []
     checks.append(_ok("Python", sys.version.split()[0]))
-    checks.append(_ok("Telegram token", "loaded") if BOT_TOKEN else _fail("Telegram token", "missing TELEGRAM_BOT_TOKEN/token.txt"))
+    checks.append(_ok("Telegram token", "loaded") if BOT_TOKEN else _fail("Telegram token", "missing TELEGRAM_BOT_TOKEN"))
 
     db_path = Path(DATABASE_PATH)
     if db_path.exists():
