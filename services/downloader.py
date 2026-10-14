@@ -513,12 +513,14 @@ def _download_direct_sync(
     return None
 
 
-def download_hls_mp4(play_url: str, prefix: str = "xdl-hls") -> str | None:
-    """Download an HLS (.m3u8) stream into a faststart MP4 via ffmpeg copy.
+def download_hls_mp4(play_url: str, prefix: str = "xdl-hls", headers: dict | None = None, timeout: int = 420) -> str | None:
+    """Download an HLS (.m3u8) stream into a faststart MP4 via ffmpeg.
 
     Generic path for platforms whose direct player asset is an HLS playlist.
-    Runs the same SSRF guard as direct downloads; audio is verified later by
-    _prepare_video_for_delivery before the file can ever be delivered.
+    Tries a stream-copy remux first (fast and lossless), then falls back to a
+    full H.264/AAC re-encode when the playlist carries codecs that copy cannot
+    package. The central audio guard (_prepare_video_for_delivery) still
+    verifies the result before it can ever be delivered.
     """
     if not play_url or not str(play_url).startswith("http"):
         return None
@@ -537,32 +539,53 @@ def download_hls_mp4(play_url: str, prefix: str = "xdl-hls") -> str | None:
     fd, out_path = tempfile.mkstemp(prefix=f"{prefix}-", suffix=".mp4", dir=TEMP_DIR)
     os.close(fd)
     _safe_remove(out_path)
-    try:
-        proc = subprocess.run(
-            [
-                ffmpeg, "-y", "-hide_banner", "-loglevel", "error",
-                "-i", play_url,
-                "-c:v", "copy",
-                "-c:a", "copy",
-                "-bsf:a", "aac_adtstoasc",
-                "-movflags", "+faststart",
-                out_path,
-            ],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            timeout=360,
-            check=False,
-        )
-        if proc.returncode == 0 and os.path.exists(out_path) and os.path.getsize(out_path) >= 2048:
-            return out_path
-        logger.debug("HLS download failed for %s: %s", str(play_url)[:120], proc.stderr[-300:])
+
+    header_args: list[str] = []
+    if headers:
+        header_args = ["-headers", "\r\n".join(f"{k}: {v}" for k, v in headers.items() if k and v)]
+
+    passes = (
+        [
+            "-c:v", "copy",
+            "-c:a", "copy",
+            "-bsf:a", "aac_adtstoasc",
+            "-movflags", "+faststart",
+        ],
+        [
+            "-c:v", "libx264",
+            "-preset", "veryfast",
+            "-crf", "23",
+            "-c:a", "aac",
+            "-b:a", "128k",
+            "-movflags", "+faststart",
+        ],
+    )
+
+    for pass_args in passes:
         _safe_remove(out_path)
-        return None
-    except Exception as exc:
-        logger.debug("HLS download crashed for %s: %s", str(play_url)[:120], exc)
-        _safe_remove(out_path)
-        return None
+        try:
+            proc = subprocess.run(
+                [
+                    ffmpeg, "-y", "-hide_banner", "-loglevel", "error",
+                    *header_args,
+                    "-i", play_url,
+                    *pass_args,
+                    out_path,
+                ],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                timeout=timeout,
+                check=False,
+            )
+            if proc.returncode == 0 and os.path.exists(out_path) and os.path.getsize(out_path) >= 2048:
+                return out_path
+            logger.debug("HLS download pass failed for %s: %s", str(play_url)[:120], proc.stderr[-300:])
+        except Exception as exc:
+            logger.debug("HLS download pass crashed for %s: %s", str(play_url)[:120], exc)
+
+    _safe_remove(out_path)
+    return None
 
 
 def _ffmpeg_path() -> str | None:
@@ -1116,20 +1139,63 @@ async def download_video(url: str, format_id: str = "best", quality_label: str =
 
 
 async def download_audio(url: str, progress=None, bitrate: str | None = None) -> str | None:
-    requested = _valid_audio_bitrate(bitrate or AUDIO_BITRATE)
-    # Explicit high-bitrate requests (e.g. 320) use the reliable yt-dlp/ffmpeg
-    # path directly, skipping platform micro-optimisations that default to 192.
-    if requested == AUDIO_BITRATE_HIGH or requested != AUDIO_BITRATE:
-        return await _generic_download_audio(url, progress, requested)
+    from services.engines.base import PlatformEngine
 
-    engine = _select_engine(url)
+    requested = _valid_audio_bitrate(bitrate or AUDIO_BITRATE)
+    last_error: Exception | None = None
+
+    # Platform audio overrides only run for default-bitrate requests; explicit
+    # high-bitrate requests (e.g. 320) go straight to the reliable yt-dlp/ffmpeg
+    # path. A real override is detected by checking the engine replaced the base
+    # implementation, which avoids a redundant duplicate yt-dlp pass.
+    use_engine = requested == AUDIO_BITRATE and requested != AUDIO_BITRATE_HIGH
+    engine = _select_engine(url) if use_engine else None
+    if engine is not None and type(engine).download_audio is not PlatformEngine.download_audio:
+        try:
+            path = await engine.download_audio(url, progress)
+            if path:
+                return path
+        except FileTooLargeError:
+            raise
+        except Exception as exc:
+            if last_error is None:
+                last_error = exc
+            logger.warning("Engine audio download failed (%s) for %s: %s", getattr(engine, "name", "unknown"), url[:120], exc)
+
     try:
-        return await engine.download_audio(url, progress)
+        path = await _generic_download_audio(url, progress, requested)
+        if path:
+            return path
     except FileTooLargeError:
         raise
     except Exception as exc:
-        logger.warning("Engine audio download failed (%s) for %s: %s", getattr(engine, "name", "unknown"), url[:120], exc)
-        return await _generic_download_audio(url, progress, requested)
+        if last_error is None:
+            last_error = exc
+        logger.warning("Generic audio download failed for %s: %s", url[:120], exc)
+
+    # Universal last resort: download the verified video path, then transcode its
+    # audio track locally. This closes the gap for platforms where yt-dlp cannot
+    # isolate an audio-only stream but the robust video path still succeeds.
+    try:
+        video_path = await download_video(url, "best", "best", progress, allow_large=True)
+        if not video_path:
+            raise RuntimeError("video fallback returned no file")
+        audio_path = await _run_sync(extract_audio_mp3, video_path, requested)
+        _safe_remove(video_path)
+        if not audio_path:
+            raise RuntimeError("audio extraction produced no file")
+        logger.info("Audio extracted from verified video for %s", url[:120])
+        return audio_path
+    except FileTooLargeError:
+        raise
+    except Exception as exc:
+        if last_error is None:
+            last_error = exc
+        logger.warning("Universal video->audio fallback failed for %s: %s", url[:120], exc)
+
+    if last_error:
+        raise last_error
+    raise RuntimeError("No downloadable audio stream returned after all fallbacks were exhausted")
 
 
 # Compatibility aliases used by platform engines.

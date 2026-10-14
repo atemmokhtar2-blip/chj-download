@@ -545,18 +545,27 @@ class TwitterEngine(PlatformEngine):
             except Exception as exc:
                 error_logger.error("TwitterEnginePro resolve before download failed: %s", exc)
 
-        if candidate and ".mp4" in candidate:
+        if candidate and (".mp4" in candidate or ".m3u8" in candidate):
             try:
-                direct_path = await loop.run_in_executor(
-                    get_executor(),
-                    downloader._download_direct_sync,
-                    candidate,
-                    {"Referer": "https://twitter.com/"},
-                    60,
-                    progress_callback,
-                    loop,
-                    "xdl-twitter",
-                )
+                if ".m3u8" in candidate:
+                    direct_path = await loop.run_in_executor(
+                        get_executor(),
+                        downloader.download_hls_mp4,
+                        candidate,
+                        "xdl-twitter",
+                        {"Referer": "https://twitter.com/"},
+                    )
+                else:
+                    direct_path = await loop.run_in_executor(
+                        get_executor(),
+                        downloader._download_direct_sync,
+                        candidate,
+                        {"Referer": "https://twitter.com/"},
+                        60,
+                        progress_callback,
+                        loop,
+                        "xdl-twitter",
+                    )
                 direct_path = downloader._prepare_video_for_delivery(direct_path, source="direct-cdn")
                 if direct_path:
                     return direct_path
@@ -649,19 +658,28 @@ class RedditEngine(PlatformEngine):
             return score
 
         for candidate, source in sorted(candidates, key=_direct_score, reverse=True):
-            if ".mp4" not in candidate:
+            if ".mp4" not in candidate and ".m3u8" not in candidate:
                 continue
             try:
-                direct_path = await loop.run_in_executor(
-                    get_executor(),
-                    downloader._download_direct_sync,
-                    candidate,
-                    {"Referer": "https://www.reddit.com/"},
-                    90,
-                    progress_callback,
-                    loop,
-                    "xdl-reddit",
-                )
+                if ".m3u8" in candidate:
+                    direct_path = await loop.run_in_executor(
+                        get_executor(),
+                        downloader.download_hls_mp4,
+                        candidate,
+                        "xdl-reddit",
+                        {"Referer": "https://www.reddit.com/"},
+                    )
+                else:
+                    direct_path = await loop.run_in_executor(
+                        get_executor(),
+                        downloader._download_direct_sync,
+                        candidate,
+                        {"Referer": "https://www.reddit.com/"},
+                        90,
+                        progress_callback,
+                        loop,
+                        "xdl-reddit",
+                    )
                 direct_path = downloader._prepare_video_for_delivery(direct_path, source=f"reddit-direct:{source}")
                 if direct_path:
                     return direct_path
