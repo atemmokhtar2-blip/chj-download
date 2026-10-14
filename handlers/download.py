@@ -100,6 +100,22 @@ def _completion_caption(lang: str, settings: dict | None) -> str | None:
     return t(lang, "completed", bot_name=BOT_DISPLAY_NAME)
 
 
+def _enforce_user_size(path: str | None, settings: dict | None) -> None:
+    """Apply the user's personal max_file_size_mb preference to any media file.
+
+    The global MAX_FILE_SIZE_BYTES cap is enforced inside the downloader; this
+    is the per-user limit from Settings -> "الحد الأقصى للحجم", applied uniformly
+    to video, audio, image, and every album item before upload.
+    """
+    if not path or not os.path.exists(path):
+        return
+    user_max_mb = int((settings or {}).get("max_file_size_mb") or 0)
+    if user_max_mb > 0:
+        limit_bytes = user_max_mb * 1024 * 1024
+        if os.path.getsize(path) > limit_bytes:
+            raise FileTooLargeError(os.path.getsize(path), limit_bytes)
+
+
 def _extract_urls(text: str) -> list[str]:
     """Pull every URL from a message, stripping trailing punctuation."""
     urls = []
@@ -492,15 +508,19 @@ async def download_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer()
     user_audio_br = str(AUDIO_QUALITY_BITRATE.get(settings.get("audio_quality", "normal"), 192))
     smart_mode = data == "dl_smart"
+    preferred_delivery = str(settings.get("delivery_mode") or "video")
     if smart_mode:
         is_audio, is_image, is_album, quality_label = _pick_smart_download(info, settings)
         audio_bitrate = user_audio_br
-        delivery_mode = str(settings.get("delivery_mode") or "video")
+        delivery_mode = preferred_delivery
     else:
         is_audio = data in {"dl_audio", "dl_audio_320"}
         is_image = data == "dl_image"
         is_album = data == "dl_album"
-        delivery_mode = "video"
+        # "إرسال كملف" honored for explicit video choices too; only
+        # "استخراج الصوت" stays Smart-Download-only (an explicit video
+        # button must never silently turn into an MP3).
+        delivery_mode = "video" if preferred_delivery == "audio" else preferred_delivery
         if is_audio:
             quality_label = "audio_320" if data == "dl_audio_320" else "audio"
             audio_bitrate = AUDIO_BITRATE_HIGH if data == "dl_audio_320" else user_audio_br
@@ -588,7 +608,7 @@ async def download_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     edit_fn = query.edit_message_caption if progress_msg.caption else progress_msg.edit_text
 
     # Global concurrency gate — wait for a free slot (do not overwhelm server)
-    if bool(settings.get("notify_queue", 1)):
+    if bool(settings.get("notify_queue", 1)) and not bool(settings.get("quiet_mode")):
         try:
             in_use, max_slots = active_global_slots()
             if in_use >= max_slots:
@@ -666,6 +686,14 @@ async def _run_download(query, context, info, user, lang, quality_label,
                         settings: dict | None = None):
     file_path = None
     complete_caption = _completion_caption(lang, settings)
+    quiet = bool((settings or {}).get("quiet_mode"))
+
+    async def _status(text, **kwargs):
+        """Edit the action card with a status line, unless quiet mode is on."""
+        if quiet:
+            return
+        await _quiet_edit(edit_fn, text, **kwargs)
+
     try:
         title = info.get("title", "Unknown")
         platform = info.get("platform", "")
@@ -680,16 +708,19 @@ async def _run_download(query, context, info, user, lang, quality_label,
                     idx = prog.get("album_index", 0)
                     tot = prog.get("album_total", len(items))
                     txt = t(lang, "album_downloading", current=idx, total=tot)
-                    await _quiet_edit(edit_fn, txt, parse_mode="HTML")
+                    await _status(txt, parse_mode="HTML")
                 except Exception:
                     pass
 
-            await _quiet_edit(edit_fn, t(lang, "preparing_download"), parse_mode="HTML")
+            await _status(t(lang, "preparing_download"), parse_mode="HTML")
             downloaded = await download_album(items, album_progress)
             if not downloaded:
                 raise Exception("Album download failed")
 
-            await _quiet_edit(edit_fn, 
+            for _item in downloaded:
+                _enforce_user_size(_item.get("path"), settings)
+
+            await _status(
                 t(lang, "album_uploading", count=len(downloaded)),
                 parse_mode="HTML",
             )
@@ -788,10 +819,11 @@ async def _run_download(query, context, info, user, lang, quality_label,
                 file_path = None
 
         elif is_image:
-            await _quiet_edit(edit_fn, t(lang, "preparing_download"), parse_mode="HTML")
+            await _status(t(lang, "preparing_download"), parse_mode="HTML")
             file_path = await download_image(info["url"], info.get("image_url"))
             if not file_path: raise Exception("Download failed")
-            await _quiet_edit(edit_fn, t(lang, "uploading"), parse_mode="HTML")
+            _enforce_user_size(file_path, settings)
+            await _status(t(lang, "uploading"), parse_mode="HTML")
             safe_title = _safe_upload_name(title)
 
             async def _send_photo():
@@ -814,10 +846,11 @@ async def _run_download(query, context, info, user, lang, quality_label,
             )
 
         elif is_audio:
-            await _quiet_edit(edit_fn, t(lang, "preparing_audio"), parse_mode="HTML")
+            await _status(t(lang, "preparing_audio"), parse_mode="HTML")
             file_path = await download_audio(info["url"], update_progress, bitrate=audio_bitrate)
             if not file_path: raise Exception("Download failed")
-            await _quiet_edit(edit_fn, t(lang, "uploading"), parse_mode="HTML")
+            _enforce_user_size(file_path, settings)
+            await _status(t(lang, "uploading"), parse_mode="HTML")
             safe_title = _safe_upload_name(title)
 
             async def _send_audio():
@@ -850,7 +883,7 @@ async def _run_download(query, context, info, user, lang, quality_label,
             if str(quality_label).lower() in ("best", "best_quality"):
                 format_id = "best"
 
-            await _quiet_edit(edit_fn, t(lang, "preparing_download"), parse_mode="HTML")
+            await _status(t(lang, "preparing_download"), parse_mode="HTML")
 
             # Allow oversized files so they can be split into Telegram-friendly
             # parts instead of being deleted mid-download.
@@ -863,12 +896,10 @@ async def _run_download(query, context, info, user, lang, quality_label,
             if not file_path:
                 raise Exception("Download failed")
 
-            user_max_mb = int((settings or {}).get("max_file_size_mb") or 0)
-            if user_max_mb > 0 and os.path.getsize(file_path) > user_max_mb * 1024 * 1024:
-                raise FileTooLargeError(os.path.getsize(file_path), user_max_mb * 1024 * 1024)
+            _enforce_user_size(file_path, settings)
 
             if AUTO_SPLIT_LARGE_VIDEOS and os.path.getsize(file_path) > MAX_FILE_SIZE_BYTES:
-                await _quiet_edit(edit_fn, t(lang, "splitting_video"), parse_mode="HTML")
+                await _status(t(lang, "splitting_video"), parse_mode="HTML")
                 parts = split_video_parts(file_path, MAX_FILE_SIZE_BYTES)
                 if not parts:
                     raise FileTooLargeError(os.path.getsize(file_path), MAX_FILE_SIZE_BYTES)
@@ -891,7 +922,7 @@ async def _run_download(query, context, info, user, lang, quality_label,
                         if part and part != file_path and os.path.exists(part):
                             _cleanup_file(part)
             else:
-                await _quiet_edit(edit_fn, t(lang, "uploading"), parse_mode="HTML")
+                await _status(t(lang, "uploading"), parse_mode="HTML")
                 safe_title = _safe_upload_name(title)
 
                 async def _send_video():
