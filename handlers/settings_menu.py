@@ -15,8 +15,9 @@ import logging
 import math
 import re
 
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import Update, InlineKeyboardMarkup
 from telegram.constants import KeyboardButtonStyle
+from utils.button_text import inline_button
 from telegram.ext import ContextTypes
 
 from database.user_settings import (
@@ -132,7 +133,7 @@ def _button_style(label: str, data: str) -> str:
 def _mk(rows: list[list[tuple[str, str]]]) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([
         [
-            InlineKeyboardButton(
+            inline_button(
                 label,
                 callback_data=data,
                 style=_button_style(label, data),
