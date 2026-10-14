@@ -8,7 +8,8 @@ from datetime import datetime
 
 from html import escape
 
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import Update, InlineKeyboardMarkup
+from utils.button_text import inline_button
 from telegram.ext import ContextTypes
 
 from middlewares.auth import is_admin, is_owner
@@ -85,8 +86,8 @@ def _build_update_keyboard(bot_username: str | None) -> InlineKeyboardMarkup:
     else:
         url = "https://t.me/"
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("🚀 Start / افتح البوت", url=url)],
-        [InlineKeyboardButton("📥 جرّب تحميل رابط الآن", callback_data="noop")],
+        [inline_button("🚀 Start / افتح البوت", url=url)],
+        [inline_button("📥 جرّب تحميل رابط الآن", callback_data="noop")],
     ])
 
 
@@ -311,12 +312,12 @@ async def admin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             text += f"\n\n<pre>{(result.get('stderr') or result.get('stdout') or '')[:1000]}</pre>"
         text += "\n\n⚠️ لو كان التحديث كبيرًا، أعد تشغيل السيرفر ليستخدم النسخة الجديدة داخل العملية الحالية."
         log_admin_action(user.id, "update_ytdlp", detail=f"ok={result['ok']}")
-        back = [[InlineKeyboardButton("🔙 لوحة التحكم", callback_data="admin_panel")]]
+        back = [[inline_button("🔙 لوحة التحكم", callback_data="admin_panel")]]
         await _edit(query, text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(back))
     elif data == "admin_health":
         _clear_admin_state(user.id)
         from services.runtime_diagnostics import render_diagnostics_html
-        back = [[InlineKeyboardButton("🔙 لوحة التحكم", callback_data="admin_panel")]]
+        back = [[inline_button("🔙 لوحة التحكم", callback_data="admin_panel")]]
         await _edit(query, render_diagnostics_html(), parse_mode="HTML", reply_markup=InlineKeyboardMarkup(back))
     elif data == "admin_audit":
         _clear_admin_state(user.id)
@@ -326,7 +327,7 @@ async def admin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await _show_security_scan(query)
     elif data == "admin_search":
         ADMIN_CONVERSATION_STATES[user.id] = "search"
-        keyboard = [[InlineKeyboardButton("🔙 إلغاء", callback_data="admin_panel")]]
+        keyboard = [[inline_button("🔙 إلغاء", callback_data="admin_panel")]]
         await _edit(query, 
             "🔍 <b>بحث عن مستخدم</b>\n\n"
             "أرسل الآن:\n"
@@ -341,7 +342,7 @@ async def admin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await _show_maintenance_toggle(query, lang)
     elif data == "admin_ban":
         ADMIN_CONVERSATION_STATES[user.id] = "ban"
-        keyboard = [[InlineKeyboardButton("🔙 إلغاء", callback_data="admin_panel")]]
+        keyboard = [[inline_button("🔙 إلغاء", callback_data="admin_panel")]]
         await _edit(query, 
             "🚫 <b>حظر مستخدم</b>\n\n"
             "أرسل <code>ID</code> المستخدم أو <code>@username</code> لحظره فورًا.",
@@ -361,13 +362,13 @@ async def admin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         _clear_admin_state(user.id)
         _set_maintenance(True)
         log_admin_action(user.id, "maintenance_mode", detail="enabled")
-        back = [[InlineKeyboardButton("🔙 لوحة التحكم", callback_data="admin_panel")]]
+        back = [[inline_button("🔙 لوحة التحكم", callback_data="admin_panel")]]
         await _edit(query, t(lang, "maintenance_on"), parse_mode="HTML", reply_markup=InlineKeyboardMarkup(back))
     elif data == "admin_maintenance_off":
         _clear_admin_state(user.id)
         _set_maintenance(False)
         log_admin_action(user.id, "maintenance_mode", detail="disabled")
-        back = [[InlineKeyboardButton("🔙 لوحة التحكم", callback_data="admin_panel")]]
+        back = [[inline_button("🔙 لوحة التحكم", callback_data="admin_panel")]]
         await _edit(query, t(lang, "maintenance_off"), parse_mode="HTML", reply_markup=InlineKeyboardMarkup(back))
     elif data.startswith("admin_unban_"):
         _clear_admin_state(user.id)
@@ -387,7 +388,7 @@ async def admin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.answer("⛔ الإذاعة الجماعية متاحة للمالك فقط.", show_alert=True)
             return
         ADMIN_CONVERSATION_STATES[user.id] = "broadcast"
-        keyboard = [[InlineKeyboardButton("🔙 إلغاء", callback_data="admin_panel")]]
+        keyboard = [[inline_button("🔙 إلغاء", callback_data="admin_panel")]]
         await _edit(query, 
             "📢 أرسل الآن الرسالة التي تريد إذاعتها لكل المستخدمين.",
             reply_markup=InlineKeyboardMarkup(keyboard),
@@ -411,7 +412,7 @@ async def _show_engine_status(query) -> None:
         "💡 عند فشل منصات مثل Instagram/Facebook/YouTube:\n"
         "<code>/update_ytdlp</code> لتحديث المحرك."
     )
-    back = [[InlineKeyboardButton("🔙 لوحة التحكم", callback_data="admin_panel")]]
+    back = [[inline_button("🔙 لوحة التحكم", callback_data="admin_panel")]]
     await _edit(query, text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(back))
 
 def _format_bytes(size: int) -> str:
@@ -541,23 +542,23 @@ def _build_admin_panel(lang: str):
 
     keyboard = [
         [
-            InlineKeyboardButton("👥 المستخدمون", callback_data="admin_users"),
-            InlineKeyboardButton("🔍 بحث عن مستخدم", callback_data="admin_search"),
+            inline_button("👥 المستخدمون", callback_data="admin_users"),
+            inline_button("🔍 بحث عن مستخدم", callback_data="admin_search"),
         ],
         [
-            InlineKeyboardButton("📢 إذاعة", callback_data="admin_broadcast"),
-            InlineKeyboardButton("🚧 وضع الصيانة", callback_data="admin_maintenance"),
+            inline_button("📢 إذاعة", callback_data="admin_broadcast"),
+            inline_button("🚧 وضع الصيانة", callback_data="admin_maintenance"),
         ],
         [
-            InlineKeyboardButton("🧠 حالة المحرك", callback_data="admin_engine_status"),
-            InlineKeyboardButton("🩺 صحة النظام", callback_data="admin_health"),
+            inline_button("🧠 حالة المحرك", callback_data="admin_engine_status"),
+            inline_button("🩺 صحة النظام", callback_data="admin_health"),
         ],
         [
-            InlineKeyboardButton("🔄 تحديث yt-dlp", callback_data="admin_update_ytdlp"),
-            InlineKeyboardButton("📜 سجل الأمان", callback_data="admin_audit"),
+            inline_button("🔄 تحديث yt-dlp", callback_data="admin_update_ytdlp"),
+            inline_button("📜 سجل الأمان", callback_data="admin_audit"),
         ],
         [
-            InlineKeyboardButton("🔐 فحص الأمان", callback_data="admin_security"),
+            inline_button("🔐 فحص الأمان", callback_data="admin_security"),
         ],
     ]
     return text, InlineKeyboardMarkup(keyboard)
@@ -608,7 +609,7 @@ async def _show_audit_log(query) -> None:
             f"<b>آخر {len(entries)} عملية</b>\n" + "\n\n".join(entry_lines)
         )
 
-    back = [[InlineKeyboardButton("🔙 لوحة التحكم", callback_data="admin_panel")]]
+    back = [[inline_button("🔙 لوحة التحكم", callback_data="admin_panel")]]
     await _edit(query, text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(back))
 
 
@@ -637,7 +638,7 @@ async def _show_security_scan(query) -> None:
         + f"\n\n🕵️ إجمالي العمليات المسجلة في السجل: <b>{stats.get('total', 0)}</b>\n"
         f"👤 المالك: <code>{OWNER_ID}</code> • الأدمن: <code>{len(ADMIN_IDS)}</code>"
     )
-    back = [[InlineKeyboardButton("🔙 لوحة التحكم", callback_data="admin_panel")]]
+    back = [[inline_button("🔙 لوحة التحكم", callback_data="admin_panel")]]
     await _edit(query, text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(back))
 
 
@@ -655,11 +656,11 @@ async def _show_users_page(query, lang: str, page: int = 0, status: str = "all")
     if not users:
         keyboard = [
             [
-                InlineKeyboardButton("👥 الكل", callback_data="admin_users"),
-                InlineKeyboardButton("✅ نشط", callback_data="admin_users_active"),
-                InlineKeyboardButton("🚫 محظور", callback_data="admin_users_banned"),
+                inline_button("👥 الكل", callback_data="admin_users"),
+                inline_button("✅ نشط", callback_data="admin_users_active"),
+                inline_button("🚫 محظور", callback_data="admin_users_banned"),
             ],
-            [InlineKeyboardButton("🔙 لوحة التحكم", callback_data="admin_panel")],
+            [inline_button("🔙 لوحة التحكم", callback_data="admin_panel")],
         ]
         await _edit(query, 
             f"👥 <b>المستخدمون — {status_label}</b>\n\n"
@@ -694,7 +695,7 @@ async def _show_users_page(query, lang: str, page: int = 0, status: str = "all")
     keyboard = []
     row = []
     for u in users:
-        row.append(InlineKeyboardButton(f"👤 {u['user_id']}", callback_data=f"admin_user_detail_{u['user_id']}"))
+        row.append(inline_button(f"👤 {u['user_id']}", callback_data=f"admin_user_detail_{u['user_id']}"))
         if len(row) >= 2:
             keyboard.append(row)
             row = []
@@ -703,18 +704,18 @@ async def _show_users_page(query, lang: str, page: int = 0, status: str = "all")
 
     nav = []
     if page > 0:
-        nav.append(InlineKeyboardButton("⬅️ السابق", callback_data=f"admin_users_page_{page - 1}"))
+        nav.append(inline_button("⬅️ السابق", callback_data=f"admin_users_page_{page - 1}"))
     if page < total_pages - 1:
-        nav.append(InlineKeyboardButton("التالي ➡️", callback_data=f"admin_users_page_{page + 1}"))
+        nav.append(inline_button("التالي ➡️", callback_data=f"admin_users_page_{page + 1}"))
     if nav:
         keyboard.append(nav)
 
     keyboard.append([
-        InlineKeyboardButton("👥 الكل", callback_data="admin_users"),
-        InlineKeyboardButton("✅ نشط", callback_data="admin_users_active"),
-        InlineKeyboardButton("🚫 محظور", callback_data="admin_users_banned"),
+        inline_button("👥 الكل", callback_data="admin_users"),
+        inline_button("✅ نشط", callback_data="admin_users_active"),
+        inline_button("🚫 محظور", callback_data="admin_users_banned"),
     ])
-    keyboard.append([InlineKeyboardButton("🔙 رجوع للوحة", callback_data="admin_panel")])
+    keyboard.append([inline_button("🔙 رجوع للوحة", callback_data="admin_panel")])
     await _edit(query, text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML")
 
 def _render_user_detail(target_id: int, admin_id: int | None = None):
@@ -760,10 +761,10 @@ def _render_user_detail(target_id: int, admin_id: int | None = None):
 
     keyboard = []
     if is_banned:
-        keyboard.append([InlineKeyboardButton("✅ فك الحظر", callback_data=f"admin_unban_{target_id}")])
+        keyboard.append([inline_button("✅ فك الحظر", callback_data=f"admin_unban_{target_id}")])
     else:
-        keyboard.append([InlineKeyboardButton("🚫 حظر المستخدم", callback_data=f"admin_ban_confirm_{target_id}")])
-    keyboard.append([InlineKeyboardButton("🔙 رجوع للمستخدمين", callback_data=f"admin_users_page_{page}")])
+        keyboard.append([inline_button("🚫 حظر المستخدم", callback_data=f"admin_ban_confirm_{target_id}")])
+    keyboard.append([inline_button("🔙 رجوع للمستخدمين", callback_data=f"admin_users_page_{page}")])
 
     return text, InlineKeyboardMarkup(keyboard)
 
@@ -772,7 +773,7 @@ async def _show_user_detail(query, lang: str, target_id: int):
     admin_id = query.from_user.id if query.from_user else None
     rendered = _render_user_detail(target_id, admin_id)
     if rendered is None:
-        keyboard = [[InlineKeyboardButton("🔙 المستخدمون", callback_data="admin_users")]]
+        keyboard = [[inline_button("🔙 المستخدمون", callback_data="admin_users")]]
         await _edit(query, 
             "❌ <b>المستخدم غير موجود.</b>",
             parse_mode="HTML",
@@ -784,8 +785,8 @@ async def _show_user_detail(query, lang: str, target_id: int):
 
 async def _show_broadcast_form(query, lang: str):
     keyboard = [
-        [InlineKeyboardButton("📨 جاهز — أرسل الرسالة الآن", callback_data="admin_send_broadcast")],
-        [InlineKeyboardButton("🔙 لوحة التحكم", callback_data="admin_panel")],
+        [inline_button("📨 جاهز — أرسل الرسالة الآن", callback_data="admin_send_broadcast")],
+        [inline_button("🔙 لوحة التحكم", callback_data="admin_panel")],
     ]
     text = (
         "📢 <b>الإذاعة العامة</b>\n\n"
@@ -805,9 +806,9 @@ async def _show_maintenance_toggle(query, lang: str):
         "بينما يظل الأدمن قادرًا على استخدام البوت بشكل كامل."
     )
     keyboard = [
-        [InlineKeyboardButton("🔴 تفعيل وضع الصيانة", callback_data="admin_maintenance_on")],
-        [InlineKeyboardButton("🟢 إيقاف وضع الصيانة", callback_data="admin_maintenance_off")],
-        [InlineKeyboardButton("🔙 لوحة التحكم", callback_data="admin_panel")],
+        [inline_button("🔴 تفعيل وضع الصيانة", callback_data="admin_maintenance_on")],
+        [inline_button("🟢 إيقاف وضع الصيانة", callback_data="admin_maintenance_off")],
+        [inline_button("🔙 لوحة التحكم", callback_data="admin_panel")],
     ]
     await _edit(query, text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML")
 
@@ -860,7 +861,7 @@ async def admin_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
                 "❌ <b>لا توجد نتائج</b> لهذا البحث.\nجرّب رقمًا أو اسمًا آخر.",
                 parse_mode="HTML",
                 reply_markup=InlineKeyboardMarkup(
-                    [[InlineKeyboardButton("🔙 لوحة التحكم", callback_data="admin_panel")]]
+                    [[inline_button("🔙 لوحة التحكم", callback_data="admin_panel")]]
                 ),
             )
             return True
@@ -880,12 +881,12 @@ async def admin_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
             status = "🚫" if r.get("is_banned") else "✅"
             lines.append(f"{status} <b>{name}</b> @{username} • <code>{r['user_id']}</code>")
             keyboard.append([
-                InlineKeyboardButton(
+                inline_button(
                     f"👤 {r['user_id']} — {name[:12]}",
                     callback_data=f"admin_user_detail_{r['user_id']}",
                 )
             ])
-        keyboard.append([InlineKeyboardButton("🔙 لوحة التحكم", callback_data="admin_panel")])
+        keyboard.append([inline_button("🔙 لوحة التحكم", callback_data="admin_panel")])
         msg_text = f"🔍 <b>نتائج البحث ({len(results)})</b>\n\n" + "\n".join(lines)
         await update.message.reply_text(msg_text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard))
         return True
@@ -926,7 +927,7 @@ async def admin_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
             f"✅ تم إرسال الإذاعة إلى <b>{count}</b> مستخدم.",
             parse_mode="HTML",
             reply_markup=InlineKeyboardMarkup(
-                [[InlineKeyboardButton("🔙 لوحة التحكم", callback_data="admin_panel")]]
+                [[inline_button("🔙 لوحة التحكم", callback_data="admin_panel")]]
             ),
         )
         return True
@@ -938,7 +939,7 @@ async def admin_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
                 "❌ <b>لا يوجد مستخدم</b> بهذا الرقم/الاسم.",
                 parse_mode="HTML",
                 reply_markup=InlineKeyboardMarkup(
-                    [[InlineKeyboardButton("🔙 لوحة التحكم", callback_data="admin_panel")]]
+                    [[inline_button("🔙 لوحة التحكم", callback_data="admin_panel")]]
                 ),
             )
             return True
@@ -950,7 +951,7 @@ async def admin_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
             f"🚫 <b>تم حظر المستخدم</b>\n\n👤 {name}\n🆔 <code>{target['user_id']}</code>",
             parse_mode="HTML",
             reply_markup=InlineKeyboardMarkup(
-                [[InlineKeyboardButton("🔙 لوحة التحكم", callback_data="admin_panel")]]
+                [[inline_button("🔙 لوحة التحكم", callback_data="admin_panel")]]
             ),
         )
         return True
