@@ -20,6 +20,7 @@ temp/
 token.txt
 cookies.txt
 *.db
+/vite-plugins/
 database/*.db
 *.sqlite
 *.sqlite3
