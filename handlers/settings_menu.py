@@ -408,6 +408,10 @@ def build_saved(field: str, value: str, back_cb: str = "settings:home") -> tuple
 
 async def settings_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
+    # Opening the menu cancels any pending free-text input (e.g. custom size)
+    # so the user can never get stuck answering an old prompt.
+    if getattr(context, "user_data", None) is not None:
+        context.user_data.pop("settings_input", None)
     settings = get_user_settings(uid)
     text, rows = build_home(settings)
     await update.message.reply_text(text, parse_mode="HTML", reply_markup=_mk(rows))
@@ -425,21 +429,38 @@ async def try_handle_settings_text(update: Update, context: ContextTypes.DEFAULT
 
     if pending == "size":
         context.user_data.pop("settings_input", None)
-        parsed = _parse_size_mb(raw)
-        if parsed is None:
+        if not raw:
             await update.message.reply_text(
-                "❌ <b>القيمة مش رقم.</b>\n\n"
+                "📭 <b>مكتبتش أي قيمة.</b>\n\n"
                 f"اكتب رقم بالميجابايت بين 1 و {MAX_CUSTOM_SIZE_MB}.\n"
-                "مثال: <code>75</code>\n"
-                "أو استخدم /settings للرجوع للقوائم.",
+                "مثال: <code>75</code> — أو /settings للرجوع.",
                 parse_mode="HTML",
             )
             context.user_data["settings_input"] = "size"
             return True
-        if parsed < 1 or parsed > MAX_CUSTOM_SIZE_MB:
+
+        parsed = _parse_size_mb(raw)
+        if parsed is None:
             await update.message.reply_text(
-                f"❌ الرقم لازم يكون بين 1 و {MAX_CUSTOM_SIZE_MB} MB.\n"
-                "جرّب قيمة أصغر أو استخدم /settings.",
+                "🔤 <b>دي مش رقم.</b> اللي كتبته حروف أو اسم.\n\n"
+                f"اكتب رقم صحيح بالميجابايت بين 1 و {MAX_CUSTOM_SIZE_MB}.\n"
+                "مثال: <code>120</code> — أو /settings للرجوع.",
+                parse_mode="HTML",
+            )
+            context.user_data["settings_input"] = "size"
+            return True
+        if parsed < 1:
+            await update.message.reply_text(
+                "⬇️ <b>الرقم أقل من 1.</b> مينفعش صفر أو رقم سالب.\n\n"
+                f"اكتب قيمة بين 1 و {MAX_CUSTOM_SIZE_MB} MB.",
+                parse_mode="HTML",
+            )
+            context.user_data["settings_input"] = "size"
+            return True
+        if parsed > MAX_CUSTOM_SIZE_MB:
+            await update.message.reply_text(
+                f"⬆️ <b>الرقم كبير جدًا.</b> الحد الأقصى المسموح {MAX_CUSTOM_SIZE_MB} MB.\n\n"
+                "جرّب قيمة أصغر.",
                 parse_mode="HTML",
             )
             context.user_data["settings_input"] = "size"
@@ -449,7 +470,7 @@ async def try_handle_settings_text(update: Update, context: ContextTypes.DEFAULT
         save_settings(uid, max_file_size_mb=mb)
         note = "" if abs(parsed - mb) < 1e-9 else f" (تم تقريب {parsed:g} إلى {mb})"
         await update.message.reply_text(
-            f"✅ تم حفظ الحد الأقصى: <b>{mb} MB</b>{note}\nسيُستخدم في التحميلات الجديدة.",
+            f"🟢 تم حفظ الحد الأقصى: <b>{mb} MB</b>{note}\nسيُستخدم في التحميلات الجديدة.",
             parse_mode="HTML",
         )
         return True
@@ -465,6 +486,10 @@ async def settings_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = query.from_user.id
     data = query.data or ""
     await query.answer()
+    # Any inline-button press exits free-text entry mode (e.g. the custom-size
+    # prompt), so a later ordinary message isn't swallowed by an old prompt.
+    if getattr(context, "user_data", None) is not None:
+        context.user_data.pop("settings_input", None)
 
     if data == "settings:close":
         try:
@@ -573,7 +598,8 @@ def _dispatch(uid: int, data: str, context) -> tuple[str, list]:
         return (
             "📏 <b>إدخال حجم مخصص</b>\n\n"
             f"اكتب رقم بين 1 و {MAX_CUSTOM_SIZE_MB} (بالميجابايت).\n"
-            "مثال: 75",
+            "مثال: <code>75</code>\n\n"
+            "⚠️ هيتقبل الأرقام بس — الحروف والقيم السالبة هترفض.",
             [[("🔴 ↩️ إلغاء", "settings:quality:size")]],
         )
 
