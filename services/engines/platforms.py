@@ -751,7 +751,106 @@ class YtDlpFallbackEngine(PlatformEngine):
         return self._tag(fallback)
 
 
-class ThreadsEngine(YtDlpFallbackEngine):
+class EmbedFallbackEngine(YtDlpFallbackEngine):
+    """Named engine for platforms without a bespoke scraper.
+
+    Runs a generic/dedicated direct resolver first (og:video / JSON-LD embeds,
+    or a platform resolver such as Rumble/Dailymotion), downloads the best
+    candidate through the central audio guard, then falls back to yt-dlp. Any
+    silent or unverifiable direct file is dropped, so a delivery is either
+    audited or never happens.
+    """
+
+    resolver_name = "resolve_embed_media"
+    embed_headers: dict = {}
+
+    def _resolve(self, url: str):
+        from services import light_scrapers
+
+        resolver = getattr(light_scrapers, self.resolver_name, None) or light_scrapers.resolve_embed_media
+        if self.resolver_name == "resolve_embed_media":
+            return resolver(url, extra_headers=self.embed_headers or None)
+        return resolver(url)
+
+    async def analyze(self, url: str) -> dict | None:
+        from middlewares.concurrency import get_executor
+        import asyncio
+
+        loop = asyncio.get_running_loop()
+        try:
+            meta = await loop.run_in_executor(get_executor(), self._resolve, url)
+            if meta:
+                meta["platform"] = self.platform_label
+                meta["engine_profile"] = meta.get("engine_profile") or "direct-resolver+yt-dlp-fallback"
+                return self._tag(meta)
+        except Exception as exc:
+            error_logger.error("%s direct resolve failed: %s", self.name, exc)
+        return await super().analyze(url)
+
+    async def download_video(
+        self,
+        url: str,
+        format_id: str,
+        quality_label: str,
+        progress_callback: Callable | None = None,
+        play_url: str | None = None,
+    ) -> str | None:
+        from services import downloader
+        from middlewares.concurrency import get_executor
+        import asyncio
+
+        loop = asyncio.get_running_loop()
+        candidates: list[str] = []
+        resolved_url = url
+        try:
+            meta = await loop.run_in_executor(get_executor(), self._resolve, url)
+            if meta:
+                resolved_url = meta.get("url") or url
+                candidates = list(meta.get("video_candidates") or [])
+                if meta.get("play_url"):
+                    candidates.insert(0, meta["play_url"])
+        except Exception as exc:
+            error_logger.error("%s resolve before download failed: %s", self.name, exc)
+
+        seen: set[str] = set()
+        for idx, candidate in enumerate(candidates, 1):
+            candidate = (candidate or "").strip()
+            if not candidate.startswith("http") or candidate in seen:
+                continue
+            seen.add(candidate)
+            try:
+                if ".m3u8" in candidate:
+                    path = await loop.run_in_executor(
+                        get_executor(),
+                        downloader.download_hls_mp4,
+                        candidate,
+                        f"xdl-{self.platform_label.lower()}",
+                    )
+                else:
+                    path = await loop.run_in_executor(
+                        get_executor(),
+                        downloader._download_direct_sync,
+                        candidate,
+                        dict(self.embed_headers or {}),
+                        60,
+                        progress_callback,
+                        loop,
+                        f"xdl-{self.platform_label.lower()}-{idx}",
+                    )
+                path = downloader._prepare_video_for_delivery(path, source=f"{self.name}:direct")
+                if path:
+                    return path
+                download_logger.info("%s direct candidate failed/was silent idx=%s", self.name, idx)
+            except downloader.FileTooLargeError:
+                raise
+            except Exception as exc:
+                error_logger.error("%s direct candidate failed idx=%s: %s", self.name, idx, exc)
+
+        fallback_play = candidates[0] if candidates else play_url
+        return await downloader._generic_download_video(resolved_url, format_id, quality_label, progress_callback, fallback_play)
+
+
+class ThreadsEngine(EmbedFallbackEngine):
     name = "ThreadsEnginePro"
     platform_label = "Threads"
     domains = ("threads.net", "www.threads.net")
@@ -840,55 +939,60 @@ class VimeoEngine(PlatformEngine):
         )
 
 
-class DailymotionEngine(YtDlpFallbackEngine):
+class DailymotionEngine(EmbedFallbackEngine):
     name = "DailymotionEnginePro"
     platform_label = "Dailymotion"
     domains = ("dailymotion.com", "dai.ly")
+    resolver_name = "resolve_dailymotion"
+    embed_headers = {"Referer": "https://www.dailymotion.com/"}
 
 
-class SnapchatEngine(YtDlpFallbackEngine):
+class SnapchatEngine(EmbedFallbackEngine):
     name = "SnapchatEnginePro"
     platform_label = "Snapchat"
     domains = ("snapchat.com", "story.snapchat.com")
 
 
-class TelegramPublicEngine(YtDlpFallbackEngine):
+class TelegramPublicEngine(EmbedFallbackEngine):
     name = "TelegramPublicEnginePro"
     platform_label = "Telegram"
     domains = ("t.me", "telegram.me", "telegram.dog")
 
 
-class LikeeEngine(YtDlpFallbackEngine):
+class LikeeEngine(EmbedFallbackEngine):
     name = "LikeeEnginePro"
     platform_label = "Likee"
     domains = ("likee.video", "likee.com", "l.likee.video", "mobile.likee.video")
 
 
-class KwaiEngine(YtDlpFallbackEngine):
+class KwaiEngine(EmbedFallbackEngine):
     name = "KwaiEnginePro"
     platform_label = "Kwai"
     domains = ("kwai.com", "kw.ai", "s.kw.ai", "m.kwai.com", "kwai-video.com")
 
 
-class TwitchEngine(YtDlpFallbackEngine):
+class TwitchEngine(EmbedFallbackEngine):
     name = "TwitchEnginePro"
     platform_label = "Twitch"
     domains = ("twitch.tv", "clips.twitch.tv", "m.twitch.tv", "player.twitch.tv")
+    embed_headers = {"Referer": "https://clips.twitch.tv/"}
 
 
-class BilibiliEngine(YtDlpFallbackEngine):
+class BilibiliEngine(EmbedFallbackEngine):
     name = "BilibiliEnginePro"
     platform_label = "Bilibili"
     domains = ("bilibili.com", "b23.tv", "bilibili.tv", "m.bilibili.com")
+    embed_headers = {"Referer": "https://www.bilibili.com/"}
 
 
-class VkEngine(YtDlpFallbackEngine):
+class VkEngine(EmbedFallbackEngine):
     name = "VkEnginePro"
     platform_label = "VK"
     domains = ("vk.com", "vkvideo.ru", "vk.cc", "m.vk.com", "vkvideo.cc")
+    embed_headers = {"Referer": "https://vk.com/"}
 
 
-class TumblrEngine(YtDlpFallbackEngine):
+class TumblrEngine(EmbedFallbackEngine):
     name = "TumblrEnginePro"
     platform_label = "Tumblr"
     domains = ("tumblr.com", "www.tumblr.com", "at.tumblr.com", "tmblr.co")
@@ -1143,37 +1247,42 @@ class CoubEngine(PlatformEngine):
         )
 
 
-class OdnoklassnikiEngine(YtDlpFallbackEngine):
+class OdnoklassnikiEngine(EmbedFallbackEngine):
     name = "OdnoklassnikiEnginePro"
     platform_label = "Odnoklassniki"
     domains = ("ok.ru", "m.ok.ru", "odnoklassniki.ru", "m.odnoklassniki.ru")
+    embed_headers = {"Referer": "https://ok.ru/"}
 
 
-class RumbleEngine(YtDlpFallbackEngine):
+class RumbleEngine(EmbedFallbackEngine):
     name = "RumbleEnginePro"
     platform_label = "Rumble"
     domains = ("rumble.com", "www.rumble.com")
+    resolver_name = "resolve_rumble"
+    embed_headers = {"Referer": "https://rumble.com/"}
 
 
-class OdyseeEngine(YtDlpFallbackEngine):
+class OdyseeEngine(EmbedFallbackEngine):
     name = "OdyseeEnginePro"
     platform_label = "Odysee"
     domains = ("odysee.com", "www.odysee.com")
 
 
-class NiconicoEngine(YtDlpFallbackEngine):
+class NiconicoEngine(EmbedFallbackEngine):
     name = "NiconicoEnginePro"
     platform_label = "Niconico"
     domains = ("nicovideo.jp", "nico.ms", "www.nicovideo.jp")
+    embed_headers = {"Referer": "https://www.nicovideo.jp/"}
 
 
-class DouyinEngine(YtDlpFallbackEngine):
+class DouyinEngine(EmbedFallbackEngine):
     name = "DouyinEnginePro"
     platform_label = "Douyin"
     domains = ("douyin.com", "v.douyin.com", "www.douyin.com", "m.douyin.com")
+    embed_headers = {"Referer": "https://www.douyin.com/"}
 
 
-class XiaohongshuEngine(YtDlpFallbackEngine):
+class XiaohongshuEngine(EmbedFallbackEngine):
     name = "XiaohongshuEnginePro"
     platform_label = "Xiaohongshu"
     domains = ("xiaohongshu.com", "xhslink.com", "www.xiaohongshu.com", "m.xiaohongshu.com")

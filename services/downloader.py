@@ -513,6 +513,58 @@ def _download_direct_sync(
     return None
 
 
+def download_hls_mp4(play_url: str, prefix: str = "xdl-hls") -> str | None:
+    """Download an HLS (.m3u8) stream into a faststart MP4 via ffmpeg copy.
+
+    Generic path for platforms whose direct player asset is an HLS playlist.
+    Runs the same SSRF guard as direct downloads; audio is verified later by
+    _prepare_video_for_delivery before the file can ever be delivered.
+    """
+    if not play_url or not str(play_url).startswith("http"):
+        return None
+    from utils.url_safety import is_public_url
+
+    safe, _reason = is_public_url(play_url)
+    if not safe:
+        logger.warning("Blocked HLS download (SSRF guard) for %s", str(play_url)[:120])
+        return None
+
+    ffmpeg = _ffmpeg_path()
+    if not ffmpeg:
+        return None
+
+    Path(TEMP_DIR).mkdir(parents=True, exist_ok=True)
+    fd, out_path = tempfile.mkstemp(prefix=f"{prefix}-", suffix=".mp4", dir=TEMP_DIR)
+    os.close(fd)
+    _safe_remove(out_path)
+    try:
+        proc = subprocess.run(
+            [
+                ffmpeg, "-y", "-hide_banner", "-loglevel", "error",
+                "-i", play_url,
+                "-c:v", "copy",
+                "-c:a", "copy",
+                "-bsf:a", "aac_adtstoasc",
+                "-movflags", "+faststart",
+                out_path,
+            ],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=360,
+            check=False,
+        )
+        if proc.returncode == 0 and os.path.exists(out_path) and os.path.getsize(out_path) >= 2048:
+            return out_path
+        logger.debug("HLS download failed for %s: %s", str(play_url)[:120], proc.stderr[-300:])
+        _safe_remove(out_path)
+        return None
+    except Exception as exc:
+        logger.debug("HLS download crashed for %s: %s", str(play_url)[:120], exc)
+        _safe_remove(out_path)
+        return None
+
+
 def _ffmpeg_path() -> str | None:
     ffmpeg = shutil.which("ffmpeg")
     if ffmpeg:

@@ -15,9 +15,11 @@ file is always rejected and the engine falls back to the yt-dlp merge path.
 """
 from __future__ import annotations
 
+import json
 import logging
 import re
 from typing import Any
+from urllib.parse import quote, urlparse
 
 import requests
 
@@ -393,3 +395,325 @@ def resolve_coub(url: str) -> dict[str, Any] | None:
     except Exception as exc:
         logger.debug("Coub API parse failed for %s: %s", url, exc)
         return None
+
+
+# --------------------------------------------------------------------------- #
+# Generic embed resolver (og:video / JSON-LD / twitter:player:stream)
+# --------------------------------------------------------------------------- #
+_VIDEO_FILE_RE = re.compile(r"\.(mp4|m3u8|webm|mov|m4v)([?#]|$)", re.I)
+
+
+def _meta_any(html: str, key: str) -> str | None:
+    """Extract a meta tag value regardless of property/name or attribute order."""
+    if not html:
+        return None
+    key_re = re.escape(key)
+    m = re.search(
+        rf'<meta[^>]+(?:property|name)=["\']{key_re}["\'][^>]+content=["\']([^"\']+)',
+        html,
+        re.I,
+    )
+    if m:
+        return m.group(1)
+    m = re.search(
+        rf'<meta[^>]+content=["\']([^"\']+)["\'][^>]+(?:property|name)=["\']{key_re}["\']',
+        html,
+        re.I,
+    )
+    return m.group(1) if m else None
+
+
+def _walk_jsonld(node, out: list[str]) -> None:
+    if isinstance(node, dict):
+        for key, value in node.items():
+            if key in ("contentUrl", "embedUrl") and isinstance(value, str) and value.startswith("http"):
+                out.append(value)
+            else:
+                _walk_jsonld(value, out)
+    elif isinstance(node, list):
+        for item in node:
+            _walk_jsonld(item, out)
+
+
+def _jsonld_video_urls(html: str) -> list[str]:
+    urls: list[str] = []
+    for block in re.finditer(
+        r'<script[^>]+type=["\']application/ld\+json["\'][^>]*>(.*?)</script>',
+        html,
+        re.S | re.I,
+    ):
+        raw = (block.group(1) or "").strip()
+        if not raw:
+            continue
+        try:
+            _walk_jsonld(json.loads(raw), urls)
+        except Exception:
+            continue
+    return urls
+
+
+def _rank_candidate(u: str) -> int:
+    low = u.lower()
+    score = 0
+    if ".mp4" in low:
+        score += 500
+    elif ".m4v" in low:
+        score += 480
+    elif ".mov" in low:
+        score += 460
+    elif ".webm" in low:
+        score += 420
+    elif ".m3u8" in low:
+        score += 300
+    m = re.search(r"(?:^|[-_/.])(\d{3,4})p?[-_/.?]", low)
+    if m:
+        try:
+            score += min(int(m.group(1)), 2160)
+        except ValueError:
+            pass
+    return score
+
+
+def resolve_embed_media(url: str, extra_headers: dict | None = None) -> dict[str, Any] | None:
+    """Generic direct-media resolver for pages exposing player metadata.
+
+    Works across platforms whose pages publish og:video / twitter:player:stream
+    meta tags or JSON-LD contentUrl. The central audio guard still runs later,
+    so a silent direct file is rejected and engines fall back to yt-dlp.
+    """
+    s = _session()
+    headers = {
+        "Accept": "text/html,application/xhtml+xml,application/json;q=0.9,*/*;q=0.8",
+    }
+    if extra_headers:
+        headers.update(extra_headers)
+    try:
+        r = s.get(url, timeout=20, allow_redirects=True)
+        if r.status_code != 200:
+            return None
+        html = r.text or ""
+        resolved_url = r.url or url
+    except Exception as exc:
+        logger.debug("Embed meta fetch failed for %s: %s", url, exc)
+        return None
+
+    candidates: list[str] = []
+
+    def add(value: str | None) -> None:
+        value = (value or "").strip()
+        value = value.replace("&amp;", "&").replace("\\u0026", "&").replace("\\/", "/")
+        if value.startswith("http") and _VIDEO_FILE_RE.search(value) and value not in candidates:
+            candidates.append(value)
+
+    for key in ("og:video:secure_url", "og:video:url", "og:video", "twitter:player:stream"):
+        add(_meta_any(html, key))
+
+    for value in _jsonld_video_urls(html):
+        add(value)
+
+    if not candidates:
+        return None
+
+    # Dedupe, mp4 first / m3u8 last; keep the highest-resolution hints on top.
+    candidates = sorted(candidates, key=_rank_candidate, reverse=True)[:12]
+
+    title = _meta_any(html, "og:title")
+    if not title:
+        m = re.search(r"<title[^>]*>(.*?)</title>", html, re.S | re.I)
+        title = re.sub(r"\s+", " ", m.group(1)).strip() if m else None
+    thumbnail = _meta_any(html, "og:image") or _meta_any(html, "twitter:image")
+    uploader = _meta_any(html, "og:site_name")
+
+    return _video_payload(
+        url=resolved_url,
+        media_id=None,
+        title=title,
+        uploader=uploader,
+        duration=None,
+        platform="Generic",
+        thumbnail=thumbnail,
+        qualities=None,
+        candidates=candidates,
+        engine_profile="embed-og-video-jsonld",
+    )
+
+
+# --------------------------------------------------------------------------- #
+# Rumble
+# --------------------------------------------------------------------------- #
+def _rumble_id(url: str) -> str | None:
+    m = re.search(r"rumble\.com/(?:embed/)?([A-Za-z0-9]+)", url)
+    return m.group(1) if m else None
+
+
+def _collect_mpeg_urls(
+    node,
+    out: list[tuple[int, str]] | None = None,
+    q_hint: int = 0,
+) -> list[tuple[int, str]]:
+    """Walk an embed JSON payload and collect (quality, mp4_url) rows.
+
+    The quality key is often a numeric sibling *above* the url (e.g. ``{720:
+    {"url": "…"}}``), so the numeric key is propagated down while walking.
+    """
+    if out is None:
+        out = []
+    if isinstance(node, dict):
+        for key, value in node.items():
+            try:
+                key_q = int(key)
+                is_numeric = True
+            except (TypeError, ValueError):
+                key_q = q_hint
+                is_numeric = False
+            if (
+                isinstance(value, str)
+                and value.startswith("http")
+                and ".mp4" in value.lower()
+                and ".m3u8" not in value.lower()
+            ):
+                out.append((key_q, value))
+            elif isinstance(value, (dict, list)):
+                _collect_mpeg_urls(value, out, key_q if is_numeric else q_hint)
+    elif isinstance(node, list):
+        for item in node:
+            _collect_mpeg_urls(item, out, q_hint)
+    return out
+
+
+def resolve_rumble(url: str) -> dict[str, Any] | None:
+    """Resolve a Rumble video via the public embedJS JSON endpoint."""
+    video_id = _rumble_id(url)
+    if not video_id:
+        return None
+
+    s = _session()
+    s.headers.update({"Accept": "application/json", "Referer": f"https://rumble.com/embed/{video_id}/"})
+    try:
+        r = s.get(f"https://rumble.com/embedJS/u3/?request=video&ver=2&v={video_id}", timeout=20)
+        if r.status_code != 200:
+            return None
+        data = r.json()
+    except Exception as exc:
+        logger.debug("Rumble embedJS fetch failed for %s: %s", url, exc)
+        return None
+
+    rows = _collect_mpeg_urls(data)
+    if not rows:
+        return None
+    rows.sort(key=lambda row: row[0], reverse=True)
+    candidates = [u for _, u in rows]
+
+    labels: list[str] = []
+    for q, _u in rows:
+        if q and f"{q}p" not in labels and len(labels) < 6:
+            labels.append(f"{q}p")
+
+    title = None
+    thumbnail = None
+    try:
+        rr = s.get(f"https://rumble.com/api/Media/oEmbed.json?url={quote(url, safe='')}", timeout=15)
+        if rr.status_code == 200:
+            payload = rr.json()
+            title = payload.get("title")
+            thumbnail = payload.get("thumbnail_url")
+    except Exception as exc:
+        logger.debug("Rumble oEmbed fetch failed for %s: %s", url, exc)
+
+    return _video_payload(
+        url=url,
+        media_id=video_id,
+        title=title,
+        uploader=None,
+        duration=None,
+        platform="Rumble",
+        thumbnail=thumbnail,
+        qualities=[{"label": q, "format_id": "best"} for q in (labels or ["best"])],
+        candidates=candidates,
+        engine_profile="rumble-embedjs",
+    )
+
+
+# --------------------------------------------------------------------------- #
+# Dailymotion
+# --------------------------------------------------------------------------- #
+def _dailymotion_id(url: str) -> str | None:
+    m = re.search(r"dailymotion\.com/video/([a-z0-9]+)", url)
+    if m:
+        return m.group(1)
+    m = re.search(r"dai\.ly/([a-z0-9]+)", url)
+    return m.group(1) if m else None
+
+
+def resolve_dailymotion(url: str) -> dict[str, Any] | None:
+    """Resolve a Dailymotion video via the player metadata JSON.
+
+    Progressive MP4 qualities carry audio and are preferred; HLS is appended as
+    a secondary candidate and the audio guard still filters anything silent.
+    """
+    video_id = _dailymotion_id(url)
+    if not video_id:
+        return None
+
+    s = _session()
+    s.headers.update({"Accept": "application/json", "Referer": "https://www.dailymotion.com/"})
+    try:
+        r = s.get(f"https://www.dailymotion.com/player/metadata/video/{video_id}", timeout=20)
+        if r.status_code != 200:
+            return None
+        data = r.json()
+    except Exception as exc:
+        logger.debug("Dailymotion metadata fetch failed for %s: %s", url, exc)
+        return None
+
+    mp4: list[tuple[int, str]] = []
+    hls: list[tuple[int, str]] = []
+    for qkey, entries in (data.get("qualities") or {}).items():
+        try:
+            q = int(qkey)
+        except (TypeError, ValueError):
+            q = 0
+        for entry in entries or []:
+            if not isinstance(entry, dict):
+                continue
+            candidate = entry.get("url")
+            if not isinstance(candidate, str) or not candidate.startswith("http"):
+                continue
+            low = candidate.lower()
+            if ".m3u8" in low or ".mpd" in low:
+                hls.append((q, candidate))
+            elif ".mp4" in low or "video/" in (entry.get("type") or "").lower():
+                mp4.append((q, candidate))
+
+    rows = sorted(mp4, key=lambda row: row[0], reverse=True) + sorted(hls, key=lambda row: row[0], reverse=True)
+    if not rows:
+        return None
+
+    labels: list[str] = []
+    for q, _u in mp4:
+        if q and f"{q}p" not in labels and len(labels) < 7:
+            labels.append(f"{q}p")
+
+    title = None
+    thumbnail = None
+    try:
+        rr = s.get(f"https://www.dailymotion.com/services/oembed?url={quote(url, safe='')}", timeout=15)
+        if rr.status_code == 200:
+            payload = rr.json()
+            title = payload.get("title")
+            thumbnail = payload.get("thumbnail_url")
+    except Exception as exc:
+        logger.debug("Dailymotion oEmbed fetch failed for %s: %s", url, exc)
+
+    return _video_payload(
+        url=url,
+        media_id=video_id,
+        title=title,
+        uploader=None,
+        duration=None,
+        platform="Dailymotion",
+        thumbnail=thumbnail,
+        qualities=[{"label": q, "format_id": "best"} for q in (labels or ["best"])],
+        candidates=[u for _, u in rows],
+        engine_profile="dailymotion-player-metadata",
+    )
