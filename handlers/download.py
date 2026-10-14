@@ -89,6 +89,17 @@ async def _safe_vault(context, sent_message):
         return None
 
 
+def _completion_caption(lang: str, settings: dict | None) -> str | None:
+    """Completion caption shown on delivered media, honoring ``notify_complete``.
+
+    When the user turns "اكتمال التحميل" off, media is sent with no caption
+    instead of the usual brand/completed line.
+    """
+    if settings and not bool(settings.get("notify_complete", 1)):
+        return None
+    return t(lang, "completed", bot_name=BOT_DISPLAY_NAME)
+
+
 def _extract_urls(text: str) -> list[str]:
     """Pull every URL from a message, stripping trailing punctuation."""
     urls = []
@@ -513,7 +524,7 @@ async def download_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await _quiet_edit(edit_fn, t(lang, "from_cache"), parse_mode="HTML")
                 media_group = []
                 for i, it in enumerate(cached_album[:ALBUM_MAX_ITEMS]):
-                    caption = t(lang, "completed", bot_name=BOT_DISPLAY_NAME) if i == 0 else None
+                    caption = _completion_caption(lang, settings) if i == 0 else None
                     if it.get("type") == "video":
                         media_group.append(InputMediaVideo(media=it["file_id"], caption=caption, parse_mode="HTML" if caption else None, supports_streaming=True))
                     else:
@@ -693,7 +704,7 @@ async def _run_download(query, context, info, user, lang, quality_label,
                             with open(item["path"], "rb") as fh:
                                 return await query.message.reply_photo(
                                     photo=InputFile(fh, filename=f"{safe_title}.jpg"),
-                                    caption=t(lang, "completed", bot_name=BOT_DISPLAY_NAME),
+                                    caption=complete_caption,
                                 )
 
                         sent = await _upload_with_retry(_send_single_photo)
@@ -707,7 +718,7 @@ async def _run_download(query, context, info, user, lang, quality_label,
                             with open(item["path"], "rb") as fh:
                                 return await query.message.reply_video(
                                     video=InputFile(fh, filename=f"{safe_title}.mp4"),
-                                    caption=t(lang, "completed", bot_name=BOT_DISPLAY_NAME),
+                                    caption=complete_caption,
                                     supports_streaming=True,
                                 )
 
@@ -786,7 +797,7 @@ async def _run_download(query, context, info, user, lang, quality_label,
                 with open(file_path, "rb") as f:
                     return await query.message.reply_photo(
                         photo=InputFile(f, filename=f"{safe_title}.jpg"),
-                        caption=t(lang, "completed", bot_name=BOT_DISPLAY_NAME),
+                        caption=complete_caption,
                     )
 
             sent = await _upload_with_retry(_send_photo)
@@ -812,7 +823,7 @@ async def _run_download(query, context, info, user, lang, quality_label,
                 with open(file_path, "rb") as f:
                     return await query.message.reply_audio(
                         audio=InputFile(f, filename=f"{safe_title}.mp3"),
-                        caption=t(lang, "completed", bot_name=BOT_DISPLAY_NAME),
+                        caption=complete_caption,
                     )
 
             sent = await _upload_with_retry(_send_audio)
@@ -887,11 +898,11 @@ async def _run_download(query, context, info, user, lang, quality_label,
                         if delivery_mode == "file":
                             return await query.message.reply_document(
                                 document=InputFile(f, filename=f"{safe_title}.mp4"),
-                                caption=t(lang, "completed", bot_name=BOT_DISPLAY_NAME),
+                                caption=complete_caption,
                             )
                         return await query.message.reply_video(
                             video=InputFile(f, filename=f"{safe_title}.mp4"),
-                            caption=t(lang, "completed", bot_name=BOT_DISPLAY_NAME),
+                            caption=complete_caption,
                             supports_streaming=True,
                         )
 

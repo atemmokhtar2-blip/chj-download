@@ -429,6 +429,41 @@ async def settings_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             pass
         return
 
+    # Re-download from history must actually START a download, so it lives in
+    # this async path (process_url) rather than the pure render dispatcher.
+    if data.startswith("settings:history:redownload:"):
+        try:
+            eid = int(data.rsplit(":", 1)[-1])
+        except ValueError:
+            eid = -1
+        entry = get_history_entry(uid, eid) if eid > 0 else None
+        url = entry.get("url") if entry else None
+        if not url:
+            try:
+                await safe_edit(
+                    query.edit_message_text,
+                    "📚 هذا السجل غير موجود أو لا يخص حسابك.",
+                    parse_mode="HTML",
+                    reply_markup=_mk([[("↩️ رجوع للسجل", "settings:history")]]),
+                )
+            except Exception:
+                pass
+            return
+        await query.answer("🔁 بدأ إعادة التحميل…")
+        try:
+            from handlers.download import process_url
+            await process_url(update, context, query.from_user, url, query.message)
+        except Exception:
+            logger.exception("Redownload failed uid=%s url=%s", uid, url[:120])
+            try:
+                await query.message.reply_text(
+                    "⚠️ فشل بدء إعادة التحميل. تأكد أن الرابط ما زال صالحًا أو أرسل رابطًا جديدًا.",
+                    parse_mode="HTML",
+                )
+            except Exception:
+                pass
+        return
+
     try:
         text, rows = _dispatch(uid, data, context)
     except Exception as exc:
@@ -526,21 +561,6 @@ def _dispatch(uid: int, data: str, context) -> tuple[str, list]:
         except ValueError:
             eid = -1
         return build_history_detail(settings, uid, eid)
-    if data.startswith("settings:history:redownload:"):
-        try:
-            eid = int(data.rsplit(":", 1)[-1])
-        except ValueError:
-            eid = -1
-        entry = get_history_entry(uid, eid)
-        if entry and entry.get("url"):
-            return (
-                "🔁 <b>إعادة تحميل</b>\n\n"
-                f"الرابط: <code>{entry['url'][:200]}</code>\n\n"
-                "أرسل الرابط ده في المحادثة (بنفس الرسالة أو رسالة جديدة) وإذا كان لسه صالحًا هيشتغل، "
-                "ولو انتهى صلاحيته اطلب منك رابط جديد.",
-                [[("↩️ رجوع للسجل", "settings:history")]],
-            )
-        return build_history(settings, uid, 0)
     if data.startswith("settings:history:delete:"):
         try:
             eid = int(data.rsplit(":", 1)[-1])
