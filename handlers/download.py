@@ -31,6 +31,10 @@ from services.content_intelligence import render_intelligence_html
 from middlewares.rate_limiter import check_rate_limit_detailed, mark_download
 from middlewares.concurrency import download_slot, active_global_slots
 from middlewares.user_locks import is_user_busy, try_acquire_user_download, release_user_download
+from middlewares.cancellation import (
+    DownloadCancelledError, request_cancel, clear_cancel,
+    is_cancel_requested, check_cancelled,
+)
 from middlewares.auth import is_banned
 from locales import t
 from utils.helpers import is_valid_url, is_supported_url, truncate_title, make_progress_bar, format_size, get_platform_emoji, summarize_error
@@ -509,6 +513,17 @@ async def download_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await _quiet_edit(edit_fn, t(lang, "cancelled"))
         return
 
+    if data.split("|", 1)[0] == "dl_stop":
+        # 🛑 pressed while a download is running: flag it so every download
+        # loop (yt-dlp hook, CDN chunk loop, fallback matrix, album items)
+        # aborts at its next checkpoint. The running task then edits the card
+        # to the final "download cancelled" message and cleans temp files.
+        request_cancel(user.id)
+        await query.answer(t(lang, "cancelling"))
+        edit_fn = query.edit_message_caption if query.message.caption else query.edit_message_text
+        await _quiet_edit(edit_fn, t(lang, "cancelling"), parse_mode="HTML")
+        return
+
     if token:
         info = context.user_data.get(f"info:{token}")
     else:
@@ -651,12 +666,25 @@ async def download_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     file_path = None
     edit_fn = query.edit_message_caption if progress_msg.caption else progress_msg.edit_text
 
+    quiet = bool(settings.get("quiet_mode")) or not bool(settings.get("notify_progress", 1))
+
+    # 🛑 Cancel support: a cancel button rides along on every status edit while
+    # the download runs; pressing it sets the per-user cancel flag that every
+    # download loop checks (yt-dlp progress hook, CDN chunk loop, fallback
+    # matrix, album items, pre-upload checkpoints).
+    cancel_markup = InlineKeyboardMarkup([
+        [inline_button(t(lang, "cancel_download_button"), callback_data="dl_stop")]
+    ])
+    clear_cancel(user.id)
+    if not quiet:
+        await _quiet_edit(edit_fn, t(lang, "preparing_download"), parse_mode="HTML", reply_markup=cancel_markup)
+
     # Global concurrency gate — wait for a free slot (do not overwhelm server)
-    if bool(settings.get("notify_queue", 1)) and not bool(settings.get("quiet_mode")):
+    if bool(settings.get("notify_queue", 1)) and not quiet:
         try:
             in_use, max_slots = active_global_slots()
             if in_use >= max_slots:
-                await _quiet_edit(edit_fn, t(lang, "queue_wait", current=in_use, maximum=max_slots), parse_mode="HTML")
+                await _quiet_edit(edit_fn, t(lang, "queue_wait", current=in_use, maximum=max_slots), parse_mode="HTML", reply_markup=cancel_markup)
         except Exception:
             pass
 
@@ -664,6 +692,8 @@ async def download_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     async def update_progress(prog):
         try:
+            if is_cancel_requested(user.id):
+                return
             if isinstance(prog, dict):
                 pct, dl, tot, spd, eta = prog.get("pct", 0), prog.get("downloaded", 0), prog.get("total", 0), prog.get("speed", 0), prog.get("eta", 0)
             else:
@@ -676,17 +706,21 @@ async def download_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             bar = make_progress_bar(pct)
             txt = t(lang, "downloading", bar=bar, percent=pct, downloaded=format_size(dl), total=format_size(tot), speed=f"{format_size(int(spd))}/s", eta=f"{int(eta)}s")
             if progress_msg.caption:
-                await progress_msg.edit_caption(txt, parse_mode="HTML")
+                await progress_msg.edit_caption(txt, parse_mode="HTML", reply_markup=cancel_markup)
             else:
-                await progress_msg.edit_text(txt, parse_mode="HTML")
+                await progress_msg.edit_text(txt, parse_mode="HTML", reply_markup=cancel_markup)
         except Exception:
             pass
 
-    quiet = bool(settings.get("quiet_mode")) or not bool(settings.get("notify_progress", 1))
     async def _noop_progress(prog):
         pass
     if quiet:
         update_progress = _noop_progress
+
+    # The downloader reads this attribute synchronously inside worker threads
+    # (yt-dlp hooks, requests chunk loops) and raises DownloadCancelledError,
+    # which aborts the in-thread download immediately.
+    update_progress.cancel_check = lambda: check_cancelled(user.id)
 
     try:
         async with download_slot(timeout=180):
@@ -694,6 +728,9 @@ async def download_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                                 is_audio, is_image, is_album, edit_fn, update_progress,
                                 audio_bitrate=audio_bitrate, delivery_mode=delivery_mode,
                                 settings=settings)
+    except DownloadCancelledError:
+        logger.info("Download cancelled by user=%s url=%s", user.id, str(info.get("url", ""))[:120])
+        await _quiet_edit(edit_fn, t(lang, "download_cancelled"), parse_mode="HTML")
     except asyncio.TimeoutError:
         await _quiet_edit(edit_fn, t(lang, "server_busy"))
     except FileTooLargeError:
@@ -720,6 +757,7 @@ async def download_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 pass
     finally:
         release_user_download(user.id)
+        clear_cancel(user.id)
         if file_path and os.path.exists(file_path):
             _cleanup_file(file_path)
 
@@ -893,6 +931,7 @@ async def _run_download(query, context, info, user, lang, quality_label,
             await _status(t(lang, "preparing_audio"), parse_mode="HTML")
             file_path = await download_audio(info["url"], update_progress, bitrate=audio_bitrate)
             if not file_path: raise Exception("Download failed")
+            check_cancelled(user.id)
             _enforce_user_size(file_path, settings)
             await _status(t(lang, "uploading"), parse_mode="HTML")
             safe_title = _safe_upload_name(title)

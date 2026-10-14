@@ -19,6 +19,7 @@ from config.settings import (
     YTDLP_COOKIES_FILE, YTDLP_COOKIES_FROM_BROWSER, YTDLP_CLIENT,
     AUDIO_BITRATE, AUDIO_BITRATE_HIGH,
 )
+from middlewares.cancellation import DownloadCancelledError
 from services.content_intelligence import build_content_intelligence
 
 ALBUM_MAX_ITEMS = 10
@@ -241,6 +242,11 @@ def _base_opts(progress=None, loop: asyncio.AbstractEventLoop | None = None) -> 
         opts.setdefault("extractor_args", {}).setdefault("youtube", {})["visitor_data"] = [yt_visitor_data]
     if progress and loop:
         def hook(d):
+            # User pressed 🛑 — raise inside the yt-dlp thread so the download
+            # aborts immediately instead of finishing the whole fallback matrix.
+            cancel_check = getattr(progress, "cancel_check", None)
+            if cancel_check is not None:
+                cancel_check()
             if d.get("status") != "downloading":
                 return
             total = d.get("total_bytes") or d.get("total_bytes_estimate") or 0
@@ -463,10 +469,13 @@ def _download_direct_sync(
                     )
 
                 downloaded = 0
+                cancel_check = getattr(progress, "cancel_check", None)
                 with open(out_path, "wb") as output:
                     for chunk in response.iter_content(chunk_size=256 * 1024):
                         if not chunk:
                             continue
+                        if cancel_check is not None:
+                            cancel_check()
                         if downloaded + len(chunk) > MAX_FILE_SIZE_BYTES:
                             raise FileTooLargeError(
                                 size_bytes=downloaded + len(chunk),
@@ -496,6 +505,9 @@ def _download_direct_sync(
                 _safe_remove(out_path)
                 return None
         except FileTooLargeError:
+            _safe_remove(out_path)
+            raise
+        except DownloadCancelledError:
             _safe_remove(out_path)
             raise
         except requests.RequestException as exc:
@@ -823,8 +835,23 @@ def _download_sync_impl(url: str, opts: dict, check_size: bool) -> str | None:
 def _video_format_candidates(format_id: str = "best") -> list[str]:
     """Return yt-dlp format fallbacks that strongly prefer video+audio merged output."""
     requested = str(format_id or "best").strip()
-    merged_best = "bestvideo[ext=mp4]+bestaudio[ext=m4a]/bestvideo+bestaudio/best[acodec!=none][vcodec!=none]/best"
-    merged_720 = "bestvideo[height<=720][ext=mp4]+bestaudio[ext=m4a]/bestvideo[height<=720]+bestaudio/best[height<=720][acodec!=none][vcodec!=none]/best[height<=720]"
+    # Quality-first selectors: prefer H.264 (avc) video inside MP4 + m4a audio.
+    # H.264/AAC is what Telegram hardware-accelerates, so the "best" pick is not
+    # just the highest resolution but the highest resolution that plays smoothly
+    # and merges cleanly. VP9/AV1 rows are still reachable through the later
+    # fallbacks when a platform offers nothing else.
+    merged_best = (
+        "bestvideo[ext=mp4][vcodec^=avc]+bestaudio[ext=m4a]"
+        "/bestvideo[ext=mp4]+bestaudio[ext=m4a]"
+        "/bestvideo+bestaudio"
+        "/best[acodec!=none][vcodec!=none]/best"
+    )
+    merged_720 = (
+        "bestvideo[height<=720][ext=mp4][vcodec^=avc]+bestaudio[ext=m4a]"
+        "/bestvideo[height<=720][ext=mp4]+bestaudio[ext=m4a]"
+        "/bestvideo[height<=720]+bestaudio"
+        "/best[height<=720][acodec!=none][vcodec!=none]/best[height<=720]"
+    )
     safe_small = "best[height<=720][acodec!=none][vcodec!=none]/best[acodec!=none][vcodec!=none]/worst[acodec!=none][vcodec!=none]/worst"
     if requested in {"best", "best_quality"}:
         return [merged_best, merged_720, safe_small]
@@ -842,6 +869,7 @@ def _youtube_client_candidates() -> list[str]:
 
 async def _generic_download_video(url: str, format_id: str = "best", quality_label: str = "best", progress=None, play_url: str | None = None, allow_large: bool = False) -> str | None:
     loop = asyncio.get_running_loop() if progress else None
+    cancel_check = getattr(progress, "cancel_check", None)
     host = urlparse(url).netloc.lower()
     formats = _video_format_candidates(format_id)
     targets: list[tuple[str, str]] = []
@@ -860,6 +888,8 @@ async def _generic_download_video(url: str, format_id: str = "best", quality_lab
             client_profiles = [("default", [YTDLP_CLIENT] if YTDLP_CLIENT else [])]
         for profile_name, clients in client_profiles:
             for fmt in formats:
+                if cancel_check is not None:
+                    cancel_check()
                 opts = {**_base_opts(progress, loop), "format": fmt, "merge_output_format": "mp4", "noplaylist": True}
                 if clients:
                     opts.setdefault("extractor_args", {}).setdefault("youtube", {})["player_client"] = clients
@@ -878,6 +908,8 @@ async def _generic_download_video(url: str, format_id: str = "best", quality_lab
                         logger.info("Direct play_url produced no verified audio; trying page URL for merge: %s", url[:100])
                         break
                 except FileTooLargeError:
+                    raise
+                except DownloadCancelledError:
                     raise
                 except Exception as exc:
                     last_error = exc
@@ -917,6 +949,7 @@ async def _generic_download_audio(url: str, progress=None, bitrate: str | None =
     adds a second layer instead of replacing a failed one-off call.
     """
     loop = asyncio.get_running_loop() if progress else None
+    cancel_check = getattr(progress, "cancel_check", None)
     preferred_quality = _valid_audio_bitrate(bitrate or AUDIO_BITRATE)
     host = urlparse(url).netloc.lower()
     formats = _audio_format_candidates()
@@ -929,6 +962,8 @@ async def _generic_download_audio(url: str, progress=None, bitrate: str | None =
     last_error: Exception | None = None
     for profile_name, clients in client_profiles:
         for fmt in formats:
+            if cancel_check is not None:
+                cancel_check()
             opts = {
                 **_base_opts(progress, loop),
                 "format": fmt,
@@ -938,7 +973,10 @@ async def _generic_download_audio(url: str, progress=None, bitrate: str | None =
                         "key": "FFmpegExtractAudio",
                         "preferredcodec": "mp3",
                         "preferredquality": preferred_quality,
-                    }
+                    },
+                    # Embed title/artist metadata so delivered MP3s show proper
+                    # tags in music players instead of "Unknown - Unknown".
+                    {"key": "FFmpegMetadata"},
                 ],
             }
             if clients and "youtu" in host:
@@ -953,6 +991,8 @@ async def _generic_download_audio(url: str, progress=None, bitrate: str | None =
                         )
                     return path
             except FileTooLargeError:
+                raise
+            except DownloadCancelledError:
                 raise
             except Exception as exc:
                 last_error = exc
@@ -1112,9 +1152,23 @@ async def analyze_url(url: str) -> dict | None:
     engine = _select_engine(url)
     try:
         info = await engine.analyze(url)
+    except DownloadCancelledError:
+        raise
     except Exception as exc:
         logger.warning("Engine analyze failed (%s) for %s: %s", getattr(engine, "name", "unknown"), url[:120], exc)
         info = await _generic_analyze_url(url)
+    if not info:
+        # Hardening: transient extractor/network hiccups are common on busy
+        # platforms. One delayed retry through the generic yt-dlp path recovers
+        # a meaningful share of first-pass failures without user-visible cost.
+        await asyncio.sleep(0.8)
+        try:
+            info = await _generic_analyze_url(url)
+            if info:
+                logger.info("Analysis retry succeeded for %s", url[:100])
+        except Exception as exc:
+            logger.warning("Analysis retry failed for %s: %s", url[:120], exc)
+            info = None
     return _finalize_analysis(info)
 
 
@@ -1132,6 +1186,8 @@ async def download_video(url: str, format_id: str = "best", quality_label: str =
         logger.warning("Engine returned no verified-audio video (%s); forcing generic merge fallback for %s", getattr(engine, "name", "unknown"), url[:120])
         return await _generic_download_video(url, format_id, quality_label, progress, None)
     except FileTooLargeError:
+        raise
+    except DownloadCancelledError:
         raise
     except Exception as exc:
         logger.warning("Engine video download failed (%s) for %s: %s", getattr(engine, "name", "unknown"), url[:120], exc)
@@ -1157,6 +1213,8 @@ async def download_audio(url: str, progress=None, bitrate: str | None = None) ->
                 return path
         except FileTooLargeError:
             raise
+        except DownloadCancelledError:
+            raise
         except Exception as exc:
             if last_error is None:
                 last_error = exc
@@ -1167,6 +1225,8 @@ async def download_audio(url: str, progress=None, bitrate: str | None = None) ->
         if path:
             return path
     except FileTooLargeError:
+        raise
+    except DownloadCancelledError:
         raise
     except Exception as exc:
         if last_error is None:

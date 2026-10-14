@@ -125,10 +125,13 @@ class TikTokEngine(PlatformEngine):
             error_logger.error("TikTokEnginePro resolve before download failed: %s", exc)
 
         seen_direct: set[str] = set()
+        cancel_check = getattr(progress_callback, "cancel_check", None)
         for idx, item in enumerate(sorted(direct_candidates, key=lambda x: int(x.get("score") or 0), reverse=True), start=1):
             candidate = str(item.get("play_url") or "")
             if not candidate or candidate in seen_direct:
                 continue
+            if cancel_check is not None:
+                cancel_check()
             seen_direct.add(candidate)
             try:
                 path = await loop.run_in_executor(
@@ -146,17 +149,23 @@ class TikTokEngine(PlatformEngine):
                 download_logger.info("TikTok direct candidate failed/was silent provider=%s idx=%s", item.get("provider"), idx)
             except downloader.FileTooLargeError:
                 raise
+            except downloader.DownloadCancelledError:
+                raise
             except Exception as exc:
                 error_logger.error("TikTokEnginePro direct candidate failed provider=%s: %s", item.get("provider"), exc)
 
         # Final fallback must use the page URL, not the failed CDN play_url, so yt-dlp
         # can re-extract/merge with its own TikTok logic.
         for page_url in dict.fromkeys([resolved_page_url, url]):
+            if cancel_check is not None:
+                cancel_check()
             try:
                 path = await downloader._generic_download_video(page_url, format_id, quality_label, progress_callback, None)
                 if path:
                     return path
             except downloader.FileTooLargeError:
+                raise
+            except downloader.DownloadCancelledError:
                 raise
             except Exception as exc:
                 error_logger.error("TikTokEnginePro page fallback failed for %s: %s", page_url[:90], exc)
