@@ -19,8 +19,6 @@ pinned: true
 - **🎬 دعم منصات متعددة:** (YouTube, TikTok, Instagram, Facebook, Twitter/X, Threads, Reddit, Pinterest, Snapchat, Vimeo, Dailymotion, SoundCloud, Twitch, Bilibili, VK, Tumblr, Imgur, Streamable, Coub, OK.ru, Likee, Kwai).
 - **🏆 جودة عالية:** دعم تحميل الفيديوهات بجودة تصل إلى 4K و MP3 عالي النقاء.
 - **📱 بدون علامة مائية:** تحميل فيديوهات تيك توك وكوايي بدون العلامة المائية المزعجة.
-- **🎁 نظام مكافآت:** احصل على نقاط مجانية يومياً ومن خلال دعوة أصدقائك.
-- **🎰 عجلة الحظ:** جرب حظك يومياً لتربح نقاط تحميل إضافية.
 
 ## 🛠 المنصات المدعومة (Supported Platforms)
 - YouTube (Shorts & Videos)
