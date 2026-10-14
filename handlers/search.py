@@ -6,11 +6,12 @@ from html import escape
 
 from telegram import (
     Update,
-    InlineKeyboardButton,
+ 
     InlineKeyboardMarkup,
     InlineQueryResultArticle,
     InputTextMessageContent,
 )
+from utils.button_text import inline_button
 from telegram.ext import ContextTypes
 
 from middlewares.auth import is_banned
@@ -99,7 +100,7 @@ async def search_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     context.user_data["search_results"] = [item["url"] for item in results]
     rows = [
-        [InlineKeyboardButton(f"{idx}. {item['title'][:50]}", callback_data=f"search_{idx - 1}")]
+        [inline_button(f"{idx}. {item['title'][:50]}", callback_data=f"search_{idx - 1}")]
         for idx, item in enumerate(results[:SEARCH_RESULT_LIMIT], start=1)
     ]
     text = "🔎 <b>نتائج البحث:</b>\n\n" + "\n".join(
