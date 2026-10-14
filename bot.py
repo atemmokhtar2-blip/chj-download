@@ -33,7 +33,7 @@ from handlers.admin import (
 from workers.cleanup import cleanup_temp_files, cleanup_old_cache, cleanup_old_history
 
 # Arabic-only main menu.
-MENU_BUTTONS = {"📥 تحميل", "📥 Download"}
+MENU_BUTTONS = {"📥 تحميل", "📥 Download", "⚙️ الإعدادات", "⚙️ Settings"}
 
 
 async def ping_command(update: Update, context):
@@ -72,8 +72,13 @@ async def message_router(update: Update, context):
         db_user = get_user(user_id)
         if db_user:
             update_user(user_id, language="ar")
-        if text in (t("ar", "menu_download"), t("en", "menu_download")):
+        download_btn = {t("ar", "menu_download"), t("en", "menu_download")}
+        settings_btn = {t("ar", "menu_settings"), t("en", "menu_settings")}
+        if text in download_btn:
             await update.message.reply_text(t("ar", "send_url_prompt"), parse_mode="HTML")
+        elif text in settings_btn:
+            # Open the real settings menu (same screen as /settings).
+            await settings_command(update, context)
         return
 
     from handlers.admin import admin_text_handler

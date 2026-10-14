@@ -215,3 +215,39 @@ def test_unknown_callback_falls_back_to_home(isolated_db):
     text, rows = _dispatch(uid, "totally:unknown:cb", _Context())
     labels = [lbl for row in rows for lbl, _ in row]
     assert "🎯 الجودة والحجم" in labels
+
+
+def test_main_keyboard_has_download_and_settings_shortcuts(isolated_db):
+    from locales import t
+    from handlers.start import get_main_keyboard
+
+    kb = get_main_keyboard("ar", 555)
+    labels = [btn.text for row in kb.keyboard for btn in row]
+    assert "📥 تحميل" in labels
+    assert "⚙️ الإعدادات" in labels
+    assert t("ar", "menu_settings") == "⚙️ الإعدادات"
+
+
+def test_settings_button_opens_the_real_settings_menu(isolated_db):
+    """Tapping the main-menu Settings button must open the full settings menu,
+    not the legacy static /settings text."""
+    import asyncio
+    from handlers.settings_menu import settings_command
+
+    captured = {}
+
+    class _User:
+        id = 4242
+
+    class _Message:
+        async def reply_text(self, text, **kwargs):
+            captured["text"] = text
+            captured["parse_mode"] = kwargs.get("parse_mode")
+
+    class _Update:
+        effective_user = _User()
+        message = _Message()
+
+    asyncio.run(settings_command(_Update(), None))
+    assert "إعدادات حسابك" in captured["text"]
+    assert captured["parse_mode"] == "HTML"

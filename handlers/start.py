@@ -10,7 +10,11 @@ logger = logging.getLogger(__name__)
 
 
 def get_main_keyboard(lang: str = "ar", user_id: int = None) -> ReplyKeyboardMarkup:
-    return ReplyKeyboardMarkup([[t("ar", "menu_download")]], resize_keyboard=True)
+    """Two permanent Arabic shortcuts: Download + Settings."""
+    return ReplyKeyboardMarkup(
+        [[t("ar", "menu_download"), t("ar", "menu_settings")]],
+        resize_keyboard=True,
+    )
 
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
