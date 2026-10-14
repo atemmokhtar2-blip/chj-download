@@ -560,7 +560,7 @@ async def download_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     logger.warning("Vault deliver failed, trying file_id: %s", ve)
             if not delivered:
                 fid = cached["file_id"]
-                brand_caption = t(lang, "completed", bot_name=BOT_DISPLAY_NAME)
+                brand_caption = _completion_caption(lang, settings)
                 if is_audio:
                     await query.message.reply_audio(audio=fid, caption=brand_caption)
                 elif is_image:
@@ -665,6 +665,7 @@ async def _run_download(query, context, info, user, lang, quality_label,
                         audio_bitrate: str | None = None, delivery_mode: str = "video",
                         settings: dict | None = None):
     file_path = None
+    complete_caption = _completion_caption(lang, settings)
     try:
         title = info.get("title", "Unknown")
         platform = info.get("platform", "")
@@ -736,7 +737,7 @@ async def _run_download(query, context, info, user, lang, quality_label,
                             for i, item in enumerate(downloaded[:ALBUM_MAX_ITEMS]):
                                 fh = open(item["path"], "rb")
                                 open_handles.append(fh)
-                                caption = t(lang, "completed", bot_name=BOT_DISPLAY_NAME) if i == 0 else None
+                                caption = complete_caption if i == 0 else None
                                 safe_title = _safe_upload_name(item.get("title") or title or "media", 40)
                                 if item["type"] == "image":
                                     media_group.append(

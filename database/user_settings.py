@@ -50,17 +50,20 @@ def _normalize_user_id(user_id: object) -> int | None:
     This is the single choke point for isolation: every per-user query funnels
     through it, so a malformed id can never accidentally match (or write into)
     another user's row.
+
+    Strictly accepts ONLY a real ``int`` — no bools, no numeric strings, no
+    floats. Coercing ``"5001"`` or ``5001.0`` into the id ``5001`` would mean
+    a caller that ever slipped a string through could silently read/write
+    another user's row: the exact cross-account leak this guard exists to stop.
     """
     if isinstance(user_id, bool):
         return None
-    try:
-        n = int(user_id)
-    except (TypeError, ValueError, OverflowError):
+    if type(user_id) is not int:
         return None
     # Telegram ids are positive and far below 2**53. Anything else is invalid.
-    if n <= 0 or n > 9_007_199_254_740_991:
+    if user_id <= 0 or user_id > 9_007_199_254_740_991:
         return None
-    return n
+    return user_id
 
 
 def _require_user_id(user_id: object) -> int:
