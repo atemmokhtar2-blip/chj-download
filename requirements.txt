@@ -1,5 +1,5 @@
-gradio==4.44.1
-huggingface_hub>=0.19.3,<1.0
+gradio==5.49.1
+huggingface_hub>=0.33.5,<1.0
 python-telegram-bot==21.10
 python-dotenv==1.0.1
 yt-dlp>=2025.1.15
