@@ -565,27 +565,19 @@ async def download_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     await query.answer()
-    user_audio_br = str(AUDIO_QUALITY_BITRATE.get(settings.get("audio_quality", "normal"), 192))
     smart_mode = data == "dl_smart"
-    preferred_delivery = str(settings.get("delivery_mode") or "video")
-    if smart_mode:
-        is_audio, is_image, is_album, quality_label = _pick_smart_download(info, settings)
-        audio_bitrate = user_audio_br
-        delivery_mode = preferred_delivery
-    else:
-        is_audio = data in {"dl_audio", "dl_audio_320"}
-        is_image = data == "dl_image"
-        is_album = data == "dl_album"
-        # "إرسال كملف" honored for explicit video choices too; only
-        # "استخراج الصوت" stays Smart-Download-only (an explicit video
-        # button must never silently turn into an MP3).
-        delivery_mode = "video" if preferred_delivery == "audio" else preferred_delivery
-        if is_audio:
-            quality_label = "audio_320" if data == "dl_audio_320" else "audio"
-            audio_bitrate = AUDIO_BITRATE_HIGH if data == "dl_audio_320" else user_audio_br
-        else:
-            quality_label = "image" if is_image else data.replace("dl_video_", "")
-            audio_bitrate = user_audio_br
+
+    # Single source of truth for button -> behavior mapping. The same pure,
+    # unit-tested resolver the settings docs describe is used live, so every
+    # saved preference is guaranteed to apply:
+    #   * audio_quality -> bitrate-specific quality_label (audio_128/192/320),
+    #     which keys the cache — changing audio quality can never serve a
+    #     stale file rendered at the old bitrate.
+    #   * delivery_mode -> "file" sends documents, "audio" drives Smart MP3.
+    #   * video_quality -> Smart Download's default quality.
+    is_audio, is_image, is_album, quality_label, audio_bitrate, delivery_mode = (
+        _resolve_download_choice(data, info, settings)
+    )
 
     if smart_mode and not is_audio:
         try:
@@ -733,10 +725,26 @@ async def download_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await _quiet_edit(edit_fn, t(lang, "download_cancelled"), parse_mode="HTML")
     except asyncio.TimeoutError:
         await _quiet_edit(edit_fn, t(lang, "server_busy"))
-    except FileTooLargeError:
+    except FileTooLargeError as exc:
+        # Report the limit that ACTUALLY rejected the file: the user's
+        # personal max_file_size_mb (from Settings) or Telegram's global cap.
+        # Previously the user's limit was shown whenever it was set, even when
+        # the global cap was the one that fired — a misleading message.
         user_max = int(settings.get("max_file_size_mb") or 0)
-        limit_text = f"{user_max}MB" if user_max > 0 else f"{MAX_FILE_SIZE_MB}MB"
-        await _quiet_edit(edit_fn, t(lang, "file_too_large", max_size=limit_text))
+        user_limit_bytes = user_max * 1024 * 1024 if user_max > 0 else 0
+        if exc.limit_bytes and user_limit_bytes and exc.limit_bytes == user_limit_bytes:
+            limit_text = format_size(exc.limit_bytes)
+            await _quiet_edit(
+                edit_fn,
+                t(lang, "file_too_large_user", max_size=limit_text),
+                parse_mode="HTML",
+            )
+        else:
+            limit_bytes = exc.limit_bytes or MAX_FILE_SIZE_MB * 1024 * 1024
+            await _quiet_edit(
+                edit_fn,
+                t(lang, "file_too_large", max_size=format_size(limit_bytes)),
+            )
     except Exception as e:
         logger.exception("Download error for user=%s url=%s: %s", user.id, str(info.get("url", ""))[:120], e)
         reason = summarize_error(e)
@@ -1001,6 +1009,14 @@ async def _run_download(query, context, info, user, lang, quality_label,
                                     t(lang, "video_part", idx=i, total=total, bot_name=BOT_DISPLAY_NAME)
                                     if show_brand else None
                                 )
+                                # Honor the user's delivery_mode=file even for
+                                # split parts — the preference must apply to
+                                # every video surface, not just single files.
+                                if delivery_mode == "file":
+                                    return await query.message.reply_document(
+                                        document=InputFile(f, filename=f"{safe_title}_part{i}.mp4"),
+                                        caption=part_label,
+                                    )
                                 return await query.message.reply_video(
                                     video=InputFile(f, filename=f"{safe_title}_part{i}.mp4"),
                                     caption=part_label,
