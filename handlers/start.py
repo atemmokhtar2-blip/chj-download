@@ -1,5 +1,6 @@
 import logging
 from telegram import Update, ReplyKeyboardMarkup
+from utils.button_text import strip_button_emoji
 from telegram.ext import ContextTypes
 
 from database.users import get_user, create_user, update_user
@@ -12,7 +13,7 @@ logger = logging.getLogger(__name__)
 def get_main_keyboard(lang: str = "ar", user_id: int = None) -> ReplyKeyboardMarkup:
     """Two permanent Arabic shortcuts: Download + Settings."""
     return ReplyKeyboardMarkup(
-        [[t("ar", "menu_download"), t("ar", "menu_settings")]],
+        [[strip_button_emoji(t("ar", "menu_download")), strip_button_emoji(t("ar", "menu_settings"))]],
         resize_keyboard=True,
     )
 
