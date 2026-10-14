@@ -757,10 +757,87 @@ class ThreadsEngine(YtDlpFallbackEngine):
     domains = ("threads.net", "www.threads.net")
 
 
-class VimeoEngine(YtDlpFallbackEngine):
+class VimeoEngine(PlatformEngine):
     name = "VimeoEnginePro"
     platform_label = "Vimeo"
     domains = ("vimeo.com", "player.vimeo.com")
+
+    async def analyze(self, url: str) -> dict | None:
+        """Vimeo resolver: player config JSON (progressive mp4 with audio) + yt-dlp fallback."""
+        from services import downloader
+        from services.light_scrapers import resolve_vimeo
+        from middlewares.concurrency import get_executor
+        import asyncio
+
+        loop = asyncio.get_running_loop()
+        try:
+            meta = await loop.run_in_executor(get_executor(), resolve_vimeo, url)
+            if meta:
+                return self._tag(meta)
+        except Exception as exc:
+            error_logger.error("VimeoEnginePro resolve failed: %s", exc)
+
+        fallback = await downloader._generic_analyze_url(url)
+        if fallback:
+            fallback["engine_profile"] = "yt-dlp-generic-fallback"
+        return self._tag(fallback)
+
+    async def download_video(
+        self,
+        url: str,
+        format_id: str,
+        quality_label: str,
+        progress_callback: Callable | None = None,
+        play_url: str | None = None,
+    ) -> str | None:
+        from services import downloader
+        from services.light_scrapers import resolve_vimeo
+        from middlewares.concurrency import get_executor
+        import asyncio
+
+        loop = asyncio.get_running_loop()
+        candidates: list[str] = []
+        resolved_url = url
+        try:
+            meta = await loop.run_in_executor(get_executor(), resolve_vimeo, url)
+            if meta:
+                resolved_url = meta.get("url") or url
+                candidates = list(meta.get("video_candidates") or [])
+                if meta.get("play_url"):
+                    candidates.insert(0, meta["play_url"])
+        except Exception as exc:
+            error_logger.error("VimeoEnginePro resolve before download failed: %s", exc)
+
+        seen: set[str] = set()
+        for idx, candidate in enumerate(candidates, start=1):
+            candidate = (candidate or "").strip()
+            if not candidate.startswith("http") or candidate in seen:
+                continue
+            seen.add(candidate)
+            try:
+                path = await loop.run_in_executor(
+                    get_executor(),
+                    downloader._download_direct_sync,
+                    candidate,
+                    {"Referer": "https://vimeo.com/"},
+                    60,
+                    progress_callback,
+                    loop,
+                    f"xdl-vimeo-{idx}",
+                )
+                path = downloader._prepare_video_for_delivery(path, source="vimeo-direct")
+                if path:
+                    return path
+                download_logger.info("Vimeo direct candidate failed/was silent idx=%s", idx)
+            except downloader.FileTooLargeError:
+                raise
+            except Exception as exc:
+                error_logger.error("VimeoEnginePro direct candidate failed idx=%s: %s", idx, exc)
+
+        fallback_play = candidates[0] if candidates else play_url
+        return await downloader._generic_download_video(
+            resolved_url, format_id, quality_label, progress_callback, fallback_play
+        )
 
 
 class DailymotionEngine(YtDlpFallbackEngine):
@@ -817,22 +894,253 @@ class TumblrEngine(YtDlpFallbackEngine):
     domains = ("tumblr.com", "www.tumblr.com", "at.tumblr.com", "tmblr.co")
 
 
-class ImgurEngine(YtDlpFallbackEngine):
+class ImgurEngine(PlatformEngine):
     name = "ImgurEnginePro"
     platform_label = "Imgur"
     domains = ("imgur.com", "i.imgur.com", "m.imgur.com", "stack.imgur.com")
 
+    async def analyze(self, url: str) -> dict | None:
+        """Imgur resolver: direct mp4 for video/GIF posts; images stay on yt-dlp."""
+        from services import downloader
+        from services.light_scrapers import resolve_imgur
+        from middlewares.concurrency import get_executor
+        import asyncio
 
-class StreamableEngine(YtDlpFallbackEngine):
+        loop = asyncio.get_running_loop()
+        try:
+            meta = await loop.run_in_executor(get_executor(), resolve_imgur, url)
+            if meta:
+                return self._tag(meta)
+        except Exception as exc:
+            error_logger.error("ImgurEnginePro resolve failed: %s", exc)
+
+        fallback = await downloader._generic_analyze_url(url)
+        if fallback:
+            fallback["engine_profile"] = "yt-dlp-generic-fallback"
+        return self._tag(fallback)
+
+    async def download_video(
+        self,
+        url: str,
+        format_id: str,
+        quality_label: str,
+        progress_callback: Callable | None = None,
+        play_url: str | None = None,
+    ) -> str | None:
+        from services import downloader
+        from services.light_scrapers import resolve_imgur
+        from middlewares.concurrency import get_executor
+        import asyncio
+
+        loop = asyncio.get_running_loop()
+        candidates: list[str] = []
+        resolved_url = url
+        try:
+            meta = await loop.run_in_executor(get_executor(), resolve_imgur, url)
+            if meta:
+                resolved_url = meta.get("url") or url
+                candidates = list(meta.get("video_candidates") or [])
+                if meta.get("play_url"):
+                    candidates.insert(0, meta["play_url"])
+        except Exception as exc:
+            error_logger.error("ImgurEnginePro resolve before download failed: %s", exc)
+
+        seen: set[str] = set()
+        for idx, candidate in enumerate(candidates, start=1):
+            candidate = (candidate or "").strip()
+            if not candidate.startswith("http") or candidate in seen:
+                continue
+            seen.add(candidate)
+            try:
+                path = await loop.run_in_executor(
+                    get_executor(),
+                    downloader._download_direct_sync,
+                    candidate,
+                    {"Referer": "https://imgur.com/"},
+                    60,
+                    progress_callback,
+                    loop,
+                    f"xdl-imgur-{idx}",
+                )
+                path = downloader._prepare_video_for_delivery(path, source="imgur-direct")
+                if path:
+                    return path
+                download_logger.info("Imgur direct candidate failed/was silent idx=%s", idx)
+            except downloader.FileTooLargeError:
+                raise
+            except Exception as exc:
+                error_logger.error("ImgurEnginePro direct candidate failed idx=%s: %s", idx, exc)
+
+        fallback_play = candidates[0] if candidates else play_url
+        return await downloader._generic_download_video(
+            resolved_url, format_id, quality_label, progress_callback, fallback_play
+        )
+
+
+class StreamableEngine(PlatformEngine):
     name = "StreamableEnginePro"
     platform_label = "Streamable"
     domains = ("streamable.com", "www.streamable.com")
 
+    async def analyze(self, url: str) -> dict | None:
+        """Streamable resolver: public JSON API + HTML og:video, then yt-dlp fallback."""
+        from services import downloader
+        from services.light_scrapers import resolve_streamable
+        from middlewares.concurrency import get_executor
+        import asyncio
 
-class CoubEngine(YtDlpFallbackEngine):
+        loop = asyncio.get_running_loop()
+        try:
+            meta = await loop.run_in_executor(get_executor(), resolve_streamable, url)
+            if meta:
+                return self._tag(meta)
+        except Exception as exc:
+            error_logger.error("StreamableEnginePro resolve failed: %s", exc)
+
+        fallback = await downloader._generic_analyze_url(url)
+        if fallback:
+            fallback["engine_profile"] = "yt-dlp-generic-fallback"
+        return self._tag(fallback)
+
+    async def download_video(
+        self,
+        url: str,
+        format_id: str,
+        quality_label: str,
+        progress_callback: Callable | None = None,
+        play_url: str | None = None,
+    ) -> str | None:
+        from services import downloader
+        from services.light_scrapers import resolve_streamable
+        from middlewares.concurrency import get_executor
+        import asyncio
+
+        loop = asyncio.get_running_loop()
+        candidates: list[str] = []
+        resolved_url = url
+        try:
+            meta = await loop.run_in_executor(get_executor(), resolve_streamable, url)
+            if meta:
+                resolved_url = meta.get("url") or url
+                candidates = list(meta.get("video_candidates") or [])
+                if meta.get("play_url"):
+                    candidates.insert(0, meta["play_url"])
+        except Exception as exc:
+            error_logger.error("StreamableEnginePro resolve before download failed: %s", exc)
+
+        seen: set[str] = set()
+        for idx, candidate in enumerate(candidates, start=1):
+            candidate = (candidate or "").strip()
+            if not candidate.startswith("http") or candidate in seen:
+                continue
+            seen.add(candidate)
+            try:
+                path = await loop.run_in_executor(
+                    get_executor(),
+                    downloader._download_direct_sync,
+                    candidate,
+                    {"Referer": "https://streamable.com/"},
+                    60,
+                    progress_callback,
+                    loop,
+                    f"xdl-streamable-{idx}",
+                )
+                path = downloader._prepare_video_for_delivery(path, source="streamable-direct")
+                if path:
+                    return path
+                download_logger.info("Streamable direct candidate failed/was silent idx=%s", idx)
+            except downloader.FileTooLargeError:
+                raise
+            except Exception as exc:
+                error_logger.error("StreamableEnginePro direct candidate failed idx=%s: %s", idx, exc)
+
+        fallback_play = candidates[0] if candidates else play_url
+        return await downloader._generic_download_video(
+            resolved_url, format_id, quality_label, progress_callback, fallback_play
+        )
+
+
+class CoubEngine(PlatformEngine):
     name = "CoubEnginePro"
     platform_label = "Coub"
     domains = ("coub.com", "www.coub.com")
+
+    async def analyze(self, url: str) -> dict | None:
+        """Coub resolver: public API v2 html5 file_versions, then yt-dlp fallback."""
+        from services import downloader
+        from services.light_scrapers import resolve_coub
+        from middlewares.concurrency import get_executor
+        import asyncio
+
+        loop = asyncio.get_running_loop()
+        try:
+            meta = await loop.run_in_executor(get_executor(), resolve_coub, url)
+            if meta:
+                return self._tag(meta)
+        except Exception as exc:
+            error_logger.error("CoubEnginePro resolve failed: %s", exc)
+
+        fallback = await downloader._generic_analyze_url(url)
+        if fallback:
+            fallback["engine_profile"] = "yt-dlp-generic-fallback"
+        return self._tag(fallback)
+
+    async def download_video(
+        self,
+        url: str,
+        format_id: str,
+        quality_label: str,
+        progress_callback: Callable | None = None,
+        play_url: str | None = None,
+    ) -> str | None:
+        from services import downloader
+        from services.light_scrapers import resolve_coub
+        from middlewares.concurrency import get_executor
+        import asyncio
+
+        loop = asyncio.get_running_loop()
+        candidates: list[str] = []
+        resolved_url = url
+        try:
+            meta = await loop.run_in_executor(get_executor(), resolve_coub, url)
+            if meta:
+                resolved_url = meta.get("url") or url
+                candidates = list(meta.get("video_candidates") or [])
+                if meta.get("play_url"):
+                    candidates.insert(0, meta["play_url"])
+        except Exception as exc:
+            error_logger.error("CoubEnginePro resolve before download failed: %s", exc)
+
+        seen: set[str] = set()
+        for idx, candidate in enumerate(candidates, start=1):
+            candidate = (candidate or "").strip()
+            if not candidate.startswith("http") or candidate in seen:
+                continue
+            seen.add(candidate)
+            try:
+                path = await loop.run_in_executor(
+                    get_executor(),
+                    downloader._download_direct_sync,
+                    candidate,
+                    {"Referer": "https://coub.com/"},
+                    60,
+                    progress_callback,
+                    loop,
+                    f"xdl-coub-{idx}",
+                )
+                path = downloader._prepare_video_for_delivery(path, source="coub-direct")
+                if path:
+                    return path
+                download_logger.info("Coub direct candidate failed/was silent idx=%s", idx)
+            except downloader.FileTooLargeError:
+                raise
+            except Exception as exc:
+                error_logger.error("CoubEnginePro direct candidate failed idx=%s: %s", idx, exc)
+
+        fallback_play = candidates[0] if candidates else play_url
+        return await downloader._generic_download_video(
+            resolved_url, format_id, quality_label, progress_callback, fallback_play
+        )
 
 
 class OdnoklassnikiEngine(YtDlpFallbackEngine):
