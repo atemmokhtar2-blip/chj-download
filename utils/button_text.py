@@ -20,7 +20,7 @@ _EMOJI_RE = re.compile(
 
 def strip_button_emoji(value: str) -> str:
     """Remove decorative emoji from button labels while preserving text."""
-    return re.sub(r"\\s{2,}", " ", _EMOJI_RE.sub("", str(value or ""))).strip()
+    return re.sub(r"\s{2,}", " ", _EMOJI_RE.sub("", str(value or ""))).strip()
 
 def inline_button(text: str, *args, **kwargs):
     """Create an inline button with emoji-free text and preserve all options."""
