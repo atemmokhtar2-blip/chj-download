@@ -12,6 +12,8 @@ live Telegram API.
 from __future__ import annotations
 
 import logging
+import math
+import re
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
@@ -72,6 +74,37 @@ def _onoff(value) -> str:
     return "مفعّل" if bool(value) else "متوقف"
 
 
+def _parse_size_mb(raw: str) -> float | None:
+    """Parse a user-entered max-size value into MB.
+
+    Accepts plain numbers, decimals, Arabic-Indic digits, and common unit
+    suffixes. Returns ``None`` when the input isn't a recognizable number, so
+    the caller can re-prompt instead of corrupting the setting.
+    """
+    if not raw:
+        return None
+    s = str(raw).strip()
+    table = str.maketrans(
+        "٠١٢٣٤٥٦٧٨٩۰۱۲۳۴۵۶۷۸۹",
+        "01234567890123456789",
+    )
+    s = s.translate(table)
+    s = re.sub(
+        r"(?i)\s*(?:mb|megabyte|megabytes|mega|ميجا|ميجابايت|ميجا ?بايت|م\.ب|م ب)\s*$",
+        "", s,
+    )
+    s = s.strip().replace(",", ".")
+    if not s or s in {".", "-", "+"}:
+        return None
+    try:
+        value = float(s)
+    except ValueError:
+        return None
+    if not math.isfinite(value):
+        return None
+    return value
+
+
 # ---- pure renderers (return (html_text, rows)) -----------------------------
 
 def _mk(rows: list[list[tuple[str, str]]]) -> InlineKeyboardMarkup:
@@ -98,14 +131,14 @@ def build_home(settings: dict) -> tuple[str, list]:
         "اختار القسم اللي عايز تعدّله:"
     )
     rows = [
-        [("🎯 الجودة والحجم", "settings:quality")],
-        [("📦 طريقة الاستلام", "settings:delivery")],
-        [("⚡ مدير التحميلات", "settings:queue")],
-        [("📚 سجل التحميلات", "settings:history")],
-        [("🔒 الخصوصية والمساحة", "settings:privacy")],
-        [("🔔 الإشعارات", "settings:notify")],
-        [("♻️ إعادة ضبط الإعدادات", "settings:reset")],
-        [("❌ إغلاق", "settings:close")],
+        [("🔵 🎯 الجودة والحجم", "settings:quality")],
+        [("🔵 📦 طريقة الاستلام", "settings:delivery")],
+        [("🔵 ⚡ مدير التحميلات", "settings:queue")],
+        [("🔵 📚 سجل التحميلات", "settings:history")],
+        [("🔵 🔒 الخصوصية والمساحة", "settings:privacy")],
+        [("🔵 🔔 الإشعارات", "settings:notify")],
+        [("🔴 ♻️ إعادة ضبط الإعدادات", "settings:reset")],
+        [("🔴 ❌ إغلاق", "settings:close")],
     ]
     return text, rows
 
@@ -118,11 +151,11 @@ def build_quality(settings: dict) -> tuple[str, list]:
         f"الوضع الحالي: <b>{_vq(s['video_quality'])}</b>"
     )
     rows = [
-        [("🤖 ذكي تلقائيًا", "settings:quality:set:auto"),
-         ("📏 الحد الأقصى للحجم", "settings:quality:size")],
-        [("🎬 جودة الفيديو", "settings:quality:video"),
-         ("🎵 جودة الصوت", "settings:quality:audio")],
-        [("↩️ رجوع", "settings:home")],
+        [("🟢 🤖 ذكي تلقائيًا", "settings:quality:set:auto"),
+         ("🟡 📏 الحد الأقصى للحجم", "settings:quality:size")],
+        [("🔵 🎬 جودة الفيديو", "settings:quality:video"),
+         ("🔵 🎵 جودة الصوت", "settings:quality:audio")],
+        [("🔵 ↩️ رجوع", "settings:home")],
     ]
     return text, rows
 
@@ -132,9 +165,9 @@ def build_quality_video(settings: dict) -> tuple[str, list]:
     text = "🎬 <b>جودة الفيديو</b>\nاختار الجودة الافتراضية:"
     rows = []
     for opt in ("360p", "480p", "720p", "1080p", "highest"):
-        label = ("✅ " if opt == current else "") + _vq(opt)
+        label = ("🟢 ✅ " if opt == current else "⚪ ") + _vq(opt)
         rows.append([(label, f"settings:quality:video:set:{opt}")])
-    rows.append([("↩️ رجوع", "settings:quality")])
+    rows.append([("🔵 ↩️ رجوع", "settings:quality")])
     return text, rows
 
 
@@ -144,9 +177,9 @@ def build_quality_audio(settings: dict) -> tuple[str, list]:
     rows = []
     for opt in AUDIO_QUALITY_OPTIONS:
         bitrate = AUDIO_QUALITY_BITRATE[opt]
-        label = ("✅ " if opt == current else "") + f"{_aq(opt)} ({bitrate}kbps)"
+        label = ("🟢 ✅ " if opt == current else "⚪ ") + f"{_aq(opt)} ({bitrate}kbps)"
         rows.append([(label, f"settings:quality:audio:set:{opt}")])
-    rows.append([("↩️ رجوع", "settings:quality")])
+    rows.append([("🔵 ↩️ رجوع", "settings:quality")])
     return text, rows
 
 
@@ -158,11 +191,12 @@ def build_quality_size(settings: dict) -> tuple[str, list]:
     )
     rows = []
     for mb in SIZE_PRESETS_MB:
-        label = ("✅ " if mb == current else "") + f"{mb} MB"
+        label = ("🟢 ✅ " if mb == current else "⚪ ") + f"{mb} MB"
         rows.append([(label, f"settings:quality:size:set:{mb}")])
-    rows.append([("✍️ إدخال حجم مخصص", "settings:quality:size:custom")])
-    rows.append([("🚫 بدون حد إضافي", "settings:quality:size:set:0")])
-    rows.append([("↩️ رجوع", "settings:quality")])
+    rows.append([("🟡 ✍️ إدخال حجم مخصص", "settings:quality:size:custom")])
+    unlimited = "🟢 ✅ " if current == 0 else "⚪ "
+    rows.append([(unlimited + "🚫 بدون حد إضافي", "settings:quality:size:set:0")])
+    rows.append([("🔵 ↩️ رجوع", "settings:quality")])
     return text, rows
 
 
@@ -174,11 +208,11 @@ def build_delivery(settings: dict) -> tuple[str, list]:
     )
     rows = []
     for opt in DELIVERY_MODES:
-        label = ("✅ " if opt == current else "") + _delivery(opt)
+        label = ("🟢 ✅ " if opt == current else "⚪ ") + _delivery(opt)
         rows.append([(label, f"settings:delivery:set:{opt}")])
     rows.append([
-        ("💬 نصيحة", "settings:delivery:info"),
-        ("↩️ رجوع", "settings:home"),
+        ("🔵 💬 نصيحة", "settings:delivery:info"),
+        ("🔵 ↩️ رجوع", "settings:home"),
     ])
     return text, rows
 
@@ -191,7 +225,7 @@ def build_delivery_info(settings: dict) -> tuple[str, list]:
         "🎵 <b>استخراج الصوت:</b> يحوّل الفيديو إلى MP3 إذا كانت المعالجة متاحة.\n\n"
         "لو الصيغة اللي اخترتها غير مدعومة من المصدر، هيظهرلك السبب والبدائل بدل ما يحفظ اختيارًا مضللًا."
     )
-    rows = [[("↩️ رجوع", "settings:delivery")]]
+    rows = [[("🔵 ↩️ رجوع", "settings:delivery")]]
     return text, rows
 
 
@@ -206,9 +240,9 @@ def build_queue(settings: dict, user_id: int) -> tuple[str, list]:
         "لذلك نوفر تحديث الحالة وإلغاء العملية الجارية وإعادة المحاولة من السجل بدل وعود غير دقيقة."
     )
     rows = [
-        [("🔄 تحديث الحالة", "settings:queue")],
-        [("📋 عرض التحميلات (السجل)", "settings:history")],
-        [("↩️ رجوع", "settings:home")],
+        [("🟢 🔄 تحديث الحالة", "settings:queue")],
+        [("🔵 📋 عرض التحميلات (السجل)", "settings:history")],
+        [("🔵 ↩️ رجوع", "settings:home")],
     ]
     return text, rows
 
@@ -218,7 +252,7 @@ def build_history(settings: dict, user_id: int, offset: int = 0) -> tuple[str, l
     entries = get_user_history(user_id, limit=PAGE_SIZE, offset=offset)
     if not entries:
         text = "📚 <b>سجل التحميلات</b>\n\nلا توجد تحميلات سابقة. أرسل رابطًا وابدأ!"
-        rows = [[("↩️ رجوع", "settings:home")]]
+        rows = [[("🔵 ↩️ رجوع", "settings:home")]]
         return text, rows
 
     lines = ["📚 <b>سجل التحميلات</b>", ""]
@@ -230,16 +264,16 @@ def build_history(settings: dict, user_id: int, offset: int = 0) -> tuple[str, l
     rows = []
     for e in entries:
         name = (e.get("title") or e.get("url") or f"تحميل {e.get('id')}")[:26]
-        rows.append([(f"🔎 {name}", f"settings:history:detail:{e['id']}")])
+        rows.append([(f"🔵 🔎 {name}", f"settings:history:detail:{e['id']}")])
     nav = []
     if total > (offset + PAGE_SIZE):
-        nav.append(("التالية ⬇️", f"settings:history:page:{offset + PAGE_SIZE}"))
+        nav.append(("🔵 ⬇️ التالية", f"settings:history:page:{offset + PAGE_SIZE}"))
     if offset > 0:
-        nav.append(("⬆️ السابقة", f"settings:history:page:{max(0, offset - PAGE_SIZE)}"))
+        nav.append(("🔵 ⬆️ السابقة", f"settings:history:page:{max(0, offset - PAGE_SIZE)}"))
     if nav:
         rows.append(nav)
-    rows.append([("🗑 مسح السجل", "settings:history:clear:confirm"),
-                 ("↩️ رجوع", "settings:home")])
+    rows.append([("🔴 🗑 مسح السجل", "settings:history:clear:confirm"),
+                 ("🔵 ↩️ رجوع", "settings:home")])
     return text, rows
 
 
@@ -247,7 +281,7 @@ def build_history_detail(settings: dict, user_id: int, entry_id: int) -> tuple[s
     e = get_history_entry(user_id, entry_id)
     if not e:
         text = "📚 هذا السجل غير موجود أو لا يخص حسابك."
-        rows = [[("↩️ رجوع للسجل", "settings:history")]]
+        rows = [[("🔵 ↩️ رجوع للسجل", "settings:history")]]
         return text, rows
     name = (e.get("title") or e.get("url") or f"تحميل {e['id']}")[:40]
     text = (
@@ -259,9 +293,9 @@ def build_history_detail(settings: dict, user_id: int, entry_id: int) -> tuple[s
         f"الحجم: <b>{format_size(e.get('file_size') or 0)}</b>\n"
     )
     rows = [
-        [("🔁 تحميل مرة أخرى", f"settings:history:redownload:{entry_id}")],
-        [("🗑 حذف من السجل", f"settings:history:delete:{entry_id}")],
-        [("↩️ رجوع للسجل", "settings:history")],
+        [("🟢 🔁 تحميل مرة أخرى", f"settings:history:redownload:{entry_id}")],
+        [("🔴 🗑 حذف من السجل", f"settings:history:delete:{entry_id}")],
+        [("🔵 ↩️ رجوع للسجل", "settings:history")],
     ]
     return text, rows
 
@@ -273,8 +307,8 @@ def build_history_clear_confirm(settings: dict, user_id: int) -> tuple[str, list
         "ده مش هيحذف أي ملفات من جهازك، وبيمسح بيانات السجل من سيرفر البوت فقط."
     )
     rows = [
-        [("✅ نعم، امسح", "settings:history:clear:yes"),
-         ("❌ إلغاء", "settings:history")],
+        [("🔴 ✅ نعم، امسح", "settings:history:clear:yes"),
+         ("🟢 ❌ إلغاء", "settings:history")],
     ]
     return text, rows
 
@@ -288,10 +322,10 @@ def build_privacy(settings: dict) -> tuple[str, list]:
         "🧹 البوت بينضف الملفات المؤقتة تلقائيًا ولا يخزّن ملفات نهائية على الخادم."
     )
     rows = [
-        [("🧹 تنظيف الملفات المؤقتة", "settings:privacy:clean")],
-        [("⏳ مدة الاحتفاظ بالسجل", "settings:privacy:retention")],
-        [("🔐 حذف بيانات حسابي", "settings:privacy:delete:confirm")],
-        [("↩️ رجوع", "settings:home")],
+        [("🟢 🧹 تنظيف الملفات المؤقتة", "settings:privacy:clean")],
+        [("🔵 ⏳ مدة الاحتفاظ بالسجل", "settings:privacy:retention")],
+        [("🔴 🔐 حذف بيانات حسابي", "settings:privacy:delete:confirm")],
+        [("🔵 ↩️ رجوع", "settings:home")],
     ]
     return text, rows
 
@@ -301,10 +335,11 @@ def build_retention(settings: dict) -> tuple[str, list]:
     text = "⏳ <b>مدة الاحتفاظ بالسجل</b>\nمتى تُحذف سجلات التحميل القديمة تلقائيًا:"
     rows = []
     for days in HISTORY_RETENTION_OPTIONS:
-        label = ("✅ " if days == current else "") + f"{days} يوم"
+        label = ("🟢 ✅ " if days == current else "⚪ ") + f"{days} يوم"
         rows.append([(label, f"settings:privacy:retention:set:{days}")])
-    rows.append([("♾️ الاحتفاظ للأبد", "settings:privacy:retention:set:0")])
-    rows.append([("↩️ رجوع", "settings:privacy")])
+    forever = "🟢 ✅ " if current == 0 else "⚪ "
+    rows.append([(forever + "♾️ الاحتفاظ للأبد", "settings:privacy:retention:set:0")])
+    rows.append([("🔵 ↩️ رجوع", "settings:privacy")])
     return text, rows
 
 
@@ -316,8 +351,8 @@ def build_delete_confirm(settings: dict) -> tuple[str, list]:
         "الإجراء ده غير قابل للتراجع."
     )
     rows = [
-        [("✅ نعم، احذف بياناتي", "settings:privacy:delete:yes")],
-        [("❌ إلغاء", "settings:privacy")],
+        [("🔴 ✅ نعم، احذف بياناتي", "settings:privacy:delete:yes")],
+        [("🟢 ❌ إلغاء", "settings:privacy")],
     ]
     return text, rows
 
@@ -329,17 +364,17 @@ def build_notify(settings: dict) -> tuple[str, list]:
         "اضغط على أي مفتاح لتشغيله أو إيقافه."
     )
     toggles = [
-        ("notify_complete", "✅ اكتمال التحميل"),
-        ("notify_failure", "❌ فشل التحميل"),
-        ("notify_progress", "📶 تحديثات التقدم"),
-        ("notify_queue", "⏳ إشعارات قائمة الانتظار"),
-        ("quiet_mode", "🌙 الوضع الهادئ"),
+        ("notify_complete", "اكتمال التحميل"),
+        ("notify_failure", "فشل التحميل"),
+        ("notify_progress", "تحديثات التقدم"),
+        ("notify_queue", "إشعارات قائمة الانتظار"),
+        ("quiet_mode", "الوضع الهادئ"),
     ]
     rows = []
     for field, label in toggles:
-        state = "✅ " if bool(s[field]) else "❌ "
-        rows.append([(f"{state}{label}", f"settings:notify:toggle:{field}")])
-    rows.append([("↩️ رجوع", "settings:home")])
+        state = "🟢 مفعّل" if bool(s[field]) else "🔴 متوقف"
+        rows.append([(f"{state} · {label}", f"settings:notify:toggle:{field}")])
+    rows.append([("🔵 ↩️ رجوع", "settings:home")])
     return text, rows
 
 
@@ -350,8 +385,8 @@ def build_reset_confirm(settings: dict) -> tuple[str, list]:
         "لن يتم حذف سجل التحميلات أو ملفاتك."
     )
     rows = [
-        [("✅ نعم، إعادة الضبط", "settings:reset:yes"),
-         ("❌ إلغاء", "settings:home")],
+        [("🔴 ✅ نعم، إعادة الضبط", "settings:reset:yes"),
+         ("🟢 ❌ إلغاء", "settings:home")],
     ]
     return text, rows
 
@@ -363,8 +398,8 @@ def build_saved(field: str, value: str, back_cb: str = "settings:home") -> tuple
         "سيُستخدم هذا الاختيار في التحميلات الجديدة."
     )
     rows = [
-        [("🎯 تعديل الجودة", "settings:quality"),
-         ("⚙️ العودة للإعدادات", back_cb)],
+        [("🟢 🎯 تعديل الجودة", "settings:quality"),
+         ("🟢 ⚙️ العودة للإعدادات", back_cb)],
     ]
     return text, rows
 
@@ -390,22 +425,31 @@ async def try_handle_settings_text(update: Update, context: ContextTypes.DEFAULT
 
     if pending == "size":
         context.user_data.pop("settings_input", None)
-        try:
-            mb = int(raw.replace("MB", "").replace("mb", "").strip())
-        except ValueError:
-            mb = -1
-        if mb < 1 or mb > MAX_CUSTOM_SIZE_MB:
+        parsed = _parse_size_mb(raw)
+        if parsed is None:
             await update.message.reply_text(
-                f"❌ أدخل رقم صحيح بين 1 و {MAX_CUSTOM_SIZE_MB} MB.\n"
+                "❌ <b>القيمة مش رقم.</b>\n\n"
+                f"اكتب رقم بالميجابايت بين 1 و {MAX_CUSTOM_SIZE_MB}.\n"
+                "مثال: <code>75</code>\n"
                 "أو استخدم /settings للرجوع للقوائم.",
                 parse_mode="HTML",
             )
             context.user_data["settings_input"] = "size"
             return True
+        if parsed < 1 or parsed > MAX_CUSTOM_SIZE_MB:
+            await update.message.reply_text(
+                f"❌ الرقم لازم يكون بين 1 و {MAX_CUSTOM_SIZE_MB} MB.\n"
+                "جرّب قيمة أصغر أو استخدم /settings.",
+                parse_mode="HTML",
+            )
+            context.user_data["settings_input"] = "size"
+            return True
+        mb = int(parsed + 0.5)  # half-up rounding: 50.5 -> 51
+        mb = max(1, min(mb, MAX_CUSTOM_SIZE_MB))
         save_settings(uid, max_file_size_mb=mb)
-        settings = get_user_settings(uid)
+        note = "" if abs(parsed - mb) < 1e-9 else f" (تم تقريب {parsed:g} إلى {mb})"
         await update.message.reply_text(
-            f"✅ تم حفظ الحد الأقصى: <b>{mb} MB</b>\nسيُستخدم في التحميلات الجديدة.",
+            f"✅ تم حفظ الحد الأقصى: <b>{mb} MB</b>{note}\nسيُستخدم في التحميلات الجديدة.",
             parse_mode="HTML",
         )
         return True
@@ -444,7 +488,7 @@ async def settings_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     query.edit_message_text,
                     "📚 هذا السجل غير موجود أو لا يخص حسابك.",
                     parse_mode="HTML",
-                    reply_markup=_mk([[("↩️ رجوع للسجل", "settings:history")]]),
+                    reply_markup=_mk([[("🔵 ↩️ رجوع للسجل", "settings:history")]]),
                 )
             except Exception:
                 pass
@@ -469,7 +513,7 @@ async def settings_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as exc:
         logger.exception("Settings callback failed uid=%s data=%s", uid, data)
         text = "⚠️ حصل خطأ غير متوقع. ارجع للقائمة وحاول مرة أخرى."
-        rows = [[("↩️ رجوع", "settings:home")]]
+        rows = [[("🔵 ↩️ رجوع", "settings:home")]]
     try:
         await safe_edit(query.edit_message_text, text, parse_mode="HTML", reply_markup=_mk(rows))
     except Exception:
@@ -530,7 +574,7 @@ def _dispatch(uid: int, data: str, context) -> tuple[str, list]:
             "📏 <b>إدخال حجم مخصص</b>\n\n"
             f"اكتب رقم بين 1 و {MAX_CUSTOM_SIZE_MB} (بالميجابايت).\n"
             "مثال: 75",
-            [[("↩️ إلغاء", "settings:quality:size")]],
+            [[("🔴 ↩️ إلغاء", "settings:quality:size")]],
         )
 
     if data == "settings:delivery":
@@ -568,7 +612,7 @@ def _dispatch(uid: int, data: str, context) -> tuple[str, list]:
             eid = -1
         if delete_history_entry(uid, eid):
             return ("✅ تم حذف العملية من السجل فقط (الملف نفسه لم يُمس).\n\n"
-                    "<b>سجل التحميلات</b>", [[("↩️ رجوع للسجل", "settings:history")]])
+                    "<b>سجل التحميلات</b>", [[("🔵 ↩️ رجوع للسجل", "settings:history")]])
         return build_history(settings, uid, 0)
     if data == "settings:history:clear:confirm":
         return build_history_clear_confirm(settings, uid)
@@ -577,7 +621,7 @@ def _dispatch(uid: int, data: str, context) -> tuple[str, list]:
         return (
             f"✅ تم مسح {removed} عملية من سجل التحميلات.\n"
             "ملفاتك على الجهاز لم تُمس.",
-            [[("↩️ رجوع", "settings:home")]],
+            [[("🔵 ↩️ رجوع", "settings:home")]],
         )
 
     if data == "settings:privacy":
@@ -587,7 +631,7 @@ def _dispatch(uid: int, data: str, context) -> tuple[str, list]:
         return (
             f"🧹 تم تنظيف الملفات المؤقتة (حُذف {removed} ملف قديم).\n"
             "أي تحميل جارٍ لم يتأثر.",
-            [[("↩️ رجوع", "settings:privacy")]],
+            [[("🔵 ↩️ رجوع", "settings:privacy")]],
         )
     if data == "settings:privacy:retention":
         return build_retention(settings)
@@ -629,7 +673,7 @@ def _dispatch(uid: int, data: str, context) -> tuple[str, list]:
         return (
             "♻️ <b>تمت إعادة الضبط.</b>\n\n"
             "تم إرجاع كل التفضيلات للقيم الافتراضية — سجل التحميلات وملفاتك لم تُمس.",
-            [[("⚙️ فتح الإعدادات", "settings:home")]],
+            [[("🟢 ⚙️ فتح الإعدادات", "settings:home")]],
         )
 
     return build_home(settings)

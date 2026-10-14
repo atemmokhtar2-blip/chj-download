@@ -69,8 +69,8 @@ def test_button_quality_flow(isolated_db):
     # home has all 8 sections
     text, rows = _dispatch(uid, "settings:home", _Context())
     labels = [lbl for row in rows for lbl, _ in row]
-    assert "🎯 الجودة والحجم" in labels
-    assert "🔒 الخصوصية والمساحة" in labels
+    assert any("🎯 الجودة والحجم" in lbl for lbl in labels)
+    assert any("🔒 الخصوصية والمساحة" in lbl for lbl in labels)
 
     # quality menu
     text, rows = _dispatch(uid, "settings:quality", _Context())
@@ -115,6 +115,39 @@ def test_custom_size_text_flow(isolated_db):
     _dispatch(uid, "settings:quality:size:custom", ctx2)
     asyncio.run(try_handle_settings_text(_Update("abc", uid), ctx2))
     assert ctx2.user_data["settings_input"] == "size"
+
+
+def test_custom_size_validates_number_types_and_range(isolated_db):
+    import asyncio
+    from database.user_settings import get_user_settings
+    from handlers.settings_menu import _dispatch, try_handle_settings_text
+
+    uid = 1234
+    valid_cases = [
+        ("75", 75),          # plain integer
+        ("75.5", 76),        # decimal -> half-up rounding
+        ("50.4", 50),        # decimal -> rounds down
+        ("٧٥", 75),          # Arabic-Indic digits
+        ("75 MB", 75),       # English unit suffix
+        ("75ميجا", 75),      # Arabic unit suffix
+        ("1,5", 2),          # comma decimal separator -> 1.5 -> 2
+    ]
+    for raw_text, expected in valid_cases:
+        ctx = _Context()
+        _dispatch(uid, "settings:quality:size:custom", ctx)
+        consumed = asyncio.run(try_handle_settings_text(_Update(raw_text, uid), ctx))
+        assert consumed is True
+        assert get_user_settings(uid)["max_file_size_mb"] == expected
+
+    # Anything non-numeric or out of range must keep the prompt pending and
+    # never overwrite the last good value.
+    last_good = valid_cases[-1][1]
+    for raw_text in ("abc", "خمسين", "999999", "0", "-10", "75.5.3", ""):
+        ctx = _Context()
+        _dispatch(uid, "settings:quality:size:custom", ctx)
+        asyncio.run(try_handle_settings_text(_Update(raw_text, uid), ctx))
+        assert ctx.user_data.get("settings_input") == "size"
+        assert get_user_settings(uid)["max_file_size_mb"] == last_good
 
 
 def test_delivery_flow(isolated_db):
@@ -214,7 +247,7 @@ def test_unknown_callback_falls_back_to_home(isolated_db):
     uid = 123
     text, rows = _dispatch(uid, "totally:unknown:cb", _Context())
     labels = [lbl for row in rows for lbl, _ in row]
-    assert "🎯 الجودة والحجم" in labels
+    assert any("🎯 الجودة والحجم" in lbl for lbl in labels)
 
 
 def test_main_keyboard_has_download_and_settings_shortcuts(isolated_db):
