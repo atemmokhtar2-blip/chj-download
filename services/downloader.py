@@ -673,6 +673,48 @@ def _prepare_video_for_delivery(path: str | None, *, source: str = "video", allo
     return _remux_mp4_faststart(path)
 
 
+def extract_audio_mp3(path: str, bitrate: str = "192") -> str | None:
+    """Extract the audio track of a local video to MP3 via ffmpeg.
+
+    Used by platforms (e.g. Instagram) whose direct yt-dlp audio resolution is
+    weak: instead grab the verified video through the robust video path, then
+    transcode its audio track locally. Returns None on any failure.
+    """
+    ffmpeg = _ffmpeg_path()
+    if not ffmpeg or not path or not os.path.exists(path):
+        return None
+    rate = _valid_audio_bitrate(bitrate)
+    fd, out_path = tempfile.mkstemp(prefix="xdl-audio-", suffix=".mp3", dir=TEMP_DIR)
+    os.close(fd)
+    _safe_remove(out_path)
+    try:
+        proc = subprocess.run(
+            [
+                ffmpeg, "-y",
+                "-i", path,
+                "-vn",
+                "-acodec", "libmp3lame",
+                "-b:a", f"{rate}k",
+                "-f", "mp3",
+                out_path,
+            ],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=300,
+            check=False,
+        )
+        if proc.returncode != 0 or not os.path.exists(out_path) or os.path.getsize(out_path) < 2048:
+            logger.debug("ffmpeg audio extract failed for %s: %s", path, proc.stderr[-300:])
+            _safe_remove(out_path)
+            return None
+        return out_path
+    except Exception as exc:
+        logger.debug("ffmpeg audio extract failed for %s: %s", path, exc)
+        _safe_remove(out_path)
+        return None
+
+
 def _download_sync(url: str, opts: dict) -> str | None:
     return _download_sync_impl(url, opts, check_size=True)
 

@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 from typing import Callable
 
-from config.settings import TEMP_DIR
+from config.settings import AUDIO_BITRATE, TEMP_DIR
 from utils.helpers import sanitize_filename
 
 from services.engines.base import PlatformEngine
@@ -194,6 +194,109 @@ class InstagramEngine(PlatformEngine):
         if fallback:
             fallback["engine_profile"] = "yt-dlp-generic-fallback"
         return self._tag(fallback)
+
+    async def download_video(
+        self,
+        url: str,
+        format_id: str,
+        quality_label: str,
+        progress_callback: Callable | None = None,
+        play_url: str | None = None,
+    ) -> str | None:
+        """Instagram direct-CDN download with audio verification + yt-dlp fallback.
+
+        Instagram CDN URLs expire quickly and yt-dlp's Instagram extractor is
+        often login-walled. Prefer the resolver's fresh play_url candidates
+        (GraphQL/embed/gallery-dl/instaloader) downloaded directly with proper
+        Referer headers, verify the audio stream, then fall back to the robust
+        generic merge path on the canonical page URL.
+        """
+        from services import downloader
+        from services.instagram_scraper import scrape_instagram
+        from middlewares.concurrency import get_executor
+        import asyncio
+
+        loop = asyncio.get_running_loop()
+        candidates: list[tuple[str, str]] = []
+        resolved_url = url
+        seen: set[str] = set()
+
+        def _add(candidate: str | None, source: str) -> None:
+            candidate = (candidate or "").strip()
+            if candidate and candidate.startswith("http") and candidate not in seen:
+                seen.add(candidate)
+                candidates.append((candidate, source))
+
+        _add(play_url, "cached-play-url")
+        try:
+            meta = await loop.run_in_executor(get_executor(), scrape_instagram, url)
+            if meta:
+                resolved_url = meta.get("webpage_url") or meta.get("url") or url
+                _add(meta.get("play_url"), meta.get("source") or "instagram-direct")
+                # Include video slides from albums as alternates when the top
+                # candidate URL has expired or carries no audio.
+                for item in meta.get("album_items") or []:
+                    if item.get("type") == "video":
+                        _add(item.get("play_url") or item.get("url"), "instagram-slide")
+            download_logger.info(
+                "InstagramEnginePro candidates=%s resolved=%s",
+                len(candidates), resolved_url[:100],
+            )
+        except Exception as exc:
+            error_logger.error("InstagramEnginePro resolve before download failed: %s", exc)
+
+        for candidate, source in candidates:
+            try:
+                path = await loop.run_in_executor(
+                    get_executor(),
+                    downloader._download_direct_sync,
+                    candidate,
+                    {"Referer": "https://www.instagram.com/", "Origin": "https://www.instagram.com"},
+                    60,
+                    progress_callback,
+                    loop,
+                    "xdl-instagram",
+                )
+                path = downloader._prepare_video_for_delivery(path, source=f"instagram-direct:{source}")
+                if path:
+                    return path
+                download_logger.info("Instagram direct candidate failed/was silent source=%s", source)
+            except downloader.FileTooLargeError:
+                raise
+            except Exception as exc:
+                error_logger.error("InstagramEnginePro direct candidate failed source=%s: %s", source, exc)
+
+        # Final fallback uses the canonical page URL; pass the best CDN URL as a
+        # first direct target so yt-dlp can also attempt to merge it.
+        fallback_play = candidates[0][0] if candidates else None
+        return await downloader._generic_download_video(
+            resolved_url, format_id, quality_label, progress_callback, fallback_play
+        )
+
+    async def download_audio(self, url: str, progress_callback: Callable | None = None) -> str | None:
+        """YouTube-grade audio for Instagram: yt-dlp first, then video+extract fallback."""
+        from services import downloader
+        from middlewares.concurrency import get_executor
+        import asyncio
+
+        try:
+            return await downloader._generic_download_audio(url, progress_callback)
+        except downloader.FileTooLargeError:
+            raise
+        except Exception as exc:
+            error_logger.warning(
+                "InstagramEnginePro generic audio failed (%s); falling back to video+extract for %s",
+                exc, url[:120],
+            )
+
+        # Instagram audio-only extraction via yt-dlp is the weakest link of the
+        # engine. If it fails, grab the verified video through the strong video
+        # path, then transcode its audio track locally with ffmpeg.
+        loop = asyncio.get_running_loop()
+        video_path = await downloader.download_video(url, "best", "best", progress_callback)
+        if not video_path:
+            raise RuntimeError("Instagram audio fallback: no video available to extract from")
+        return await loop.run_in_executor(get_executor(), downloader.extract_audio_mp3, video_path, AUDIO_BITRATE)
 
 
 class PinterestEngine(PlatformEngine):
@@ -505,20 +608,49 @@ class RedditEngine(PlatformEngine):
         import asyncio
 
         loop = asyncio.get_running_loop()
-        candidate = play_url
-        if not candidate:
-            try:
-                meta = await loop.run_in_executor(get_executor(), scrape_reddit, url)
-                if meta:
-                    candidate = meta.get("play_url")
-                    download_logger.info(
-                        "RedditEnginePro selected source=%s score=%s",
-                        meta.get("source"), meta.get("provider_score"),
-                    )
-            except Exception as exc:
-                error_logger.error("RedditEnginePro resolve before download failed: %s", exc)
+        candidates: list[tuple[str, str]] = []
+        seen: set[str] = set()
 
-        if candidate and ".mp4" in candidate:
+        def _add(candidate: str | None, source: str) -> None:
+            candidate = (candidate or "").strip()
+            if candidate and candidate.startswith("http") and candidate not in seen:
+                seen.add(candidate)
+                candidates.append((candidate, source))
+
+        _add(play_url, "cached-play-url")
+        try:
+            meta = await loop.run_in_executor(get_executor(), scrape_reddit, url)
+            if meta:
+                # The resolver keeps every playable variant in `formats`; prefer
+                # progressive/fallback mp4s (which carry audio) over DASH-only
+                # video streams so the audio guard doesn't reject our best guess.
+                for item in meta.get("formats") or []:
+                    _add(item.get("url"), "reddit-json")
+                _add(meta.get("play_url"), "reddit-json-best")
+            download_logger.info("RedditEnginePro candidates=%s", len(candidates))
+        except Exception as exc:
+            error_logger.error("RedditEnginePro resolve before download failed: %s", exc)
+
+        def _direct_score(entry: tuple[str, str]) -> int:
+            u = entry[0].lower()
+            score = 0
+            if ".mp4" in u:
+                score += 120
+            if "fallback" in u:
+                score += 90
+            if "scrubber" in u:
+                score += 70
+            if "DASH_" in u:
+                score -= 120
+            if ".m3u8" in u:
+                score += 20
+            if ".mpd" in u:
+                score += 10
+            return score
+
+        for candidate, source in sorted(candidates, key=_direct_score, reverse=True):
+            if ".mp4" not in candidate:
+                continue
             try:
                 direct_path = await loop.run_in_executor(
                     get_executor(),
@@ -530,11 +662,14 @@ class RedditEngine(PlatformEngine):
                     loop,
                     "xdl-reddit",
                 )
-                direct_path = downloader._prepare_video_for_delivery(direct_path, source="direct-cdn")
+                direct_path = downloader._prepare_video_for_delivery(direct_path, source=f"reddit-direct:{source}")
                 if direct_path:
                     return direct_path
+                download_logger.info("Reddit direct candidate failed/was silent source=%s", source)
+            except downloader.FileTooLargeError:
+                raise
             except Exception as exc:
-                error_logger.error("RedditEnginePro direct download failed: %s", exc)
+                error_logger.error("RedditEnginePro direct candidate failed source=%s: %s", source, exc)
 
         return await downloader._generic_download_video(url, format_id, quality_label, progress_callback)
 
