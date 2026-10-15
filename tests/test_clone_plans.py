@@ -63,7 +63,24 @@ except ImportError:
 sys.path.insert(0, REPO)
 
 from database import pg  # noqa: E402
+from database import db as main_db  # noqa: E402
 from services import referral  # noqa: E402
+
+# These modules may already have been imported by pytest collection before this
+# script changes the environment. Pin both backend paths and plan constants so
+# the smoke test remains isolated and order-independent.
+main_db.DATABASE_PATH = DB
+pg.DATABASE_PATH = DB
+_original_plan_settings = (
+    referral.REFERRAL_TARGET,
+    referral.CLONE_PRO_TARGET_MULTIPLIER,
+    referral.CLONE_PLAN_BASIC_DAYS,
+    referral.CLONE_PLAN_PRO_DAYS,
+)
+referral.REFERRAL_TARGET = 2
+referral.CLONE_PRO_TARGET_MULTIPLIER = 1.5
+referral.CLONE_PLAN_BASIC_DAYS = 30
+referral.CLONE_PLAN_PRO_DAYS = 40
 
 pg.init_referral_schema()
 
@@ -215,6 +232,14 @@ from handlers.referral import _RULES_TEXT  # noqa: E402
 check("rules mention Basic", "Basic" in _RULES_TEXT)
 check("rules mention Pro", "Pro" in _RULES_TEXT)
 check("rules point to plans page", "الخطط والباقات" in _RULES_TEXT)
+
+# Restore shared module constants to avoid leaking test configuration.
+(
+    referral.REFERRAL_TARGET,
+    referral.CLONE_PRO_TARGET_MULTIPLIER,
+    referral.CLONE_PLAN_BASIC_DAYS,
+    referral.CLONE_PLAN_PRO_DAYS,
+) = _original_plan_settings
 
 print()
 if failures:
