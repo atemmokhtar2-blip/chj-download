@@ -842,10 +842,19 @@ def verify_and_link_token(owner_id: int, token_text: str, *,
     except Exception:
         return {"ok": False, "reason": "already_linked"}
 
-    # Plan assignment at activation. Redemption codes carry an explicit
-    # plan + runtime window; referral rewards compute the plan from the
-    # qualified-referral count (Pro threshold ⇒ longer Pro window).
-    if plan not in ("basic", "pro"):
+    # Plan assignment at activation — the code's/trial's tier is
+    # AUTHORITATIVE and is NEVER re-derived from the referral count.
+    #   * Redemption codes and trials carry an explicit plan ("basic"/"pro"):
+    #     that exact plan is what the instance gets — a Basic code stays
+    #     Basic, a Pro code stays Pro, no matter how many referrals the user
+    #     has ("الكود حدد الباقة بالملي بالظبط").
+    #   * Anything that isn't exactly "pro" (None, empty, legacy garbage)
+    #     fails closed to BASIC — the stricter plan — instead of silently
+    #     being recomputed. Referral REWARDS (no pre-created instance) are
+    #     the ONLY flow that computes the plan from the qualified count.
+    if code_flow:
+        plan = "pro" if str(plan or "").strip().lower() == "pro" else "basic"
+    elif plan not in ("basic", "pro"):
         qualified_now = pg.fetchone(
             "SELECT COUNT(*) AS cnt FROM referrals WHERE referrer_id = ? AND status = 'qualified'",
             (uid,),

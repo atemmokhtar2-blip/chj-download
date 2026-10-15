@@ -191,6 +191,39 @@ def main():
     check("basic owner still has implicit owner access",
           pp.clone_access(binst, 9100002) == "owner")
 
+    # ---- 3b) Code tier is AUTHORITATIVE — never recomputed from referrals
+    # A user with enough qualified referrals to cross the Pro threshold
+    # activates a BASIC code whose plan payload arrives malformed (None).
+    # It must STILL activate as Basic: the code's tier rules and garbage
+    # fails closed — a Basic code must never be silently upgraded to Pro
+    # just because the user has many referrals ("الكود Basic = Basic بالملي").
+    uid3 = 9100003
+    refcode = R.get_or_create_code(uid3)
+    for r in range(R.pro_target()):
+        pg.execute(
+            "INSERT INTO referrals (referrer_id, referred_id, code, status, bound_at) "
+            "VALUES (?, ?, ?, 'qualified', CURRENT_TIMESTAMP) "
+            "ON CONFLICT (referred_id) DO NOTHING",
+            (uid3, 9003000 + r, refcode),
+        )
+    made3 = RD.create_code("basic", 30, 5, 7, note="t", created_by=1)
+    assert made3.get("ok"), made3
+    res3 = RD.redeem_code(uid3, made3["code"])
+    assert res3.get("ok"), res3
+    R._tg_get_me = lambda tok: {"id": 6100003, "username": "basic_clone_c"}
+    out3 = R.verify_and_link_token(
+        uid3, "6100003:AAFakeBasicCodeToken3xxxxxxxxxxxxxxxxxxxxx",
+        instance_id=int(res3["instance_id"]),
+        plan=None,   # malformed payload — must fail closed to Basic
+        days=30)
+    assert out3.get("ok"), out3
+    check("malformed code-plan payload still activates as Basic (fail closed)",
+          out3.get("plan") == "basic")
+    check("code tier is authoritative: Basic never upgrades from referrals",
+          out3.get("plan") not in ("pro", ""))
+    check("basic code (malformed payload) adds NO clone_admins row",
+          _row(uid3, int(out3["instance_id"])) is None)
+
     # ---- 4) Upgrade basic -> pro appoints the owner instantly ----
     R.set_instance_plan(bid, "pro")
     row2 = _row(9100002, bid)
