@@ -1,3 +1,5 @@
+from __future__ import annotations  # py3.9 compat: `str | None` annotations
+
 import asyncio
 import logging
 import sys

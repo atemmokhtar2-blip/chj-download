@@ -62,12 +62,38 @@ except ImportError:
 
 sys.path.insert(0, REPO)
 
+import sqlite3  # noqa: E402
+
 from database import pg  # noqa: E402
 from database import db as dbm  # noqa: E402
+
+# Under pytest, tests/conftest.py pins DATABASE_PATH (a disposable
+# temp/test_suite.db) BEFORE any module imports config.settings, so every
+# backend already points at the suite DB — module constants must NOT be
+# re-pinned here (that would leak this file's DB into later test modules).
+# In a plain-script run (python3 tests/test_referral_extras.py) conftest is
+# not loaded, but the env var above was set before the first settings import
+# in this process, so settings resolved to DB anyway. Either way: no pinning.
 
 pg.init_referral_schema()
 if pg.backend_name() == "sqlite":
     dbm.init_db()
+
+
+def _scrub_test_rows() -> None:
+    """Remove this suite's users so tests are re-runnable on a shared DB."""
+    try:
+        pg.execute(
+            "DELETE FROM referrals WHERE referrer_id BETWEEN 900000 AND 940000 "
+            "OR referred_id BETWEEN 900000 AND 940000"
+        )
+        pg.execute("DELETE FROM referral_rewards WHERE user_id BETWEEN 900000 AND 940000")
+        pg.execute("DELETE FROM bot_instances WHERE owner_id BETWEEN 900000 AND 940000")
+    except Exception:
+        pass
+
+
+_scrub_test_rows()
 
 import config.settings as cs  # noqa: E402
 import services.referral as R  # noqa: E402
