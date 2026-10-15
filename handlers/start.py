@@ -15,21 +15,13 @@ logger = logging.getLogger(__name__)
 def get_main_keyboard(lang: str = "ar", user_id: int = None, bot_username: str = None) -> ReplyKeyboardMarkup:
     """Permanent Arabic shortcuts: Download + Settings.
 
-    Inside a clone instance (any bot whose username differs from
-    MAIN_BOT_USERNAME) a third permanent button links back to the official
-    main bot — required by the network design so every clone feeds users
-    back to the source without nagging messages.
+    NOTE: reply-keyboard buttons CANNOT carry URLs — ``url`` is an
+    InlineKeyboardButton-only property, so the previous KeyboardButton(url=…)
+    silently raised inside try/except and the button never existed. The
+    "العودة إلى البوت الأساسي" shortcut inside clones is delivered as a
+    proper INLINE button with the /start message instead (see start_command).
     """
     rows = [[t("ar", "menu_download"), t("ar", "menu_settings")]]
-    try:
-        if MAIN_BOT_USERNAME and is_clone_bot(bot_username):
-            from telegram import KeyboardButton
-            rows.append([KeyboardButton(
-                "🏠 العودة إلى البوت الأساسي",
-                url=f"https://t.me/{MAIN_BOT_USERNAME}",
-            )])
-    except Exception:
-        pass
     return ReplyKeyboardMarkup(rows, resize_keyboard=True)
 
 

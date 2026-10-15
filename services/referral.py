@@ -31,11 +31,12 @@ import os
 import re
 import secrets
 import string
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 
 from database import pg
 from config.settings import (
     BOT_TOKEN, MAIN_BOT_USERNAME, REFERRAL_TARGET, BOT_SECRETS_KEY,
+    CLONE_PLAN_BASIC_DAYS, CLONE_PLAN_PRO_DAYS, CLONE_PRO_TARGET_MULTIPLIER,
 )
 
 logger = logging.getLogger(__name__)
@@ -77,6 +78,59 @@ CODE_LEN = 6
 _CODE_ALPHABET = string.ascii_uppercase + string.digits
 
 _TOKEN_RE = re.compile(r"^\d{5,}:[A-Za-z0-9_-]{30,}$")
+
+
+# ---- clone plans & validity -------------------------------------------------
+# Every activated clone runs on a time-limited plan:
+#   basic -> CLONE_PLAN_BASIC_DAYS days (default 30)
+#   pro   -> CLONE_PLAN_PRO_DAYS days   (default 40)
+# Pro is earned at activation by reaching pro_target() qualified referrals.
+# Expiry is enforced three ways: the periodic worker (expire_due_instances in
+# instance_manager), the spawn guard (an expired clone NEVER boots), and the
+# stage machine (users see "expired" instead of "active").
+
+def clone_plan_days(plan) -> int:
+    """Validity window length for a plan, in days."""
+    return CLONE_PLAN_PRO_DAYS if (plan or "basic") == "pro" else CLONE_PLAN_BASIC_DAYS
+
+
+def pro_target() -> int:
+    """Qualified referrals required at activation time to earn the Pro plan."""
+    return max(1, int(get_effective_target() * CLONE_PRO_TARGET_MULTIPLIER))
+
+
+def _utcnow() -> datetime:
+    """Naive UTC now - matches how CURRENT_TIMESTAMP is stored on both backends."""
+    return datetime.now(timezone.utc).replace(tzinfo=None)
+
+
+def _parse_ts(value):
+    """Parse a TIMESTAMP coming from either backend (datetime or str)."""
+    if not value:
+        return None
+    if isinstance(value, datetime):
+        return value.replace(tzinfo=None)
+    for fmt in ("%Y-%m-%d %H:%M:%S.%f", "%Y-%m-%d %H:%M:%S",
+                "%Y-%m-%dT%H:%M:%S.%f", "%Y-%m-%dT%H:%M:%S"):
+        try:
+            return datetime.strptime(str(value)[:26], fmt)
+        except ValueError:
+            continue
+    return None
+
+
+def instance_days_left(inst) -> int | None:
+    """Days remaining on the instance's plan, or None when no expiry is set."""
+    exp = _parse_ts((inst or {}).get("expires_at"))
+    if exp is None:
+        return None
+    return max(0, (exp - _utcnow()).days)
+
+
+def is_instance_expired(inst) -> bool:
+    """True when the instance's validity window has passed."""
+    exp = _parse_ts((inst or {}).get("expires_at"))
+    return exp is not None and exp <= _utcnow()
 
 
 # ---- token crypto ------------------------------------------------------------
@@ -312,8 +366,12 @@ def get_stats(user_id: int) -> dict:
     target = get_effective_target()
     pct = min(100.0, round(qualified * 100.0 / target, 1)) if target else 0.0
     instance = pg.fetchone(
-        "SELECT id, bot_username, status FROM bot_instances WHERE owner_id = ? ORDER BY id DESC LIMIT 1", (uid,)
+        "SELECT id, bot_username, status, plan, activated_at, expires_at "
+        "FROM bot_instances WHERE owner_id = ? ORDER BY id DESC LIMIT 1", (uid,)
     )
+    if instance:
+        instance = dict(instance)
+        instance["days_left"] = instance_days_left(instance)
     return {
         "qualified": qualified,
         "pending": int(pending or 0),
@@ -521,6 +579,8 @@ def referrer_stage(stats: dict) -> str:
       ``progress``        — still collecting qualified referrals.
     """
     inst = stats.get("instance") or {}
+    if inst.get("status") == "expired":
+        return "expired"
     if inst.get("status") == "active" and inst.get("bot_username"):
         return "active"
     reward = stats.get("reward_status", "progress")
@@ -541,8 +601,8 @@ def get_user_activity_log(user_id: int, limit: int = 12) -> list[dict]:
 
 def get_instance(instance_id: int) -> dict | None:
     return pg.fetchone(
-        "SELECT id, owner_id, bot_id, bot_username, status, last_error, activated_at "
-        "FROM bot_instances WHERE id = ?",
+        "SELECT id, owner_id, bot_id, bot_username, status, last_error, activated_at, "
+        "plan, expires_at FROM bot_instances WHERE id = ?",
         (int(instance_id),),
     )
 
@@ -655,10 +715,21 @@ def verify_and_link_token(owner_id: int, token_text: str) -> dict:
     except Exception:
         return {"ok": False, "reason": "already_linked"}
 
+    # Plan assignment at activation: reaching the Pro threshold in QUALIFIED
+    # referrals earns the longer Pro validity window; everyone else gets Basic.
+    qualified_now = pg.fetchone(
+        "SELECT COUNT(*) AS cnt FROM referrals WHERE referrer_id = ? AND status = 'qualified'",
+        (uid,),
+    )["cnt"]
+    plan = "pro" if int(qualified_now or 0) >= pro_target() else "basic"
+    activated = _utcnow()
+    expires = activated + timedelta(days=clone_plan_days(plan))
+    activated_ts = activated.strftime("%Y-%m-%d %H:%M:%S")
+    expires_ts = expires.strftime("%Y-%m-%d %H:%M:%S")
     pg.execute(
-        "UPDATE bot_instances SET bot_id = ?, bot_username = ?, status = 'active', "
-        "activated_at = CURRENT_TIMESTAMP, last_error = '' WHERE id = ?",
-        (bot_id, bot_username[:64], instance_id),
+        "UPDATE bot_instances SET bot_id = ?, bot_username = ?, status = 'active', plan = ?, "
+        "activated_at = ?, expires_at = ?, last_error = '' WHERE id = ?",
+        (bot_id, bot_username[:64], plan, activated_ts, expires_ts, instance_id),
     )
     for key, value in (
         ("clone_mode", "1"),
@@ -674,8 +745,10 @@ def verify_and_link_token(owner_id: int, token_text: str) -> dict:
         "UPDATE referral_rewards SET status = 'claimed', claimed_at = CURRENT_TIMESTAMP WHERE user_id = ?",
         (uid,),
     )
-    log_activation(uid, instance_id, "instance_activated", f"bot=@{bot_username} bot_id={bot_id}")
-    return {"ok": True, "instance_id": instance_id, "bot_username": bot_username, "bot_id": bot_id}
+    log_activation(uid, instance_id, "instance_activated",
+                   f"bot=@{bot_username} bot_id={bot_id} plan={plan} days={clone_plan_days(plan)} expires={expires_ts}")
+    return {"ok": True, "instance_id": instance_id, "bot_username": bot_username,
+            "bot_id": bot_id, "plan": plan, "expires_at": expires_ts}
 
 
 def load_instance_token(instance_id: int) -> str | None:
@@ -700,6 +773,59 @@ def set_instance_error(instance_id: int, error: str) -> None:
         pg.execute("UPDATE bot_instances SET last_error = ? WHERE id = ?", (error[:300], int(instance_id)))
     except Exception:
         pass
+
+
+# ---- plan validity lifecycle ------------------------------------------------
+
+def list_expired_due_instances() -> list:
+    """ACTIVE instances whose validity window has passed - the enforcement
+    source for the automatic expiry worker."""
+    rows = pg.fetchall("SELECT * FROM bot_instances WHERE status = 'active' ORDER BY id ASC")
+    return [r for r in rows if is_instance_expired(r)]
+
+
+def mark_instance_expired(instance_id: int) -> None:
+    """Move an instance to 'expired' + write the audit trail."""
+    pg.execute("UPDATE bot_instances SET status = 'expired' WHERE id = ?", (int(instance_id),))
+    inst = get_instance(int(instance_id)) or {}
+    log_activation(inst.get("owner_id"), int(instance_id), "instance_expired",
+                   f"plan={inst.get('plan') or 'basic'} expires_at={inst.get('expires_at')}")
+
+
+def extend_instance(instance_id: int, days: int = None) -> str:
+    """Owner-approved renewal/extension: push expires_at forward from NOW and
+    return the instance to 'active'. This is the ONLY path an expired clone
+    comes back online. Returns the new expiry as a display string."""
+    inst = get_instance(int(instance_id)) or {}
+    plan = inst.get("plan") or "basic"
+    delta = int(days) if days else clone_plan_days(plan)
+    new_expiry = _utcnow() + timedelta(days=delta)
+    ts = new_expiry.strftime("%Y-%m-%d %H:%M:%S")
+    pg.execute(
+        "UPDATE bot_instances SET expires_at = ?, status = 'active', last_error = '' WHERE id = ?",
+        (ts, int(instance_id)),
+    )
+    log_activation(inst.get("owner_id"), int(instance_id), "instance_renewed",
+                   f"plan={plan} days={delta} expires_at={ts}")
+    return ts
+
+
+def set_instance_plan(instance_id: int, plan: str) -> str:
+    """Owner plan switch (basic<->pro). Recomputes the expiry from the original
+    activation when the clone is still inside its window, otherwise from now.
+    Returns the new expiry as a display string."""
+    plan = "pro" if plan == "pro" else "basic"
+    inst = get_instance(int(instance_id)) or {}
+    base = _parse_ts(inst.get("activated_at")) or _utcnow()
+    if is_instance_expired(inst):
+        base = _utcnow()
+    new_expiry = base + timedelta(days=clone_plan_days(plan))
+    ts = new_expiry.strftime("%Y-%m-%d %H:%M:%S")
+    pg.execute("UPDATE bot_instances SET plan = ?, expires_at = ? WHERE id = ?",
+               (plan, ts, int(instance_id)))
+    log_activation(inst.get("owner_id"), int(instance_id), "instance_plan_changed",
+                   f"plan={plan} expires_at={ts}")
+    return ts
 
 
 # ---- audit -------------------------------------------------------------------------

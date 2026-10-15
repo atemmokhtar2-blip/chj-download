@@ -167,6 +167,11 @@ def _rows_for(stats: dict, bot_username: str | None) -> list[list[InlineKeyboard
             InlineKeyboardButton("📖 دليل التفعيل", callback_data="ref:guide"),
             InlineKeyboardButton("✅ تحقق من التفعيل", callback_data="ref:verify_activation"),
         ])
+    elif stage == "expired":
+        # An expired clone ONLY returns via an owner-approved renewal — the
+        # user's path is a support ticket, never a self-service re-activation.
+        rows.append([InlineKeyboardButton("⌛ طلب تجديد مدة نسختي", callback_data="ref:support:open:clone")])
+        rows.append([InlineKeyboardButton("🧾 سجل العمليات", callback_data="ref:activity")])
     else:
         remaining = max(0, int(stats.get("target", 0)) - int(stats.get("qualified", 0)))
         rows.append([InlineKeyboardButton(f"🎁 نسختي الخاصة ({remaining} متبقي)", callback_data="ref:claim")])
@@ -200,10 +205,23 @@ def _home_text(stats: dict) -> str:
     stage = referral.referrer_stage(stats)
     stage_line = {
         "active": "🤖 <b>نسختك الخاصة مفعّلة وشغالة.</b>",
+        "expired": "⌛ <b>انتهت مدة نسختك — تم إيقافها تلقائيًا. التجديد بقرار المالك عبر تذكرة دعم.</b>",
         "eligible": "🎉 <b>أنت مؤهل الآن لتفعيل نسختك — اضغط «فعّل الآن».</b>",
         "awaiting_token": "🔑 <b>الربط مفتوح — أرسل توكن البوت الجديد.</b>",
         "progress": f"🚀 باقي <b>{max(0, int(stats['target']) - int(stats['qualified']))}</b> مستخدمًا مؤهلًا لتفعيل نسختك.",
     }[stage]
+    # Plan & validity display — every clone runs on a time-limited plan
+    # (🆓 basic 30 يومًا / 👑 pro 40 يومًا) and users must see the window.
+    inst = stats.get("instance") or {}
+    plan_line = ""
+    if inst.get("plan") and inst.get("status") in ("active", "expired"):
+        plan_badge = "👑 Pro" if inst.get("plan") == "pro" else "🆓 Basic"
+        exp = str(inst.get("expires_at") or "")[:10]
+        days_left = inst.get("days_left")
+        if inst.get("status") == "active" and days_left is not None:
+            plan_line = f"📦 خطتك: <b>{plan_badge}</b> — تنتهي خلال <b>{days_left}</b> يومًا ({exp})\n"
+        elif inst.get("status") == "expired":
+            plan_line = f"📦 خطتك: <b>{plan_badge}</b> — انتهت في {exp}\n"
     return (
         "🎁 <b>اكسب نسختك من البوت</b>\n\n"
         f"🎯 هدفك: <b>{stats['target']} مستخدمًا مؤهلًا</b>\n"
@@ -211,6 +229,7 @@ def _home_text(stats: dict) -> str:
         f"📊 التقدم: <b>{stats['percent']}%</b>  <code>{bar}</code>\n"
         f"⏳ بانتظار النشاط: {stats['pending']}\n"
         f"🚩 تحت المراجعة: {stats['suspicious']}\n\n"
+        f"{plan_line}"
         f"{stage_line}\n\n"
         "🔗 <b>رابط الدعوة الخاص بك:</b>\n"
         f"<code>{link}</code>\n\n"

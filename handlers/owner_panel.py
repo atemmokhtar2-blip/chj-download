@@ -72,7 +72,8 @@ _SUP_STATUS = {"open": "🔓 مفتوحة", "answered": "🟢 تم الرد", "c
 _INST_STATUS = {
     "pending_token": "🟡 بانتظار التوكن",
     "active": "🟢 نشطة",
-    "disabled": "⚫ موقوفة oleh المالك",
+    "disabled": "⚫ موقوفة بقرار المالك",
+    "expired": "⌛ منتهية المدة",
     "error": "🔴 خطأ",
 }
 
@@ -515,12 +516,22 @@ async def _inst_list(query):
         insts = referral.list_all_instances(20)
     except Exception:
         insts = []
-    lines = [
-        f"• <b>@{escape(i.get('bot_username') or '—')}</b> (#<code>{i['id']}</code>)"
-        f" — {_INST_STATUS.get(i.get('status'), i.get('status'))}"
-        f" • المالك <code>{i.get('owner_id')}</code>"
-        for i in insts
-    ] or ["• لا توجد نسخ مسجلة في النظام."]
+    def _inst_line(i: dict) -> str:
+        plan = "👑 Pro" if i.get("plan") == "pro" else "🆓 Basic"
+        left = referral.instance_days_left(i)
+        validity = ""
+        if i.get("status") == "active" and left is not None:
+            validity = f" • باقي <b>{left}</b> يومًا"
+        elif i.get("status") == "expired":
+            validity = f" • انتهت {escape(str(i.get('expires_at') or '')[:10])}"
+        return (
+            f"• <b>@{escape(i.get('bot_username') or '—')}</b> (#<code>{i['id']}</code>)"
+            f" — {_INST_STATUS.get(i.get('status'), i.get('status'))}"
+            f" • {plan}{validity}"
+            f" • المالك <code>{i.get('owner_id')}</code>"
+        )
+
+    lines = [_inst_line(i) for i in insts] or ["• لا توجد نسخ مسجلة في النظام."]
     rows = [[inline_button(f"🤖 #{i['id']} @{(i.get('bot_username') or '—')[:20]}",
                            callback_data=f"own_inst_{i['id']}")] for i in insts[:10]]
     rows.append([inline_button("🔙 مركز التحكم", callback_data="own_home")])
@@ -537,18 +548,30 @@ async def _inst_detail(query, inst_id: int):
                     reply_markup=_kb(_back("own_inst", "🔙 إدارة النسخ")))
         return
     status = inst.get("status")
+    plan = inst.get("plan") or "basic"
+    plan_badge = "👑 Pro" if plan == "pro" else "🆓 Basic"
+    days_left = referral.instance_days_left(inst)
     text = (
         f"🤖 <b>النسخة #{inst_id}</b>\n\n"
         f"• البوت: <b>@{escape(inst.get('bot_username') or '—')}</b>\n"
         f"• المالك: <code>{inst.get('owner_id')}</code>\n"
         f"• الحالة: {_INST_STATUS.get(status, status)}\n"
-        f"• آخر خطأ: <code>{escape(inst.get('last_error') or 'لا يوجد')}</code>\n"
-        f"• أُنشئت: <code>{escape(str(inst.get('created_at') or '—')[:16])}</code>\n"
+        f"• الخطة: <b>{plan_badge}</b> (مدة {referral.clone_plan_days(plan)} يومًا)\n"
         f"• فُعّلت: <code>{escape(str(inst.get('activated_at') or '—')[:16])}</code>\n"
+        f"• تنتهي في: <code>{escape(str(inst.get('expires_at') or '—')[:16])}</code>\n"
+        + (f"• الأيام المتبقية: <b>{days_left}</b>\n" if days_left is not None else "")
+        + f"• آخر خطأ: <code>{escape(inst.get('last_error') or 'لا يوجد')}</code>\n"
+        f"• أُنشئت: <code>{escape(str(inst.get('created_at') or '—')[:16])}</code>\n"
     )
     rows = [[inline_button("👤 ملف المالك", callback_data=f"own_user_{inst.get('owner_id')}")]]
     if status == "active":
         rows.append([inline_button("🛑 إيقاف النسخة", callback_data=f"own_inst_stop_{inst_id}")])
+        rows.append([inline_button("⏳ تمديد المدة", callback_data=f"own_inst_extend_{inst_id}"),
+                     inline_button("🔁 تبديل الخطة", callback_data=f"own_inst_plansw_{inst_id}")])
+    elif status == "expired":
+        # The ONLY path back online: an owner-approved renewal.
+        rows.append([inline_button("🔄 تجديد المدة وإعادة التشغيل", callback_data=f"own_inst_extend_{inst_id}"),
+                     inline_button("🔁 تبديل الخطة", callback_data=f"own_inst_plansw_{inst_id}")])
     elif status in ("disabled", "error"):
         rows.append([inline_button("▶️ إعادة التشغيل", callback_data=f"own_inst_start_{inst_id}")])
     rows.append([inline_button("🔙 إدارة النسخ", callback_data="own_inst")])
@@ -605,14 +628,82 @@ async def _inst_start_do(context, query, inst_id: int):
                     reply_markup=_kb(_back("own_inst", "🔙 إدارة النسخ")))
         return
     ok = await spawn_instance(inst)
-    referral.set_instance_status(inst_id, "active" if ok else "error")
+    # The spawn guard may have marked the clone 'expired' (validity passed) —
+    # respect that: an expired clone must be RENEWED, not merely restarted.
+    fresh = referral.get_instance(inst_id) or {}
+    if fresh.get("status") == "expired":
+        new_status = "expired"
+    else:
+        new_status = "active" if ok else "error"
+    referral.set_instance_status(inst_id, new_status)
     referral.log_activation(inst.get("owner_id"), inst_id,
-                            "instance_started_by_owner", f"ok={ok}")
+                            "instance_started_by_owner", f"ok={ok} status={new_status}")
     log_admin_action(query.from_user.id, "owner_start_instance", inst_id,
-                     detail=f"ok={ok} bot=@{inst.get('bot_username', '')}")
+                     detail=f"ok={ok} status={new_status} bot=@{inst.get('bot_username', '')}")
+    if new_status == "expired":
+        await _edit(query,
+            f"⌛ <b>لا يمكن تشغيل النسخة #{inst_id}</b> — انتهت مدة خطتها.\n"
+            "اضغط «🔄 تجديد المدة وإعادة التشغيل» لتجديدها بقرارك.",
+            parse_mode="HTML", reply_markup=_kb(_back("own_inst", "🔙 إدارة النسخ")))
+        return
     await _edit(query,
         ("✅ <b>تم إعادة تشغيل النسخة</b>." if ok else
          "❌ <b>فشل تشغيل النسخة</b> — راجع حقل آخر خطأ في تفاصيل النسخة."),
+        parse_mode="HTML", reply_markup=_kb(_back("own_inst", "🔙 إدارة النسخ")))
+
+
+async def _inst_extend_do(context, query, inst_id: int):
+    """Owner-approved renewal/extension: push the validity window forward and
+    bring the clone back online. The ONLY path an expired clone returns."""
+    inst = referral.get_instance(inst_id)
+    if not inst:
+        await _edit(query, "❌ النسخة غير موجودة.", parse_mode="HTML",
+                    reply_markup=_kb(_back("own_inst", "🔙 إدارة النسخ")))
+        return
+    new_expiry = referral.extend_instance(inst_id)
+    was_down = inst.get("status") in ("expired", "disabled", "error")
+    started = False
+    if was_down:
+        fresh = referral.get_instance(inst_id) or inst
+        started = await spawn_instance(fresh)
+        referral.set_instance_status(inst_id, "active" if started else "error")
+    referral.log_activation(inst.get("owner_id"), inst_id, "instance_renewed_by_owner",
+                            f"expires_at={new_expiry} restarted={started}")
+    log_admin_action(query.from_user.id, "owner_extend_instance", inst_id,
+                     detail=f"expires={new_expiry} plan={inst.get('plan') or 'basic'} restarted={started}")
+    try:
+        await context.bot.send_message(
+            int(inst.get("owner_id")),
+            f"✅ <b>تم تجديد مدة نسختك</b> @{escape(inst.get('bot_username') or '')}\n"
+            f"📅 الانتهاء الجديد: <code>{escape(str(new_expiry)[:16])}</code>",
+            parse_mode="HTML",
+        )
+    except Exception:
+        pass
+    await _edit(query,
+        f"✅ <b>تم تمديد النسخة #{inst_id}</b> (@{escape(inst.get('bot_username') or '—')})\n"
+        f"📅 تنتهي الآن في: <code>{escape(str(new_expiry)[:16])}</code>\n"
+        + ("▶️ تمت إعادة تشغيل النسخة." if started else "")
+        + ("\n⚠️ فشل إعادة التشغيل — راجع آخر خطأ في التفاصيل." if was_down and not started else ""),
+        parse_mode="HTML", reply_markup=_kb(_back("own_inst", "🔙 إدارة النسخ")))
+
+
+async def _inst_plansw_do(context, query, inst_id: int):
+    """Owner plan switch: 🆓 basic ↔ 👑 pro. Recomputes the expiry window."""
+    inst = referral.get_instance(inst_id)
+    if not inst:
+        await _edit(query, "❌ النسخة غير موجودة.", parse_mode="HTML",
+                    reply_markup=_kb(_back("own_inst", "🔙 إدارة النسخ")))
+        return
+    new_plan = "basic" if (inst.get("plan") or "basic") == "pro" else "pro"
+    new_expiry = referral.set_instance_plan(inst_id, new_plan)
+    log_admin_action(query.from_user.id, "owner_instance_plan", inst_id,
+                     detail=f"plan={new_plan} expires={new_expiry} bot=@{inst.get('bot_username', '')}")
+    await _edit(query,
+        f"🔁 <b>تم تبديل خطة النسخة #{inst_id}</b>\n\n"
+        f"• الخطة الجديدة: <b>{'👑 Pro' if new_plan == 'pro' else '🆓 Basic'}</b>"
+        f" (مدة {referral.clone_plan_days(new_plan)} يومًا)\n"
+        f"• الانتهاء الجديد: <code>{escape(str(new_expiry)[:16])}</code>",
         parse_mode="HTML", reply_markup=_kb(_back("own_inst", "🔙 إدارة النسخ")))
 
 
@@ -1074,6 +1165,14 @@ async def owner_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         inst_id = _suffix_int(data)
         if inst_id:
             await _inst_stop_do(context, query, inst_id)
+    elif data.startswith("own_inst_extend_"):
+        inst_id = _suffix_int(data)
+        if inst_id:
+            await _inst_extend_do(context, query, inst_id)
+    elif data.startswith("own_inst_plansw_"):
+        inst_id = _suffix_int(data)
+        if inst_id:
+            await _inst_plansw_do(context, query, inst_id)
     elif data.startswith("own_inst_stop_"):
         inst_id = _suffix_int(data)
         if inst_id:

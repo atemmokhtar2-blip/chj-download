@@ -37,3 +37,21 @@ async def cleanup_old_history():
         except Exception:
             pass
         await asyncio.sleep(3600)
+
+
+async def clone_expiry_worker():
+    """Enforce clone-plan validity windows.
+
+    Every 15 minutes: any ACTIVE clone whose ``expires_at`` has passed is
+    stopped, marked ``expired`` in the DB, and its owner is notified. An
+    expired clone never boots again until an owner-approved renewal.
+    """
+    await asyncio.sleep(60)
+    while True:
+        try:
+            from services.instance_manager import expire_due_instances
+            await expire_due_instances()
+        except Exception:
+            import logging
+            logging.getLogger(__name__).exception("Clone expiry worker failed")
+        await asyncio.sleep(900)

@@ -89,6 +89,17 @@ REFERRAL_TARGET = int(os.getenv("REFERRAL_TARGET", "70"))
 BOT_SECRETS_KEY = os.getenv("BOT_SECRETS_KEY", "").strip()
 # Master switch for running earned clone instances in this process.
 ENABLE_CLONE_INSTANCES = os.getenv("ENABLE_CLONE_INSTANCES", "1") == "1"
+
+# ---- Clone plans & validity -------------------------------------------------
+# Every clone runs on a time-limited plan:
+#   🆓 basic = CLONE_PLAN_BASIC_DAYS days   👑 pro = CLONE_PLAN_PRO_DAYS days.
+# Pro is earned automatically at activation by reaching CLONE_PRO_TARGET_MULTIPLIER
+# × the referral target in QUALIFIED referrals. When a clone's validity window
+# ends it is stopped automatically and marked 'expired'; it NEVER boots again
+# until an owner-approved renewal/extension (owner panel → إدارة النسخ).
+CLONE_PLAN_BASIC_DAYS = int(os.getenv("CLONE_PLAN_BASIC_DAYS", "30"))
+CLONE_PLAN_PRO_DAYS = int(os.getenv("CLONE_PLAN_PRO_DAYS", "40"))
+CLONE_PRO_TARGET_MULTIPLIER = float(os.getenv("CLONE_PRO_TARGET_MULTIPLIER", "2"))
 # Neon/Postgres DSN is resolved in database/pg.py from NEON_DATABASE_URL /
 # POSTGRES_URL / DATABASE_URL (postgres:// prefix). Without one, the referral
 # tables live in the same SQLite file as the rest of the bot.

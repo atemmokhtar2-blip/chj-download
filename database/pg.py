@@ -211,8 +211,10 @@ def init_referral_schema() -> None:
             bot_id {bi} UNIQUE,
             bot_username TEXT DEFAULT '',
             status TEXT DEFAULT 'pending_token',
+            plan TEXT DEFAULT 'basic',
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             activated_at TIMESTAMP,
+            expires_at TIMESTAMP,
             last_error TEXT DEFAULT ''
         )""",
         # Encrypted bot tokens. token_hash (sha256) enforces "never linked
@@ -253,7 +255,29 @@ def init_referral_schema() -> None:
             except Exception:
                 logger.debug("Index skipped: %s", stmt[:60])
     ensure_reward_milestone_column()
+    ensure_instance_plan_columns()
     logger.info("Referral schema ready on backend=%s", BACKEND)
+
+
+def ensure_instance_plan_columns() -> None:
+    """Additive migration: clone plan (basic/pro) + validity-window columns.
+
+    New installs get them from the CREATE TABLE DDL above; this upgrades
+    databases created before the plan system existed, on BOTH backends.
+    """
+    try:
+        if BACKEND == "postgres":
+            execute("ALTER TABLE bot_instances ADD COLUMN IF NOT EXISTS plan TEXT DEFAULT 'basic'")
+            execute("ALTER TABLE bot_instances ADD COLUMN IF NOT EXISTS expires_at TIMESTAMP")
+            return
+        with ref_cursor(commit=False) as c:
+            cols = {row.get("name") for row in c.execute("PRAGMA table_info(bot_instances)").fetchall()}
+        if "plan" not in cols:
+            execute("ALTER TABLE bot_instances ADD COLUMN plan TEXT DEFAULT 'basic'")
+        if "expires_at" not in cols:
+            execute("ALTER TABLE bot_instances ADD COLUMN expires_at TIMESTAMP")
+    except Exception:
+        logger.exception("instance plan columns migration failed")
 
 
 def ensure_reward_milestone_column() -> None:
