@@ -102,6 +102,29 @@ def invalidate_instance_cache(bot_id=None) -> None:
         _instance_cache.pop(int(bot_id), None)
 
 
+def effective_plan(inst: dict | None) -> str:
+    """Plan a clone row entitles RIGHT NOW — fail closed.
+
+    Garbage/missing plan -> Basic. An expired validity window (or an
+    ``expired`` status) downgrades Pro -> Basic IMMEDIATELY, without waiting
+    for the 15-min expiry worker to stop the bot. Pro with no ``expires_at``
+    stays Pro (open-ended grant). Any infra error resolving the window also
+    downgrades to Basic — the stricter plan is always the safe default.
+    """
+    plan = normalize_plan((inst or {}).get("plan"))
+    if plan != PLAN_PRO:
+        return PLAN_BASIC
+    try:
+        from services.referral import is_instance_expired
+        if is_instance_expired(inst):
+            return PLAN_BASIC
+        if str((inst or {}).get("status") or "").strip().lower() == "expired":
+            return PLAN_BASIC
+    except Exception:
+        return PLAN_BASIC
+    return PLAN_PRO
+
+
 def plan_context(bot) -> dict:
     """Enforcement context for the bot serving the current update.
 
@@ -117,7 +140,7 @@ def plan_context(bot) -> dict:
     if not inst:
         return {"is_clone": True, "instance_id": 0, "plan": PLAN_BASIC,
                 "limits": limits(PLAN_BASIC), "instance": None}
-    plan = normalize_plan(inst.get("plan"))
+    plan = effective_plan(inst)
     return {"is_clone": True, "instance_id": int(inst["id"]), "plan": plan,
             "limits": limits(plan), "instance": inst}
 

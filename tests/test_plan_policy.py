@@ -440,6 +440,24 @@ def _setup_module_checks() -> tuple[dict, dict]:
     return inst_basic, inst_pro
 
 
+# --- effective_plan: an expired Pro downgrades to Basic IMMEDIATELY,
+# without waiting for the 15-min expiry worker (fail closed).
+from datetime import datetime, timedelta
+_fut = (datetime.utcnow() + timedelta(days=10)).strftime("%Y-%m-%d %H:%M:%S")
+_past = (datetime.utcnow() - timedelta(days=1)).strftime("%Y-%m-%d %H:%M:%S")
+check("active pro keeps pro",
+      pp.effective_plan({"plan": "pro", "expires_at": _fut}) == pp.PLAN_PRO)
+check("open-ended pro keeps pro",
+      pp.effective_plan({"plan": "pro", "expires_at": None}) == pp.PLAN_PRO)
+check("expired pro downgrades to basic",
+      pp.effective_plan({"plan": "pro", "expires_at": _past}) == pp.PLAN_BASIC)
+check("expired status downgrades to basic",
+      pp.effective_plan({"plan": "pro", "status": "expired"}) == pp.PLAN_BASIC)
+check("garbage plan is basic",
+      pp.effective_plan({"plan": "PRO123"}) == pp.PLAN_BASIC)
+check("missing row is basic", pp.effective_plan(None) == pp.PLAN_BASIC)
+
+
 _INSTANCES = _setup_module_checks()
 
 
