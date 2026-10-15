@@ -478,6 +478,31 @@ def add_clone_admin(instance_id: int, user_id: int, added_by: int,
         return False
 
 
+def ensure_owner_admin(instance_id: int, owner_id: int) -> bool:
+    """Appoint the clone's owner as a FULL-permission admin of their own
+    instance — automatically and idempotently ("يتعين تلقائي أدمن").
+
+    Owner access is already implicit via ``bot_instances.owner_id``; this
+    row makes the appointment durable and visible in the panel's admin
+    list. ``clone_admins`` is the clone's OWN admin table — completely
+    separate from the main bot's global admins: nothing here ever grants
+    main-bot privileges, and nothing there grants clone privileges.
+    """
+    if not instance_id or not owner_id:
+        return False
+    try:
+        pg.execute(
+            "INSERT INTO clone_admins (instance_id, user_id, can_ban, can_broadcast, can_stats, added_by) "
+            "VALUES (?, ?, TRUE, TRUE, TRUE, ?) "
+            "ON CONFLICT (instance_id, user_id) DO UPDATE SET "
+            "can_ban = TRUE, can_broadcast = TRUE, can_stats = TRUE",
+            (int(instance_id), int(owner_id), int(owner_id)))
+        return True
+    except Exception:
+        logger.exception("ensure_owner_admin failed inst=%s uid=%s", instance_id, owner_id)
+        return False
+
+
 def remove_clone_admin(instance_id: int, user_id: int) -> bool:
     try:
         removed = pg.execute(

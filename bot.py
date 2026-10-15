@@ -40,7 +40,9 @@ from workers.cleanup import cleanup_temp_files, cleanup_old_cache, cleanup_old_h
 
 # Arabic-only main menu. Matching is emoji-insensitive (see normalize_button_text)
 # so the buttons work no matter how the client sends the label back.
-MENU_BUTTONS = {"📥 تحميل", "📥 Download", "⚙️ الإعدادات", "⚙️ Settings"}
+MENU_BUTTONS = {"📥 تحميل", "📥 Download", "⚙️ الإعدادات", "⚙️ Settings",
+                "🛠️ لوحة التحكم"}  # clone panel door — routed to clone_admin_command,
+                # which re-gates server-side (clone + Pro + owner/admin only)
 
 
 async def ping_command(update: Update, context):
@@ -108,11 +110,20 @@ async def message_router(update: Update, context):
             normalize_button_text(t("ar", "menu_settings")),
             normalize_button_text(t("en", "menu_settings")),
         }
+        admin_btn = {
+            normalize_button_text(t("ar", "menu_admin")),
+            normalize_button_text(t("en", "menu_admin")),
+        }
         if norm in download_btn:
             await update.message.reply_text(t("ar", "send_url_prompt"), parse_mode="HTML")
         elif norm in settings_btn:
             # Open the real settings menu (same screen as /settings).
             await settings_command(update, context)
+        elif norm in admin_btn:
+            # The clone's OWN panel — re-gated server-side inside (clone +
+            # Pro + owner/admin); anywhere else it is a polite refusal.
+            from handlers.clone_admin import clone_admin_command
+            await clone_admin_command(update, context)
         return
 
     # Owner-panel text states run first (owner-gated in code inside the handler).

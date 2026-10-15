@@ -25,6 +25,28 @@ def get_main_keyboard(lang: str = "ar", user_id: int = None, bot_username: str =
     return ReplyKeyboardMarkup(rows, resize_keyboard=True)
 
 
+def build_main_keyboard(context, user_id: int) -> ReplyKeyboardMarkup:
+    """The clone-aware permanent keyboard.
+
+    Main bot / regular clone users → Download + Settings (unchanged).
+    Pro clone OWNER or clone ADMIN → a third row "🛠️ لوحة التحكم": the door
+    to THEIR OWN panel, which is completely isolated from the main bot's
+    general admin (separate clone_admins table, Pro-plan gated, and
+    re-verified server-side on every single press).
+    """
+    rows = [[t("ar", "menu_download"), t("ar", "menu_settings")]]
+    try:
+        from services import plan_policy
+        ctx = plan_policy.plan_context(context.bot)
+        if ctx.get("is_clone") and ctx.get("plan") == plan_policy.PLAN_PRO \
+                and ctx.get("instance"):
+            if plan_policy.clone_access(ctx["instance"], user_id) in ("owner", "admin"):
+                rows.append([t("ar", "menu_admin")])
+    except Exception:
+        logger.debug("admin keyboard row failed", exc_info=True)
+    return ReplyKeyboardMarkup(rows, resize_keyboard=True)
+
+
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     db_user = get_user(user.id)
@@ -80,15 +102,20 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # any panel button or screen, anywhere in the bot.
     #   * OWNER (you)      → the Owner Control Center opens immediately on /start.
     #   * regular admin    → the admin panel opens immediately on /start.
-    if is_owner(user.id):
-        from handlers.owner_panel import owner_command  # local import: avoids a circular dependency
-        await owner_command(update, context)
-        return
+    # FULL ISOLATION: main-bot panels NEVER open inside a clone. Inside a
+    # clone even the global owner/admin is served the normal clone flow —
+    # if they own/admin THIS clone, their own panel arrives via the
+    # keyboard row + the auto-appointment note below.
+    if not is_clone_bot(context.bot.username or ""):
+        if is_owner(user.id):
+            from handlers.owner_panel import owner_command  # local import: avoids a circular dependency
+            await owner_command(update, context)
+            return
 
-    if is_admin(user.id):
-        from handlers.admin import admin_command  # local import: avoids a circular dependency
-        await admin_command(update, context)
-        return
+        if is_admin(user.id):
+            from handlers.admin import admin_command  # local import: avoids a circular dependency
+            await admin_command(update, context)
+            return
 
     # 📦 Clone plan enforcement touches /start too: a user banned from THIS
     # clone instance gets a clear notice instead of the normal welcome.
@@ -108,7 +135,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         t("ar", "welcome_back") + ref_note,
         parse_mode="HTML",
-        reply_markup=get_main_keyboard("ar", user.id),
+        reply_markup=build_main_keyboard(context, user.id),
     )
 
     # A Pro clone can show its OWN welcome message (set from its admin panel).
@@ -141,6 +168,31 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception:
         pass
 
+    # 👑 Auto-appointment note: the Pro clone's owner/admins are told — once
+    # per process session — that their OWN isolated control panel is ready
+    # (they were appointed automatically at activation / plan upgrade).
+    try:
+        if is_clone_bot(context.bot.username or "") and \
+                not context.user_data.get("clone_panel_note_sent"):
+            from services import plan_policy
+            pctx = plan_policy.plan_context(context.bot)
+            if pctx.get("instance") and pctx.get("plan") == plan_policy.PLAN_PRO:
+                acc = plan_policy.clone_access(pctx["instance"], user.id)
+                if acc in ("owner", "admin"):
+                    context.user_data["clone_panel_note_sent"] = True
+                    role = "صاحب النسخة 👑" if acc == "owner" else "إداري 🛡️"
+                    await update.message.reply_text(
+                        f"👑 أنت {role} في هذه النسخة — تم تعيينك تلقائيًا.\n"
+                        "لوحة التحكم الخاصة بك معزولة تمامًا عن إدارة البوت الأساسي،\n"
+                        "ومتاحة دائمًا من زر «🛠️ لوحة التحكم» أو أمر /admin.",
+                        reply_markup=InlineKeyboardMarkup([[
+                            InlineKeyboardButton("🛠️ فتح لوحة التحكم",
+                                                 callback_data="ca:home"),
+                        ]]),
+                    )
+    except Exception:
+        logger.debug("clone panel note failed", exc_info=True)
+
 
 async def language_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Keep old language buttons harmless; the bot now uses Arabic only."""
@@ -155,7 +207,7 @@ async def language_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         chat_id=query.message.chat_id,
         text=t("ar", "welcome"),
         parse_mode="HTML",
-        reply_markup=get_main_keyboard("ar", query.from_user.id),
+        reply_markup=build_main_keyboard(context, query.from_user.id),
     )
 
 

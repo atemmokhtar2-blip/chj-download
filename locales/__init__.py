@@ -83,6 +83,7 @@ TRANSLATIONS = {
         "settings_lang_btn": "🌍 تغيير اللغة",
         "menu_download": "📥 تحميل",
         "menu_settings": "⚙️ الإعدادات",
+        "menu_admin": "🛠️ لوحة التحكم",
         "send_url_prompt": "أرسل رابط الميديا الآن.",
         "banned": "⛔ حسابك محظور من استخدام البوت.",
         "invalid_url": "❌ الرابط غير صالح أو غير مدعوم. أرسل رابطًا من منصة مدعومة.",

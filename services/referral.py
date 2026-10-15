@@ -845,6 +845,18 @@ def verify_and_link_token(owner_id: int, token_text: str, *,
             "ON CONFLICT (instance_id, key) DO UPDATE SET value = EXCLUDED.value",
             (instance_id, key, value),
         )
+    # "يتعين تلقائي أدمن" — whoever just activated this clone (referral
+    # reward OR redemption code) IS its owner. A Pro clone instantly grants
+    # them the durable full-permission clone_admins row so the "🛠️ لوحة
+    # التحكم" keyboard row and the isolated panel are live immediately.
+    # clone_admins is the clone's OWN table — completely isolated from the
+    # main bot's global admins in both directions.
+    if plan == "pro":
+        try:
+            from services import plan_policy
+            plan_policy.ensure_owner_admin(int(instance_id), uid)
+        except Exception:
+            logger.exception("auto owner-admin on activation failed inst=%s", instance_id)
     # Scoped by instance_id so the code-activation path (which has no
     # matching reward row) is a natural no-op.
     pg.execute(
@@ -931,6 +943,14 @@ def set_instance_plan(instance_id: int, plan: str) -> str:
     ts = new_expiry.strftime("%Y-%m-%d %H:%M:%S")
     pg.execute("UPDATE bot_instances SET plan = ?, expires_at = ? WHERE id = ?",
                (plan, ts, int(instance_id)))
+    # Upgrading to Pro instantly entitles the owner to their own panel —
+    # appoint them automatically (idempotent; Basic clones get no row).
+    if plan == "pro" and inst.get("owner_id"):
+        try:
+            from services import plan_policy
+            plan_policy.ensure_owner_admin(int(instance_id), int(inst["owner_id"]))
+        except Exception:
+            logger.exception("auto owner-admin on upgrade failed inst=%s", instance_id)
     log_activation(inst.get("owner_id"), int(instance_id), "instance_plan_changed",
                    f"plan={plan} expires_at={ts}")
     return ts

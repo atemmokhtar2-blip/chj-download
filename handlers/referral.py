@@ -1259,8 +1259,31 @@ async def try_handle_token_message(update: Update, context: ContextTypes.DEFAULT
     )
     plan_line = ""
     closing = f"شكرًا إنك كبرت المجتمع — {referral.get_stats(uid)['qualified']} مستخدمًا مؤهلًا بفضلك! 💪"
+    # Plan features — rendered FROM the enforced limits table itself, so what
+    # the owner reads is EXACTLY what the server applies inside their clone
+    # ("ياخد مميزات الخطة بالملي"): Basic = 70/3/720p/7 أيام بلا لوحة،
+    # Pro = 150/10/أعلى جودة/90 يومًا + لوحة إدارة معزولة + تعيين تلقائي.
+    from services import plan_policy as _pp
+    _plan = str(result.get("plan") or "basic")
+    lim = _pp.limits(_plan)
+    plan_badge = "👑 Pro" if _plan == "pro" else "🆓 Basic"
+    q_line = "أعلى جودة متاحة" if not lim["max_video_height"] else f"{lim['max_video_height']}p كحد أقصى"
+    a_line = "320kbps كامل" if not lim["audio_cap_kbps"] else f"{lim['audio_cap_kbps']}kbps كحد أقصى"
+    panel_line = (
+        "• لوحة إدارة خاصة: ✅ <b>تم تعيينك مديرًا لنسختك تلقائيًا</b> — «🛠️ لوحة التحكم» داخل بوتك\n"
+        if _plan == "pro" else
+        "• لوحة إدارة خاصة: ❌ غير متوفرة (تتوفر مع خطة 👑 Pro)\n"
+    )
+    feats = (
+        f"📋 <b>مميزات خطة {plan_badge} — مطبقة تلقائيًا بالكامل داخل نسختك:</b>\n"
+        f"• تحميلات يومية لكل مستخدم: <b>{lim['daily_downloads']}</b>\n"
+        f"• روابط في الدفعة الواحدة: <b>{lim['batch_urls']}</b>\n"
+        f"• جودة الفيديو: <b>{q_line}</b>\n"
+        f"• نقاء الصوت MP3: <b>{a_line}</b>\n"
+        f"• سجل التحميلات: <b>{lim['history_days']} يومًا</b>\n"
+        f"{panel_line}\n"
+    )
     if cr:
-        plan_badge = "👑 Pro" if result.get("plan") == "pro" else "🆓 Basic"
         exp = str(result.get("expires_at") or "")[:16]
         if cr.get("kind") == "trial":
             plan_line = (
@@ -1275,11 +1298,14 @@ async def try_handle_token_message(update: Update, context: ContextTypes.DEFAULT
                 + (f" وتنتهي في <b>{exp}</b>.\n" if exp else ".\n")
             )
             closing = "✅ تم احتساب استخدام واحد من الكود بعد نجاح إنشاء نسختك وتفعيلها كاملًا. 🚀"
+    else:
+        plan_line = f"📦 خطتك: <b>{plan_badge}</b>\n"
     await msg.reply_text(
         f"🎉 <b>مبروك! نسختك الخاصة اتفعلت.</b>\n\n"
         f"{status_line}\n"
         f"🤖 بوتك: <a href=\"https://t.me/{bot_username}\">@{bot_username}</a>\n\n"
         f"{plan_line}"
+        f"{feats}"
         f"✅ تم التحقق من ملكية البوت وصحة التوكن.\n"
         f"🔐 التوكن مخزن مشفرًا ومحذوف من المحادثة.\n"
         f"👥 نسختك فيها زر «العودة إلى البوت الأساسي»، وكل مستخدم جديد بيبدأ منها يتسجل في شبكة الإحالات.\n\n"
