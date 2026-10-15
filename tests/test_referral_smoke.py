@@ -166,7 +166,7 @@ def main():
     inst = pg.fetchone("SELECT * FROM bot_instances WHERE id = ?", (res["instance_id"],))
     check("instance active", inst["status"] == "active" and inst["bot_id"] == 5550001)
     bset = pg.fetchall(
-        "SELECT key, value FROM bot_settings WHERE instance_id = ?", (res["instance_id"],)
+        "SELECT key, value FROM clone_settings WHERE instance_id = ?", (res["instance_id"],)
     )
     check("clone settings written", {r["key"] for r in bset} >= {"clone_mode", "owner_id", "back_to_main"})
     reward = pg.fetchone("SELECT status FROM referral_rewards WHERE user_id = ?", (1001,))

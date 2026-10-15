@@ -737,7 +737,7 @@ def verify_and_link_token(owner_id: int, token_text: str) -> dict:
         ("back_to_main", MAIN_BOT_USERNAME or ""),
     ):
         pg.execute(
-            "INSERT INTO bot_settings (instance_id, key, value) VALUES (?, ?, ?) "
+            "INSERT INTO clone_settings (instance_id, key, value) VALUES (?, ?, ?) "
             "ON CONFLICT (instance_id, key) DO UPDATE SET value = EXCLUDED.value",
             (instance_id, key, value),
         )

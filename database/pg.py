@@ -226,7 +226,12 @@ def init_referral_schema() -> None:
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             last_used_at TIMESTAMP
         )""",
-        f"""CREATE TABLE IF NOT EXISTS bot_settings (
+        # Per-instance clone configuration. NOTE: deliberately named
+        # ``clone_settings`` (NOT ``bot_settings``): the main SQLite database
+        # has its OWN global key/value ``bot_settings`` table (database/db.py),
+        # and on the SQLite fallback both schemas share ONE file — same name
+        # meant whichever DDL ran first broke the other's ON CONFLICT clauses.
+        f"""CREATE TABLE IF NOT EXISTS clone_settings (
             instance_id {bi} NOT NULL,
             key TEXT NOT NULL,
             value TEXT DEFAULT '',
@@ -256,7 +261,52 @@ def init_referral_schema() -> None:
                 logger.debug("Index skipped: %s", stmt[:60])
     ensure_reward_milestone_column()
     ensure_instance_plan_columns()
+    ensure_clone_settings_migration()
     logger.info("Referral schema ready on backend=%s", BACKEND)
+
+
+def ensure_clone_settings_migration() -> None:
+    """Migrate legacy per-instance settings out of the colliding ``bot_settings``.
+
+    Databases created before the rename may hold a ``bot_settings`` table in
+    the REFERRAL shape (instance_id, key, value). On the SQLite fallback that
+    table hijacks the main database's global key/value ``bot_settings`` and
+    breaks ``ON CONFLICT(key)`` upserts (and vice versa). This copies any
+    legacy rows into ``clone_settings`` and drops the mis-shaped table so the
+    main schema can recreate its own. Idempotent on both backends.
+    """
+    try:
+        if BACKEND == "postgres":
+            row = fetchone("SELECT to_regclass('public.bot_settings') AS t")
+            if row and row.get("t"):
+                cols = fetchall(
+                    "SELECT column_name FROM information_schema.columns "
+                    "WHERE table_name = 'bot_settings'"
+                )
+                names = {c["column_name"] for c in cols}
+                if "instance_id" in names:
+                    execute(
+                        "INSERT INTO clone_settings (instance_id, key, value) "
+                        "SELECT instance_id, key, value FROM bot_settings "
+                        "ON CONFLICT (instance_id, key) DO NOTHING"
+                    )
+                    execute("DROP TABLE bot_settings")
+                    logger.info("Migrated legacy referral bot_settings -> clone_settings (postgres)")
+            return
+        with ref_cursor(commit=False) as c:
+            bs_cols = {
+                row.get("name")
+                for row in c.execute("PRAGMA table_info(bot_settings)").fetchall()
+            }
+        if "instance_id" in bs_cols:
+            execute(
+                "INSERT OR IGNORE INTO clone_settings (instance_id, key, value) "
+                "SELECT instance_id, key, value FROM bot_settings"
+            )
+            execute("DROP TABLE bot_settings")
+            logger.info("Migrated legacy referral bot_settings -> clone_settings (sqlite)")
+    except Exception:
+        logger.exception("clone_settings migration failed")
 
 
 def ensure_instance_plan_columns() -> None:
