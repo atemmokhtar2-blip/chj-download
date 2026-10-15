@@ -723,19 +723,99 @@ async def referral_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     if data == "ref:cancel_token":
         cr = context.user_data.pop("code_redeem", None)
         if cr:
-            # A cancelled code activation must NEVER consume a use.
+            # A cancelled activation must NEVER consume a code use or a trial.
             try:
-                redemption.release_reservation(uid, int(cr["code_id"]), "user_cancelled")
+                if cr.get("kind") == "trial":
+                    redemption.release_trial(uid, "user_cancelled")
+                else:
+                    redemption.release_reservation(uid, int(cr["code_id"]), "user_cancelled")
             except Exception:
                 logger.exception("code reservation release failed")
         context.user_data.pop("awaiting_token", None)
         context.user_data.pop("token_attempts", None)
+        kept = ""
+        if cr:
+            kept = (" تجربتك محفوظة ولم تُستهلك — تقدر تبدأها في أي وقت."
+                    if cr.get("kind") == "trial" else
+                    " الكود محفوظ ولم يُستهلك — تقدر ترجع تبدأ التفعيل في أي وقت.")
         await q.edit_message_text(
-            "❌ تم إلغاء ربط التوكن."
-            + (" الكود محفوظ ولم يُستهلك — تقدر ترجع تبدأ التفعيل في أي وقت." if cr
-               else " مكافأتك محفوظة — تقدر ترجع تبدأ الربط في أي وقت."),
+            "❌ تم إلغاء ربط التوكن." + kept,
             parse_mode="HTML",
             reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 رجوع", callback_data="ref:home")]]),
+        )
+        return
+
+    if data == "ref:private":
+        await _render_private_hub(update, context, q)
+        return
+
+    if data == "ref:trial":
+        if q.message.chat.type != "private":
+            await q.answer("⚠️ التجربة المجانية تتم في المحادثة الخاصة فقط.", show_alert=True)
+            return
+        ok, reason = redemption.trial_eligible(uid)
+        if not ok:
+            text = ("⚠️ <b>لقد استخدمت تجربتك المجانية من قبل.</b>\n"
+                    "التجربة مرة واحدة فقط لكل حساب — للحصول على نسخة دائمة "
+                    "استخدم 🔑 كود تفعيل أو 🏆 مكافأة الإحالات."
+                    if reason == "trial_used" else
+                    "🤖 <b>لديك نسخة في النظام بالفعل.</b>\n"
+                    "التجربة مخصصة لمن لم يملك نسخة من قبل.")
+            await q.edit_message_text(
+                text, parse_mode="HTML",
+                reply_markup=InlineKeyboardMarkup([_back_home_row()]),
+            )
+            return
+        await q.edit_message_text(
+            _TRIAL_TERMS_TEXT,
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("🆓 تجربة Basic (24 ساعة)", callback_data="ref:trial:basic"),
+                 InlineKeyboardButton("👑 تجربة Pro (24 ساعة)", callback_data="ref:trial:pro")],
+                [InlineKeyboardButton("🔙 رجوع", callback_data="ref:private")],
+            ]),
+        )
+        return
+
+    if data in ("ref:trial:basic", "ref:trial:pro"):
+        if q.message.chat.type != "private":
+            await q.answer("⚠️ التجربة المجانية تتم في المحادثة الخاصة فقط.", show_alert=True)
+            return
+        plan = "pro" if data.endswith("pro") else "basic"
+        res = redemption.start_trial(uid, plan)
+        if not res.get("ok"):
+            reason = res.get("reason", "")
+            text = ("⚠️ <b>لقد استخدمت تجربتك المجانية من قبل.</b>"
+                    if reason == "trial_used" else
+                    "🤖 <b>لديك نسخة في النظام بالفعل.</b>")
+            await q.edit_message_text(
+                text, parse_mode="HTML",
+                reply_markup=InlineKeyboardMarkup([_back_home_row()]),
+            )
+            return
+        plan_badge = "👑 Pro" if plan == "pro" else "🆓 Basic"
+        # The trial rides the SAME secure token flow as codes/rewards.
+        context.user_data["code_redeem"] = {
+            "kind": "trial",
+            "instance_id": res["instance_id"],
+            "plan": plan,
+            "runtime_days": 1,  # 24 hours
+        }
+        context.user_data["awaiting_token"] = True
+        context.user_data["token_attempts"] = 0
+        await q.edit_message_text(
+            "✅ <b>تم فتح تجربتك المجانية!</b>\n\n"
+            f"📦 نسختك: <b>{plan_badge}</b> — <b>24 ساعة</b> من لحظة ربط التوكن.\n\n"
+            "🔑 <b>الخطوة الأخيرة: ربط توكن بوتك الجديد.</b>\n"
+            "1️⃣ افتح @BotFather وأنشئ بوتًا بـ <code>/newbot</code>\n"
+            "2️⃣ أرسل التوكن هنا مباشرة — رسالتك هتتمسح فورًا والتوكن بيتخزن مشفرًا.\n\n"
+            "⏳ مدة التجربة (24 ساعة) تبدأ <b>بعد نجاح ربط التوكن</b> — "
+            "ولو ألغيت الآن تجربتك تفضل محفوظة.",
+            parse_mode="HTML",
+            disable_web_page_preview=True,
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("❌ إلغاء التجربة", callback_data="ref:cancel_token")],
+            ]),
         )
         return
 
@@ -850,15 +930,98 @@ async def referral_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 
 
 _CODE_REASON_AR = {
-    "shape": "🔤 ده مش شكل كود تفعيل صحيح.\nالكود شكله: <code>CHJ-XXXX-XXXX</code> — انسخه كاملًا كما أرسله لك المالك.",
+    "shape": "🔤 ده مش شكل كود تفعيل صحيح.\nالكود شكله: <code>BASIC-7K9M-X4PQ</code> أو <code>PRO-7K9M-X4PQ</code> — انسخه كاملًا كما أرسله لك المالك.",
     "not_found": "❌ الكود غير صحيح أو غير موجود.\nتأكد من نسخه كاملًا بدون مسافات زائدة، ولو المشكلة مستمرة تواصل مع المالك.",
     "revoked": "⛔ هذا الكود <b>ملغى</b> بقرار المالك ولا يمكن استخدامه.",
     "expired": "⌛ <b>انتهت صلاحية هذا الكود</b> ولم يعد قابلًا للتفعيل.",
     "exhausted": "🈳 <b>تم استنفاد عدد استخدامات هذا الكود.</b>",
     "limit_reached": "🈳 عذرًا، تم استخدام آخر إتاحة من هذا الكود أثناء محاولتك.\nتواصل مع المالك للحصول على كود جديد.",
     "already_used": "⚠️ <b>لقد استخدمت هذا الكود من قبل.</b> كل كود يُستخدم مرة واحدة فقط لكل مستخدم.",
+    "not_for_you": "👤 هذا الكود <b>مخصص لمستخدم آخر</b> ولا يمكن لحسابك استخدامه.",
     "has_active_instance": "🤖 لديك نسخة نشطة بالفعل — الكود مخصص لمن لا يملك نسخة عاملة.",
 }
+
+
+async def _render_private_hub(update: Update, context: ContextTypes.DEFAULT_TYPE, q) -> None:
+    """🤖 النسخ الخاصة — choose HOW to get a private clone:
+
+      * 🎁 تجربة مجانية — 24h basic/pro trial (once per user, ever)
+      * 🔑 استقبال كود تفعيل — owner-issued redemption code
+      * 🏆 مكافأة الإحالات — the qualified-referrals reward
+      * 📊 نسختي الخاصة — plan / status / expiry / renewal card
+    """
+    uid = q.from_user.id
+    stats = referral.get_stats(uid)
+    inst = stats.get("instance") or {}
+    stage = referral.referrer_stage(stats)
+
+    # Active clone → the "نسختي الخاصة" card directly.
+    if stage == "active" and inst.get("bot_username"):
+        plan_badge = "👑 Pro" if inst.get("plan") == "pro" else "🆓 Basic"
+        exp = str(inst.get("expires_at") or "")[:16]
+        days_left = inst.get("days_left")
+        text = (
+            "🤖 <b>نسختي الخاصة</b>\n\n"
+            f"📦 نوع النسخة: <b>{plan_badge}</b>\n"
+            "🟢 الحالة: <b>نشطة</b>\n"
+            + (f"⌛ تنتهي خلال <b>{days_left}</b> يومًا ({exp})\n" if days_left is not None
+               else (f"⌛ تنتهي في {exp}\n" if exp else ""))
+            + f"🔗 البوت: <a href=\"https://t.me/{inst['bot_username']}\">@{inst['bot_username']}</a>\n\n"
+            "التجديد يتم بقرار المالك — لو نسختك اقتربت من الانتهاء افتح تذكرة دعم."
+        )
+        rows = [
+            [InlineKeyboardButton("🤖 افتح نسختك", url=f"https://t.me/{inst['bot_username']}")],
+            [InlineKeyboardButton("🔄 تحديث حالة نسختي", callback_data="ref:refresh_status"),
+             InlineKeyboardButton("✅ تحقق من التفعيل", callback_data="ref:verify_activation")],
+            [InlineKeyboardButton("🛟 الدعم الفني", callback_data="ref:support")],
+            _back_home_row(),
+        ]
+        await _edit_ref(q, text, InlineKeyboardMarkup(rows))
+        return
+
+    trial = redemption.trial_status(uid)
+    trial_ok, trial_reason = redemption.trial_eligible(uid)
+    text = (
+        "🤖 <b>النسخ الخاصة</b>\n\n"
+        "اختر الطريقة المناسبة للحصول على نسختك الخاصة:\n\n"
+        "🎁 <b>تجربة مجانية</b> — جرّب النسخة الأساسية أو البرو لمدة <b>24 ساعة</b>"
+        " (مرة واحدة لكل مستخدم).\n"
+        "🔑 <b>استقبال كود تفعيل</b> — أدخل الكود الذي حصلت عليه من المالك.\n"
+        "🏆 <b>مكافأة الإحالات</b> — اجمع المستخدمين المؤهلين وافتح نسختك مجانًا.\n\n"
+        + (f"📊 تجربتك: <b>مستخدمة</b> ({str(trial.get('created_at') or '')[:10]})\n"
+           if trial.get("used") else
+           ("🎁 التجربة المجانية: <b>متاحة لك</b>\n" if trial_ok
+            else "🎁 التجربة المجانية: غير متاحة (لديك نسخة في النظام)\n"))
+    )
+    rows = []
+    if trial_ok:
+        rows.append([InlineKeyboardButton("🎁 تجربة مجانية (24 ساعة)", callback_data="ref:trial")])
+    rows.append([InlineKeyboardButton("🔑 استقبال كود تفعيل", callback_data="ref:code")])
+    if stage in ("eligible", "awaiting_token"):
+        label = "🚀 فعّل نسختك الآن" if stage == "eligible" else "🔑 ربط توكن البوت"
+        rows.append([InlineKeyboardButton(f"🏆 مكافأة الإحالات — {label}", callback_data="ref:claim")])
+    elif stage == "expired":
+        rows.append([InlineKeyboardButton("⌛ طلب تجديد مدة نسختي", callback_data="ref:support:open:clone")])
+    else:
+        remaining = max(0, int(stats.get("target", 0)) - int(stats.get("qualified", 0)))
+        rows.append([InlineKeyboardButton(
+            f"🏆 مكافأة الإحالات ({remaining} متبقي)", callback_data="ref:claim")])
+    if inst:
+        rows.append([InlineKeyboardButton("📊 حالة نسختي", callback_data="ref:refresh_status")])
+    rows.append(_back_home_row())
+    await _edit_ref(q, text, InlineKeyboardMarkup(rows))
+
+
+_TRIAL_TERMS_TEXT = (
+    "🎁 <b>التجربة المجانية — 24 ساعة</b>\n\n"
+    "جرّب نسخة خاصة كاملة القوة لمدة <b>24 ساعة</b> قبل أن تقرر.\n\n"
+    "📌 <b>شروط التجربة:</b>\n"
+    "• التجربة <b>مرة واحدة فقط</b> لكل حساب تيليجرام — نهائيًا.\n"
+    "• تحتاج بوتًا جديدًا من @BotFather وربط توكنه هنا (مشفَّر ومحذوف من المحادثة).\n"
+    "• بعد 24 ساعة تتوقف النسخة تلقائيًا بدون أي إجراء منك.\n"
+    "• بعدها يمكنك الحصول على نسخة دائمة عبر 🔑 كود تفعيل أو 🏆 مكافأة الإحالات.\n\n"
+    "اختر نوع النسخة التي تريد تجربتها:"
+)
 
 
 async def try_handle_code_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
@@ -994,11 +1157,16 @@ async def try_handle_token_message(update: Update, context: ContextTypes.DEFAULT
             context.user_data.pop("token_attempts", None)
             failed_cr = context.user_data.pop("code_redeem", None)
             if failed_cr:
-                # A FAILED activation must never consume the code's use.
+                # A FAILED activation must never consume the code's use —
+                # and never burns the user's one-ever trial either.
                 try:
-                    redemption.release_reservation(uid, int(failed_cr["code_id"]), "token_attempts_exhausted")
+                    if failed_cr.get("kind") == "trial":
+                        redemption.release_trial(uid, "token_attempts_exhausted")
+                    else:
+                        redemption.release_reservation(uid, int(failed_cr["code_id"]),
+                                                       "token_attempts_exhausted")
                 except Exception:
-                    logger.exception("code reservation release failed")
+                    logger.exception("code/trial release failed")
             text += "\n\n⛔ تم إيقاف المحاولات بعد 5 مرات — تقدر تبدأ الربط مجددًا من صفحة 🎁."
         await msg.reply_text(text, parse_mode="HTML")
         return True
@@ -1009,11 +1177,19 @@ async def try_handle_token_message(update: Update, context: ContextTypes.DEFAULT
     context.user_data.pop("awaiting_token", None)
     context.user_data.pop("token_attempts", None)
     if cr:
-        # NOW — and only now — the code's use is confirmed as consumed.
-        try:
-            redemption.confirm_use(uid, int(cr["code_id"]), int(result["instance_id"]), bot_username)
-        except Exception:
-            logger.exception("code confirm_use failed")
+        if cr.get("kind") == "trial":
+            # The registry row already marks the trial consumed forever;
+            # record the activation moment. The 24h window starts NOW.
+            try:
+                redemption.confirm_trial(uid, int(result["instance_id"]), bot_username)
+            except Exception:
+                logger.exception("trial confirm failed")
+        else:
+            # NOW — and only now — the code's use is confirmed as consumed.
+            try:
+                redemption.confirm_use(uid, int(cr["code_id"]), int(result["instance_id"]), bot_username)
+            except Exception:
+                logger.exception("code confirm_use failed")
 
     from database import pg
     inst = pg.fetchone("SELECT * FROM bot_instances WHERE id = ?", (result["instance_id"],))
@@ -1032,12 +1208,20 @@ async def try_handle_token_message(update: Update, context: ContextTypes.DEFAULT
     closing = f"شكرًا إنك كبرت المجتمع — {referral.get_stats(uid)['qualified']} مستخدمًا مؤهلًا بفضلك! 💪"
     if cr:
         plan_badge = "👑 Pro" if result.get("plan") == "pro" else "🆓 Basic"
-        exp = str(result.get("expires_at") or "")[:10]
-        plan_line = (
-            f"📦 خطتك: <b>{plan_badge}</b> — مدة التشغيل تبدأ الآن"
-            + (f" وتنتهي في <b>{exp}</b>.\n" if exp else ".\n")
-        )
-        closing = "✅ تم احتساب استخدام واحد من الكود بعد نجاح إنشاء نسختك وتفعيلها كاملًا. 🚀"
+        exp = str(result.get("expires_at") or "")[:16]
+        if cr.get("kind") == "trial":
+            plan_line = (
+                f"📦 تجربتك: <b>{plan_badge}</b> — مدة <b>24 ساعة</b> بدأت الآن"
+                + (f" وتنتهي في <b>{exp}</b>.\n" if exp else ".\n")
+            )
+            closing = ("⏳ بعد 24 ساعة ستتوقف النسخة تلقائيًا.\n"
+                       "حابب نسخة دائمة؟ 🔑 فعّل كود من المالك أو 🏆 أكمل هدف الإحالات.")
+        else:
+            plan_line = (
+                f"📦 خطتك: <b>{plan_badge}</b> — مدة التشغيل تبدأ الآن"
+                + (f" وتنتهي في <b>{exp}</b>.\n" if exp else ".\n")
+            )
+            closing = "✅ تم احتساب استخدام واحد من الكود بعد نجاح إنشاء نسختك وتفعيلها كاملًا. 🚀"
     await msg.reply_text(
         f"🎉 <b>مبروك! نسختك الخاصة اتفعلت.</b>\n\n"
         f"{status_line}\n"

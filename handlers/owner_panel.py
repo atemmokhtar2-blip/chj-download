@@ -510,6 +510,285 @@ async def _refs_top(query):
                 parse_mode="HTML", reply_markup=_kb(rows))
 
 
+# ---- redemption codes section -------------------------------------------------------------
+# Owner-only code center: generate / list (status tabs) / usage log / revoke.
+# Full code text is shown EXACTLY once at creation; everywhere else it is
+# masked. Every action is written to the security audit trail.
+
+_CODE_STATUS_AR = {
+    "active": "🟢 نشط",
+    "exhausted": "🈳 مستهلك",
+    "revoked": "⛔ ملغى",
+    "expired": "⌛ منتهي",
+}
+
+_CODE_AUDIT_ACTION_AR = {
+    "created": "➕ إنشاء",
+    "reserved": "🔒 حجز استخدام",
+    "used": "✅ استخدام ناجح",
+    "released": "↩️ إفراج (تفعيل فشل/أُلغي)",
+    "revoked": "⛔ إلغاء",
+    "exhausted": "🈳 استنفاد",
+}
+
+# Wizard presets (the owner can always pick «مخصص» and type any value).
+_CODE_WIZ_DAYS = [(1, "1 يوم"), (7, "7 أيام"), (30, "30 يومًا"), (40, "40 يومًا")]
+_CODE_WIZ_USES = [(1, "مرة واحدة"), (2, "مرتان"), (5, "5 مرات")]
+_CODE_WIZ_VALID = [(7, "7 أيام"), (14, "14 يومًا"), (30, "30 يومًا")]
+
+
+def _code_effective_status(c: dict) -> str:
+    """Stored status, except an 'active' code past expires_at shows منتهي."""
+    st = c.get("status") or "active"
+    if st == "active":
+        exp = c.get("expires_at")
+        if exp and datetime.utcnow() > exp:
+            return "expired"
+    return st
+
+
+def _codes_screen(status: str = "all") -> tuple[str, InlineKeyboardMarkup]:
+    from services import redemption
+    counts = redemption.code_status_counts()
+    codes = redemption.list_codes(10, None if status == "all" else status)
+    lines = []
+    for c in codes:
+        eff = _code_effective_status(c)
+        badge = "👑" if c.get("plan") == "pro" else "🆓"
+        target = f" • 👤 <code>{c['targeted_user_id']}</code>" if c.get("targeted_user_id") else ""
+        lines.append(
+            f"• <code>{redemption.mask_code(c['code'])}</code> {badge}"
+            f" — {_CODE_STATUS_AR.get(eff, eff)}"
+            f" • <b>{int(c.get('uses_consumed') or 0)}/{int(c.get('max_uses') or 1)}</b>"
+            f"{target}"
+        )
+    body = "\n".join(lines) or "• لا توجد أكواد في هذا القسم."
+    text = (
+        "🎟️ <b>مركز أكواد التفعيل</b>\n\n"
+        f"🟢 نشطة: <b>{counts['active']}</b> • 🈳 مستهلكة: <b>{counts['exhausted']}</b>"
+        f" • ⌛ منتهية: <b>{counts['expired']}</b> • ⛔ ملغية: <b>{counts['revoked']}</b>\n\n"
+        f"{body}\n\n"
+        "🔒 الإنشاء والإلغاء وتعديل الإعدادات متاح لك وحدك، وكل عملية تُسجل في سجل التدقيق."
+    )
+    rows = [
+        [inline_button("➕ توليد رمز جديد", callback_data="own_codes_new")],
+        [inline_button(f"🗂 الكل ({counts['all']})", callback_data="own_codes_tab_all"),
+         inline_button(f"🟢 نشطة ({counts['active']})", callback_data="own_codes_tab_active")],
+        [inline_button(f"🈳 مستهلكة ({counts['exhausted']})", callback_data="own_codes_tab_exhausted"),
+         inline_button(f"⌛ منتهية ({counts['expired']})", callback_data="own_codes_tab_expired"),
+         inline_button(f"⛔ ملغية ({counts['revoked']})", callback_data="own_codes_tab_revoked")],
+    ]
+    for c in codes[:8]:
+        rows.append([inline_button(
+            f"🎫 {redemption.mask_code(c['code'])}", callback_data=f"own_codes_detail_{c['id']}")])
+    rows += _back()
+    return text, _kb(rows)
+
+
+async def _code_detail(query, code_id: int):
+    from services import redemption
+    c = redemption.get_code(code_id)
+    if not c:
+        await _edit(query, "❌ الكود غير موجود.", parse_mode="HTML",
+                    reply_markup=_kb(_back("own_codes", "🔙 الأكواد")))
+        return
+    eff = _code_effective_status(c)
+    badge = "👑 Pro" if c.get("plan") == "pro" else "🆓 Basic"
+    target_line = (f"• مخصص للمستخدم: <code>{c['targeted_user_id']}</code>\n"
+                   if c.get("targeted_user_id") else "• متاح لأي مستخدم\n")
+    uses = redemption.code_uses(code_id, 10)
+    if uses:
+        use_lines = []
+        for u in uses:
+            bot = f" — @{escape(u.get('bot_username') or '—')}" if u.get("bot_username") else ""
+            use_lines.append(
+                f"• 👤 <code>{u['user_id']}</code>{bot} • 🕑 {str(u.get('created_at') or '—')[:16]}"
+            )
+        uses_body = "\n".join(use_lines)
+    else:
+        uses_body = "• لم يستخدمه أحد بعد."
+    text = (
+        f"🎫 <b>تفاصيل الكود #{code_id}</b>\n\n"
+        f"• الكود: <code>{redemption.mask_code(c['code'])}</code>\n"
+        f"• الحالة: {_CODE_STATUS_AR.get(eff, eff)}\n"
+        f"• نوع النسخة: {badge}\n"
+        f"• مدة التشغيل: <b>{int(c.get('runtime_days') or 0)} يومًا</b>\n"
+        f"• الاستخدامات: <b>{int(c.get('uses_consumed') or 0)} / {int(c.get('max_uses') or 1)}</b>\n"
+        f"• صالح للإدخال حتى: <code>{str(c.get('expires_at') or '—')[:16]}</code>\n"
+        f"{target_line}"
+        + (f"• ملاحظة: {escape(str(c.get('note') or ''))}\n" if c.get("note") else "")
+        + f"\n📋 <b>سجل الاستخدام</b>\n{uses_body}"
+    )
+    rows = []
+    for u in uses[:5]:
+        if u.get("user_id"):
+            rows.append([inline_button(f"👤 {u['user_id']}", callback_data=f"own_user_{u['user_id']}")])
+    if eff in ("active", "expired"):
+        rows.append([inline_button("⛔ إلغاء الكود", callback_data=f"own_codes_revoke_{code_id}")])
+    rows.append([inline_button("🧾 سجل التدقيق الكامل", callback_data=f"own_codes_audit_{code_id}")])
+    rows += _back("own_codes", "🔙 الأكواد")
+    await _edit(query, text, parse_mode="HTML", reply_markup=_kb(rows))
+
+
+async def _code_audit(query, code_id: int):
+    from services import redemption
+    events = redemption.code_audit_trail(code_id, 20)
+    lines = [
+        f"• {_CODE_AUDIT_ACTION_AR.get(r.get('action'), r.get('action'))}"
+        f" — 👤 <code>{r.get('user_id') or '—'}</code>"
+        + (f" • 🤖 #{r['instance_id']}" if r.get("instance_id") else "")
+        + f" • 🕑 {str(r.get('created_at') or '')[:16]}"
+        for r in events
+    ] or ["• لا توجد أحداث مسجلة."]
+    await _edit(query,
+        f"🧾 <b>سجل تدقيق الكود #{code_id}</b>\n\n" + "\n".join(lines)
+        + "\n\n🔐 لا يحتوي السجل على نصوص الأكواد أو التوكنات أبدًا.",
+        parse_mode="HTML",
+        reply_markup=_kb([
+            [inline_button("🎫 تفاصيل الكود", callback_data=f"own_codes_detail_{code_id}")],
+            *_back("own_codes", "🔙 الأكواد"),
+        ]))
+
+
+async def _code_revoke_confirm(query, code_id: int):
+    from services import redemption
+    c = redemption.get_code(code_id)
+    if not c:
+        await _edit(query, "❌ الكود غير موجود.", parse_mode="HTML",
+                    reply_markup=_kb(_back("own_codes", "🔙 الأكواد")))
+        return
+    await _edit(query,
+        "⚠️ <b>تأكيد إلغاء الكود — قبل التنفيذ</b>\n\n"
+        f"• الكود: <code>{redemption.mask_code(c['code'])}</code>\n"
+        f"• الاستهلاك الحالي: <b>{int(c.get('uses_consumed') or 0)}/{int(c.get('max_uses') or 1)}</b>\n\n"
+        "بعد التنفيذ: لا يستطيع أي مستخدم استخدام هذا الكود فورًا، "
+        "وتُسجل العملية في سجل التدقيق.",
+        parse_mode="HTML",
+        reply_markup=_kb([
+            [inline_button("✅ تأكيد الإلغاء", callback_data=f"own_codes_revdo_{code_id}"),
+             inline_button("↩️ تراجع", callback_data=f"own_codes_detail_{code_id}")],
+        ]))
+
+
+async def _code_revoke_do(query, code_id: int):
+    from services import redemption
+    c = redemption.get_code(code_id) or {}
+    ok, reason = redemption.revoke_code(code_id, by_owner=query.from_user.id)
+    if ok:
+        log_admin_action(query.from_user.id, "owner_code_revoke", code_id,
+                         detail=f"prefix={redemption.code_prefix(c.get('code') or '')}")
+        msg = ("⛔ <b>تم إلغاء الكود</b> — لا يمكن استخدامه من الآن فصاعدًا، "
+               "وسُجلت العملية في سجل التدقيق.")
+    else:
+        msg = f"ℹ️ تعذر الإلغاء: <code>{escape(str(reason))}</code>"
+    await _edit(query, msg, parse_mode="HTML",
+                reply_markup=_kb([
+                    [inline_button("🎫 تفاصيل الكود", callback_data=f"own_codes_detail_{code_id}")],
+                    *_back("own_codes", "🔙 الأكواد"),
+                ]))
+
+
+# ---- code creation wizard ------------------------------------------------------------------
+# Step chain: plan → runtime days → uses → code validity → user restriction
+# → note → confirmation. The draft lives in OWNER_PENDING[uid]["code_draft"].
+
+def _code_wiz_draft(uid: int) -> dict:
+    return (OWNER_PENDING.get(uid) or {}).get("code_draft") or {}
+
+
+def _code_wiz_summary(d: dict) -> str:
+    parts = []
+    if d.get("plan"):
+        parts.append("• نوع النسخة: " + ("👑 Pro" if d["plan"] == "pro" else "🆓 Basic"))
+    if d.get("days"):
+        parts.append(f"• مدة التفعيل: <b>{d['days']} يومًا</b>")
+    if d.get("uses"):
+        parts.append(f"• عدد مرات الاستخدام: <b>{d['uses']}</b> (نسخ يمكن تفعيلها)")
+    if d.get("valid"):
+        parts.append(f"• صلاحية الكود قبل الاستخدام: <b>{d['valid']} يومًا</b>")
+    if d.get("target") == "open":
+        parts.append("• متاح لأي مستخدم")
+    elif d.get("targeted_user_id"):
+        parts.append(f"• مخصص للمستخدم: <code>{d['targeted_user_id']}</code>")
+    if d.get("note"):
+        parts.append(f"• ملاحظة: {escape(str(d['note']))}")
+    return ("\n".join(parts) + "\n\n") if parts else ""
+
+
+def _code_wiz_plan_screen() -> tuple[str, InlineKeyboardMarkup]:
+    text = (
+        "➕ <b>توليد رمز جديد — خطوة 1: نوع النسخة</b>\n\n"
+        "🆓 <b>Basic</b> — نسخة أساسية (كود بادئته <code>BASIC-</code>)\n"
+        "👑 <b>Pro</b> — نسخة برو (كود بادئته <code>PRO-</code>)\n\n"
+        "اختر نوع النسخة التي يمنحها الكود:"
+    )
+    kb = _kb([
+        [inline_button("🆓 كود Basic", callback_data="own_codes_wiz_plan_basic"),
+         inline_button("👑 كود Pro", callback_data="own_codes_wiz_plan_pro")],
+        *_back("own_codes", "🔙 إلغاء"),
+    ])
+    return text, kb
+
+
+def _code_wiz_step(uid: int, step: str) -> tuple[str, InlineKeyboardMarkup]:
+    """(text, keyboard) for the next wizard step, with the draft summary."""
+    d = _code_wiz_draft(uid)
+    summary = _code_wiz_summary(d)
+    if step == "days":
+        rows = [[inline_button(label, callback_data=f"own_codes_wiz_days_{v}")]
+                for v, label in _CODE_WIZ_DAYS]
+        rows.append([inline_button("✏️ مدة مخصصة", callback_data="own_codes_wiz_days_custom")])
+        text = (f"➕ <b>توليد رمز جديد — خطوة 2: مدة التفعيل</b>\n\n{summary}"
+                "كم يومًا تعمل النسخة بعد تفعيل الكود؟")
+    elif step == "uses":
+        rows = [[inline_button(label, callback_data=f"own_codes_wiz_uses_{v}")]
+                for v, label in _CODE_WIZ_USES]
+        rows.append([inline_button("✏️ عدد مخصص", callback_data="own_codes_wiz_uses_custom")])
+        text = (f"➕ <b>توليد رمز جديد — خطوة 3: عدد مرات الاستخدام</b>\n\n{summary}"
+                "عدد <b>النسخ</b> التي يمكن تفعيلها بالكود (مستخدمون مختلفون) — "
+                "ولا يُستهلك الاستخدام إلا بعد نجاح إنشاء النسخة.")
+    elif step == "valid":
+        rows = [[inline_button(label, callback_data=f"own_codes_wiz_valid_{v}")]
+                for v, label in _CODE_WIZ_VALID]
+        rows.append([inline_button("✏️ صلاحية مخصصة", callback_data="own_codes_wiz_valid_custom")])
+        text = (f"➕ <b>توليد رمز جديد — خطوة 4: صلاحية الكود</b>\n\n{summary}"
+                "الكود ينتهي تلقائيًا بعد هذه المدة من إنشائه — حتى لو لم يستخدمه أحد.")
+    elif step == "target":
+        rows = [
+            [inline_button("🌐 مفتوح لأي مستخدم", callback_data="own_codes_wiz_target_open")],
+            [inline_button("👤 مخصص لمستخدم محدد", callback_data="own_codes_wiz_target_user")],
+        ]
+        text = (f"➕ <b>توليد رمز جديد — خطوة 5: تقييد المستخدم</b>\n\n{summary}"
+                "هل الكود مفتوح لأي مستخدم، أم مخصص لمستخدم محدد؟")
+    elif step == "note":
+        rows = [
+            [inline_button("📝 إضافة ملاحظة", callback_data="own_codes_wiz_note")],
+            [inline_button("⏭ تخطي", callback_data="own_codes_wiz_note_skip")],
+        ]
+        text = (f"➕ <b>توليد رمز جديد — خطوة 6: ملاحظة</b>\n\n{summary}"
+                "ملاحظة داخلية اختيارية تساعدك على تذكر سبب إصدار الكود.")
+    else:  # confirm
+        d = _code_wiz_draft(uid)
+        pending = OWNER_PENDING.setdefault(uid, {})
+        pending.update({
+            "code_plan": d.get("plan", "basic"),
+            "code_days": int(d.get("days") or 30),
+            "code_uses": int(d.get("uses") or 1),
+            "code_valid": int(d.get("valid") or 7),
+            "code_note": d.get("note", ""),
+            "code_target": d.get("targeted_user_id"),
+        })
+        rows = [
+            [inline_button("✅ تأكيد الإنشاء", callback_data="own_codes_do"),
+             inline_button("↩️ إلغاء", callback_data="own_codes")],
+        ]
+        text = ("⚠️ <b>تأكيد إنشاء الكود — قبل التنفيذ</b>\n\n" + _code_wiz_summary(d)
+                + "\nبعد التنفيذ: يولَّد كود عشوائي قوي ويُعرض <b>مرة واحدة فقط</b>، "
+                  "ويُسجل في سجل التدقيق.")
+    rows += _back("own_codes", "🔙 إلغاء")
+    return text, _kb(rows)
+
+
 # ---- instances section -------------------------------------------------------------------
 
 async def _inst_list(query):
@@ -1163,20 +1442,76 @@ async def owner_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         OWNER_STATES.pop(uid, None)
         text, kb = _codes_screen()
         await _edit(query, text, parse_mode="HTML", reply_markup=kb)
-    elif data in ("own_codes_new_basic", "own_codes_new_pro"):
+    elif data.startswith("own_codes_tab_"):
+        OWNER_STATES.pop(uid, None)
+        text, kb = _codes_screen(data.rsplit("_", 1)[-1])
+        await _edit(query, text, parse_mode="HTML", reply_markup=kb)
+    # ---- creation wizard: plan → days → uses → validity → restriction → note → confirm
+    elif data == "own_codes_new":
+        OWNER_STATES.pop(uid, None)
+        OWNER_PENDING.pop(uid, None)
+        text, kb = _code_wiz_plan_screen()
+        await _edit(query, text, parse_mode="HTML", reply_markup=kb)
+    elif data.startswith("own_codes_wiz_plan_"):
         plan = "pro" if data.endswith("pro") else "basic"
-        OWNER_STATES[uid] = f"code_create:{plan}"
-        badge = "👑 Pro" if plan == "pro" else "🆓 Basic"
+        OWNER_PENDING[uid] = {"code_draft": {"plan": plan}}
+        text, kb = _code_wiz_step(uid, "days")
+        await _edit(query, text, parse_mode="HTML", reply_markup=kb)
+    elif data.startswith("own_codes_wiz_days_"):
+        val = data.rsplit("_", 1)[-1]
+        if val == "custom":
+            OWNER_STATES[uid] = "code_wiz_days"
+            await _edit(query,
+                "✏️ <b>مدة مخصصة</b>\n\nأرسل عدد الأيام (1–365):",
+                parse_mode="HTML", reply_markup=_kb(_back("own_codes", "🔙 إلغاء")))
+        else:
+            d = _code_wiz_draft(uid)
+            d["days"] = int(val)
+            text, kb = _code_wiz_step(uid, "uses")
+            await _edit(query, text, parse_mode="HTML", reply_markup=kb)
+    elif data.startswith("own_codes_wiz_uses_"):
+        val = data.rsplit("_", 1)[-1]
+        if val == "custom":
+            OWNER_STATES[uid] = "code_wiz_uses"
+            await _edit(query,
+                "✏️ <b>عدد مخصص</b>\n\nأرسل عدد الاستخدامات (1–50):",
+                parse_mode="HTML", reply_markup=_kb(_back("own_codes", "🔙 إلغاء")))
+        else:
+            d = _code_wiz_draft(uid)
+            d["uses"] = int(val)
+            text, kb = _code_wiz_step(uid, "valid")
+            await _edit(query, text, parse_mode="HTML", reply_markup=kb)
+    elif data.startswith("own_codes_wiz_valid_"):
+        val = data.rsplit("_", 1)[-1]
+        if val == "custom":
+            OWNER_STATES[uid] = "code_wiz_valid"
+            await _edit(query,
+                "✏️ <b>صلاحية مخصصة</b>\n\nأرسل عدد الأيام التي يبقى الكود خلالها صالحًا للإدخال (1–365):",
+                parse_mode="HTML", reply_markup=_kb(_back("own_codes", "🔙 إلغاء")))
+        else:
+            d = _code_wiz_draft(uid)
+            d["valid"] = int(val)
+            text, kb = _code_wiz_step(uid, "target")
+            await _edit(query, text, parse_mode="HTML", reply_markup=kb)
+    elif data == "own_codes_wiz_target_open":
+        d = _code_wiz_draft(uid)
+        d["target"] = "open"
+        d["targeted_user_id"] = None
+        text, kb = _code_wiz_step(uid, "note")
+        await _edit(query, text, parse_mode="HTML", reply_markup=kb)
+    elif data == "own_codes_wiz_target_user":
+        OWNER_STATES[uid] = "code_wiz_target"
         await _edit(query,
-            f"➕ <b>إنشاء كود {badge}</b>\n\n"
-            "أرسل القيم في رسالة واحدة بالترتيب:\n"
-            "<code>مدة_التشغيل_بالأيام عدد_الاستخدامات صلاحية_الكود_بالأيام [ملاحظة]</code>\n\n"
-            "أمثلة:\n"
-            "• <code>30 1 7</code> — تشغيل 30 يومًا، استخدام واحد، الكود صالح 7 أيام\n"
-            "• <code>40 2 14 هدية المسابقة</code> — Pro تشغيل 40 يومًا لمستخدمين مختلفين\n\n"
-            "📌 عدد الاستخدامات = عدد <b>النسخ</b> التي يمكن تفعيلها (مستخدمون مختلفون)، "
-            "ولا يُستهلك الاستخدام إلا بعد نجاح إنشاء النسخة.",
+            "👤 <b>تقييد المستخدم</b>\n\nأرسل <b>معرّف المستخدم (ID) الرقمي</b> الذي سيُخصص له الكود:",
             parse_mode="HTML", reply_markup=_kb(_back("own_codes", "🔙 إلغاء")))
+    elif data == "own_codes_wiz_note":
+        OWNER_STATES[uid] = "code_wiz_note"
+        await _edit(query,
+            "📝 <b>ملاحظة الكود</b>\n\nأرسل نص الملاحظة (اختياري — تظهر لك وحدك في التفاصيل):",
+            parse_mode="HTML", reply_markup=_kb(_back("own_codes", "🔙 إلغاء")))
+    elif data == "own_codes_wiz_note_skip":
+        text, kb = _code_wiz_step(uid, "confirm")
+        await _edit(query, text, parse_mode="HTML", reply_markup=kb)
     elif data == "own_codes_do":
         pending = OWNER_PENDING.pop(uid, {})
         if not pending.get("code_plan"):
@@ -1187,6 +1522,7 @@ async def owner_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         res = redemption.create_code(
             pending["code_plan"], pending["code_days"], pending["code_uses"],
             pending["code_valid"], note=pending.get("code_note", ""), created_by=uid,
+            targeted_user_id=pending.get("code_target"),
         )
         if not res.get("ok"):
             await _edit(query, f"⚠️ تعذر إنشاء الكود: <code>{escape(str(res.get('reason')))}</code>",
@@ -1195,14 +1531,18 @@ async def owner_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         log_admin_action(uid, "owner_code_create", res["code_id"],
                          detail=f"plan={res['plan']} days={res['runtime_days']} "
                                 f"uses={res['max_uses']} valid={res['valid_days']} "
+                                f"targeted={res.get('targeted_user_id') or 'open'} "
                                 f"prefix={redemption.code_prefix(res['code'])}")
         badge = "👑 Pro" if res["plan"] == "pro" else "🆓 Basic"
+        target_line = (f"• مخصص للمستخدم: <code>{res['targeted_user_id']}</code>\n"
+                       if res.get("targeted_user_id") else "• متاح لأي مستخدم\n")
         await _edit(query,
             "✅ <b>تم إنشاء الكود</b>\n\n"
             f"🎟️ الكود: <code>{res['code']}</code>\n"
             f"• الخطة: {badge} • مدة التشغيل: <b>{res['runtime_days']} يومًا</b>\n"
             f"• عدد الاستخدامات: <b>{res['max_uses']}</b> (مستخدمون مختلفون)\n"
-            f"• صالح للإدخال حتى: <b>{str(res['expires_at'])[:10]}</b>\n\n"
+            f"• صالح للإدخال حتى: <b>{str(res['expires_at'])[:10]}</b>\n"
+            f"{target_line}\n"
             "⚠️ <b>هذا هو العرض الوحيد للكود كاملًا</b> — انسخه الآن وأرسله "
             "للمستفيد. بعدها يظهر مقنعًا في القائمة.\n"
             "• سُجل الإنشاء في سجل التدقيق.",
@@ -1219,6 +1559,10 @@ async def owner_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         code_id = _suffix_int(data)
         if code_id:
             await _code_revoke_confirm(query, code_id)
+    elif data.startswith("own_codes_audit_"):
+        code_id = _suffix_int(data)
+        if code_id:
+            await _code_audit(query, code_id)
     elif data.startswith("own_codes_detail_"):
         code_id = _suffix_int(data)
         if code_id:
@@ -1519,45 +1863,54 @@ async def owner_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
             parse_mode="HTML", reply_markup=_kb(rows))
         return True
 
-    if state.startswith("code_create:"):
-        plan = state.split(":", 1)[1]
-        parts = text.split(None, 3)
-        nums = parts[:3]
-        if len(nums) < 3 or not all(p.isdigit() for p in nums):
+    # ---- code creation wizard: custom-value text steps ------------------------
+    if state in ("code_wiz_days", "code_wiz_uses", "code_wiz_valid",
+                 "code_wiz_target", "code_wiz_note"):
+        d = _code_wiz_draft(uid)
+        if not d.get("plan"):
             await update.message.reply_text(
-                "⚠️ الصيغة غير صحيحة. أرسل ثلاثة أرقام بالترتيب:\n"
-                "<code>مدة_التشغيل عدد_الاستخدامات صلاحية_الكود [ملاحظة]</code>\n"
-                "مثال: <code>30 1 7</code>",
-                parse_mode="HTML",
+                "⚠️ انتهت صلاحية جلسة الإنشاء. أعد المحاولة من مركز الأكواد.",
                 reply_markup=_kb(_back("own_codes", "🔙 الأكواد")))
             return True
-        days, uses, valid = int(nums[0]), int(nums[1]), int(nums[2])
-        note = parts[3][:200] if len(parts) > 3 else ""
-        if not (1 <= days <= 365 and 1 <= uses <= 50 and 1 <= valid <= 365):
-            await update.message.reply_text(
-                "⚠️ القيم خارج النطاق المسموح:\n"
-                "• مدة التشغيل: 1–365 يومًا\n"
-                "• عدد الاستخدامات: 1–50\n"
-                "• صلاحية الكود: 1–365 يومًا",
-                parse_mode="HTML",
-                reply_markup=_kb(_back("own_codes", "🔙 الأكواد")))
+
+        if state == "code_wiz_note":
+            d["note"] = text[:200]
+            t2, kb2 = _code_wiz_step(uid, "confirm")
+            await update.message.reply_text(t2, parse_mode="HTML", reply_markup=kb2)
             return True
-        OWNER_PENDING[uid] = {"code_plan": plan, "code_days": days, "code_uses": uses,
-                              "code_valid": valid, "code_note": note}
-        badge = "👑 Pro" if plan == "pro" else "🆓 Basic"
-        await update.message.reply_text(
-            "⚠️ <b>تأكيد إنشاء الكود — قبل التنفيذ</b>\n\n"
-            f"• الخطة: {badge}\n"
-            f"• مدة تشغيل النسخة: <b>{days} يومًا</b>\n"
-            f"• عدد الاستخدامات: <b>{uses}</b> (مستخدمون مختلفون)\n"
-            f"• صلاحية الكود قبل الاستخدام: <b>{valid} يومًا</b>\n"
-            + (f"• ملاحظة: {escape(note)}\n" if note else "")
-            + "\nبعد التنفيذ: يولَّد كود فريد ويُعرض مرة واحدة فقط، ويُسجل في سجل التدقيق.",
-            parse_mode="HTML",
-            reply_markup=_kb([
-                [inline_button("✅ تأكيد الإنشاء", callback_data="own_codes_do"),
-                 inline_button("↩️ إلغاء", callback_data="own_codes")],
-            ]))
+
+        if state == "code_wiz_target":
+            if not text.lstrip("-").isdigit() or int(text) <= 0:
+                await update.message.reply_text(
+                    "⚠️ أرسل معرّف مستخدم رقميًا فقط (مثل <code>123456789</code>).",
+                    parse_mode="HTML", reply_markup=_kb(_back("own_codes", "🔙 إلغاء")))
+                return True
+            d["target"] = "user"
+            d["targeted_user_id"] = int(text)
+            t2, kb2 = _code_wiz_step(uid, "note")
+            await update.message.reply_text(t2, parse_mode="HTML", reply_markup=kb2)
+            return True
+
+        # numeric steps: days / uses / valid
+        if not text.isdigit():
+            await update.message.reply_text(
+                "⚠️ أرسل رقمًا صحيحًا فقط.",
+                reply_markup=_kb(_back("own_codes", "🔙 إلغاء")))
+            return True
+        val = int(text)
+        limits = {"code_wiz_days": ("days", 1, 365, "مدة التشغيل"),
+                  "code_wiz_uses": ("uses", 1, 50, "عدد الاستخدامات"),
+                  "code_wiz_valid": ("valid", 1, 365, "صلاحية الكود")}[state]
+        key, lo, hi, label = limits
+        if not lo <= val <= hi:
+            await update.message.reply_text(
+                f"⚠️ {label} يجب أن تكون بين {lo} و{hi}.",
+                reply_markup=_kb(_back("own_codes", "🔙 إلغاء")))
+            return True
+        d[key] = val
+        nxt = {"code_wiz_days": "uses", "code_wiz_uses": "valid", "code_wiz_valid": "target"}[state]
+        t2, kb2 = _code_wiz_step(uid, nxt)
+        await update.message.reply_text(t2, parse_mode="HTML", reply_markup=kb2)
         return True
 
     if state.startswith("sup_reply:"):

@@ -115,7 +115,8 @@ def _setup_module_checks() -> None:
     check("basic code created", res.get("ok") is True)
     code_basic = res["code"]
     cid_basic = res["code_id"]
-    check("code format CHJ-XXXX-XXXX", code_basic.startswith("CHJ-") and len(code_basic) == 13)
+    check("code format BASIC-XXXX-XXXX",
+          code_basic.startswith("BASIC-") and len(code_basic) == 15)
     row = redemption.get_code(cid_basic)
     check("expires_at = created + valid_days",
           row["expires_at"] is not None and
@@ -130,6 +131,8 @@ def _setup_module_checks() -> None:
     check("pro code created", pro.get("ok") is True)
     code_pro = pro["code"]
     cid_pro = pro["code_id"]
+    check("pro code format PRO-XXXX-XXXX",
+          code_pro.startswith("PRO-") and len(code_pro) == 13)
 
     print("== redeem guards ==")
     r = redemption.redeem_code(5001, "GARBAGE")
@@ -147,8 +150,8 @@ def _setup_module_checks() -> None:
     check("instance pending_token with plan", inst["status"] == "pending_token" and inst["plan"] == "basic")
 
     r = redemption.redeem_code(5001, code_basic)
-    check("second redeem while reserved -> has_active_instance/pending",
-          r.get("ok") is False)
+    check("second redeem while reserved -> resume (no 2nd slot) or blocked",
+          (r.get("ok") is True and r.get("resumed") is True) or r.get("ok") is False)
 
     print("== failed activation never consumes ==")
     released = redemption.release_reservation(5001, cid_basic, "token_attempts_exhausted")
@@ -263,6 +266,69 @@ def _setup_module_checks() -> None:
     check("mask hides the tail", norm_res["code"] not in redemption.mask_code(norm_res["code"]))
     check("code_prefix never exposes full code",
           len(redemption.code_prefix(norm_res["code"])) < len(norm_res["code"]))
+
+    print("== targeted codes (تقييد المستخدم) ==")
+    t_res = redemption.create_code("pro", 40, 1, 14, created_by=OWNER, targeted_user_id=9100)
+    check("targeted code created", t_res.get("ok") is True and t_res.get("targeted_user_id") == 9100)
+    cid_t = t_res["code_id"]
+    r = redemption.redeem_code(9200, t_res["code"])
+    check("non-target user rejected", r.get("ok") is False and r.get("reason") == "not_for_you")
+    row = redemption.get_code(cid_t)
+    check("rejected attempt consumed nothing", int(row["uses_consumed"]) == 0)
+    check("no instance created for rejected user",
+          pg.fetchone("SELECT id FROM bot_instances WHERE owner_id = ?", (9200,)) is None)
+    r = redemption.redeem_code(9100, t_res["code"])
+    check("target user accepted", r.get("ok") is True and r.get("plan") == "pro")
+
+    print("== status tabs & usage log ==")
+    counts = redemption.code_status_counts()
+    check("counts has all keys",
+          all(k in counts for k in ("all", "active", "exhausted", "revoked", "expired")))
+    actives = redemption.list_codes(50, "active")
+    check("active tab excludes revoked/exhausted",
+          all(c["status"] == "active" for c in actives))
+    revs = redemption.list_codes(50, "revoked")
+    check("revoked tab contains the revoked pro code",
+          any(int(c["id"]) == cid_pro for c in revs))
+    uses = redemption.code_uses(cid_pro)
+    check("usage log shows who + when + which clone",
+          len(uses) == 1 and int(uses[0]["user_id"]) == 6001
+          and uses[0]["bot_username"] == "pro_user_one_bot" and uses[0]["created_at"])
+
+    print("== 24h free trial ==")
+    ok, reason = redemption.trial_eligible(9500)
+    check("fresh user is trial-eligible", ok is True)
+    tr = redemption.start_trial(9500, "pro")
+    check("trial started", tr.get("ok") is True and tr.get("plan") == "pro"
+          and tr.get("instance_id") and tr.get("runtime_hours") == 24)
+    t_inst = pg.fetchone("SELECT * FROM bot_instances WHERE id = ?", (tr["instance_id"],))
+    check("trial instance pending_token with plan",
+          t_inst["status"] == "pending_token" and t_inst["plan"] == "pro")
+    tr2 = redemption.start_trial(9500, "basic")
+    check("second trial blocked while pending",
+          tr2.get("ok") is False and tr2.get("reason") == "trial_used")
+    check("cancelled trial released", redemption.release_trial(9500, "user_cancelled") is True)
+    check("trial pending instance deleted",
+          pg.fetchone("SELECT * FROM bot_instances WHERE id = ?", (tr["instance_id"],)) is None)
+    tr3 = redemption.start_trial(9500, "basic")
+    check("trial retry after cancel ok", tr3.get("ok") is True)
+    def _fake_trial_get_me(_tok):
+        return {"id": 990003, "username": "trial_user_bot"}
+    referral._tg_get_me = _fake_trial_get_me
+    tra = referral.verify_and_link_token(
+        9500, "123456789:AATrialToken_fake_padpadpad_pad9",
+        instance_id=tr3["instance_id"], plan="basic", days=1)
+    check("trial activation ok", tra.get("ok") is True)
+    t_inst = pg.fetchone("SELECT * FROM bot_instances WHERE id = ?", (tr3["instance_id"],))
+    exp_hours = (t_inst["expires_at"] - t_inst["activated_at"]).total_seconds() / 3600
+    check("trial expiry = 24h", abs(exp_hours - 24) < 0.02)
+    check("release refused after activation", redemption.release_trial(9500) is False)
+    tr4 = redemption.start_trial(9500)
+    check("no second trial ever after activation",
+          tr4.get("ok") is False and tr4.get("reason") == "trial_used")
+    ok2, reason2 = redemption.trial_eligible(6001)
+    check("trial blocked for user with an active clone",
+          ok2 is False and reason2 == "has_instance")
 
 
 # ---- run the full flow once, HERE (import time) --------------------------------

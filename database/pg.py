@@ -250,8 +250,18 @@ def init_referral_schema() -> None:
             status TEXT DEFAULT 'active',
             note TEXT DEFAULT '',
             created_by {bi},
+            targeted_user_id {bi},
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             expires_at TIMESTAMP
+        )""",
+        # 24-hour free trial registry — ONE trial per Telegram user, ever.
+        # The row is inserted atomically (ON CONFLICT DO NOTHING) when the
+        # trial starts, so double-taps can never grant two trials.
+        f"""CREATE TABLE IF NOT EXISTS clone_trials (
+            user_id {bpk},
+            instance_id {bi},
+            plan TEXT DEFAULT 'basic',
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )""",
         # Append-only audit trail for codes: created / reserved / used /
         # released / revoked / exhausted. Full code text and bot tokens are
