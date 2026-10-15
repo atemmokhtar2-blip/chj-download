@@ -97,6 +97,11 @@ def _fmt_bytes(size: int) -> str:
     return f"{size / (1024 * 1024 * 1024):.2f} GB"
 
 
+def _format_timestamp(value, length: int = 16) -> str:
+    """Format SQLite text or PostgreSQL datetime values consistently."""
+    return str(value or "—")[:length]
+
+
 def _temp_dir_stats() -> tuple[int, int]:
     """(bytes, file_count) currently sitting in TEMP_DIR."""
     total, count = 0, 0
@@ -1130,7 +1135,7 @@ async def _sup_detail(query, tid: int):
         return
     msgs = support.get_messages(tk["id"], limit=20)
     lines = [
-        f"{'🛟 الدعم' if m['sender'] == 'admin' else '👤 المستخدم'} • <code>{(m.get('created_at') or '—')[:16]}</code>\n"
+        f"{'🛟 الدعم' if m['sender'] == 'admin' else '👤 المستخدم'} • <code>{_format_timestamp(m.get('created_at'))}</code>\n"
         f"{escape(str(m.get('body') or ''))}"
         for m in msgs
     ]

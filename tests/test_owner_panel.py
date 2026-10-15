@@ -5,6 +5,7 @@ every sensitive action audited, bans carry reasons, and the runtime admin
 registry can never grant ownership.
 """
 
+from datetime import datetime
 from pathlib import Path
 import sys
 
@@ -18,7 +19,7 @@ from database.bot_settings import (
 )
 from database.admin_audit import log_admin_action, get_admin_audit
 import middlewares.auth as auth
-from handlers.owner_panel import _owner_gate
+from handlers.owner_panel import _format_timestamp, _owner_gate
 
 
 class _User:
@@ -50,6 +51,13 @@ def test_owner_gate_denies_non_private_chat(monkeypatch):
     upd = _Update(555000)
     upd.effective_chat.type = "group"
     assert _owner_gate(upd) is False
+
+
+def test_format_timestamp_accepts_postgres_datetime_and_sqlite_text():
+    value = datetime(2026, 10, 15, 22, 57, 29)
+    assert _format_timestamp(value) == "2026-10-15 22:57"
+    assert _format_timestamp("2026-10-15 22:57:29") == "2026-10-15 22:57"
+    assert _format_timestamp(None) == "—"
 
 
 def test_denied_owner_access_is_audited(monkeypatch):
