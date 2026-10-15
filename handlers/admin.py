@@ -256,6 +256,16 @@ async def _broadcast_update_message(context: ContextTypes.DEFAULT_TYPE, status_m
         await _edit(query, result_text, parse_mode="HTML")
 
 async def admin_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # Inside a CLONE instance every admin command (/admin /stats /ban /users
+    # /broadcast …) belongs to the clone's OWN Pro panel — scoped to that
+    # instance only. The main admin panel (and the global ADMIN_IDS) never
+    # apply inside a clone: a Pro clone owner is NOT a global admin, so the
+    # global check must never run first there.
+    from services.instance_manager import is_clone_bot
+    if is_clone_bot(context.bot.username or ""):
+        from handlers.clone_admin import clone_admin_command
+        return await clone_admin_command(update, context)
+
     user = update.effective_user
     if not is_admin(user.id):
         await update.message.reply_text("⛔ هذا الأمر متاح للمسؤولين فقط.")

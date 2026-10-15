@@ -78,6 +78,13 @@ async def message_router(update: Update, context):
     if await try_handle_token_message(update, context):
         return
 
+    # Clone-admin capture flows (broadcast body, welcome message, add-admin
+    # id, user search) — gated inside by plan + instance ownership, so it
+    # never consumes anything on the main bot or for non-privileged users.
+    from handlers.clone_admin import try_handle_capture
+    if await try_handle_capture(update, context):
+        return
+
     if await try_handle_settings_text(update, context):
         return
 

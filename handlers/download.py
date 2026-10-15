@@ -199,6 +199,23 @@ async def process_url(update: Update, context: ContextTypes.DEFAULT_TYPE, user, 
         await msg.reply_text(t(lang, "queue_full"))
         return
 
+    # 📦 Plan enforcement (Basic vs Pro) — resolved from the RUNNING bot's
+    # database row, NEVER from user input. Clone bans and the DB-backed
+    # daily counter apply on EVERY entry point (single URL, batch, search).
+    pctx = plan_policy.plan_context(context.bot)
+    if pctx.get("is_clone"):
+        if plan_policy.is_user_banned(pctx["instance_id"], user.id):
+            await msg.reply_text(
+                "\U0001F6AB تم تعطيل حسابك في هذه النسخة. تواصل مع صاحب النسخة."
+            )
+            return
+        cap = plan_policy.daily_cap(pctx)
+        if cap is not None and plan_policy.count_downloads_today(pctx["instance_id"], user.id) >= cap:
+            await msg.reply_text(
+                f"⏳ وصلت للحد اليومي لخطتك ({cap} تحميلًا). حاول مرة أخرى غدًا."
+            )
+            return
+
     status_msg = await msg.reply_text(t(lang, "analyzing"), parse_mode="HTML")
     try:
         info = await analyze_url(url)
@@ -271,7 +288,12 @@ async def handle_batch_urls(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Process multiple URLs from a single message, one card per link."""
     user = update.effective_user
     text = (update.message.text or "").strip()
-    urls = _extract_urls(text)[:BATCH_MAX_URLS]
+    # Plan batch cap — server-side, from the RUNNING bot's instance row:
+    # Basic 3 links / Pro 10 / main the global setting. Never the raw global.
+    pctx = plan_policy.plan_context(context.bot)
+    batch_limit = plan_policy.batch_cap(pctx)
+    all_urls = _extract_urls(text)
+    urls = all_urls[:batch_limit]
 
     if not urls:
         await process_url(update, context, user, text, update.message)
@@ -284,11 +306,21 @@ async def handle_batch_urls(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(t(lang, "banned"))
         return
 
+    if pctx.get("is_clone") and plan_policy.is_user_banned(pctx["instance_id"], user.id):
+        await update.message.reply_text("\U0001F6AB تم تعطيل حسابك في هذه النسخة.")
+        return
+
     await update.message.reply_text(
         t(lang, "batch_start", count=len(urls)),
         parse_mode="HTML",
         disable_web_page_preview=True,
     )
+    if len(all_urls) > batch_limit and pctx.get("is_clone"):
+        plan_label = plan_policy.PLAN_LABELS.get(pctx["plan"], "")
+        await update.message.reply_text(
+            f"✂️ خطتك ({plan_label}) تسمح بـ {batch_limit} روابط في الدفعة الواحدة — "
+            f"تم تجاهل {len(all_urls) - batch_limit} رابطًا."
+        )
 
     for url in urls:
         if not is_valid_url(url):
@@ -363,12 +395,17 @@ def _quality_height(label: str) -> int:
         return 0
 
 
-def _pick_smart_download(info: dict, settings: dict | None = None) -> tuple[bool, bool, bool, str]:
+def _pick_smart_download(info: dict, settings: dict | None = None,
+                         max_height: int | None = None) -> tuple[bool, bool, bool, str]:
     """Return (is_audio, is_image, is_album, quality_label) for one-tap smart mode.
 
     Honors the user's saved preferences: delivery_mode=audio forces MP3
     extraction, video_quality selects a specific default, audio_quality is
     applied by the caller (bitrate mapping).
+
+    ``max_height`` is the PLAN ceiling (Basic: 720). Open-ended choices
+    ('best'/'highest') and any specific pick above the ceiling collapse to
+    the ceiling label; the engine then takes the best format at-or-below it.
     """
     settings = settings or {}
     media_type = info.get("media_type", "video")
@@ -385,9 +422,10 @@ def _pick_smart_download(info: dict, settings: dict | None = None) -> tuple[bool
 
     vq = str(settings.get("video_quality") or "auto").lower()
     qualities = info.get("qualities") or []
+    _cap_label = f"{max_height}p" if max_height else "best"
 
     if vq in ("highest", "best", "max"):
-        return False, False, False, "best"
+        return False, False, False, _cap_label
 
     if vq == "auto":
         intel = info.get("intelligence") or {}
@@ -398,30 +436,43 @@ def _pick_smart_download(info: dict, settings: dict | None = None) -> tuple[bool
             safe_quality = None
             for q in sorted(qualities, key=lambda item: _quality_height(item.get("label", "0p")), reverse=True):
                 label = q.get("label", "")
-                if _quality_height(label) <= 720:
+                if _quality_height(label) <= (max_height or 720):
                     safe_quality = label
                     break
             if safe_quality:
                 return False, False, False, safe_quality
         best_quality = intel.get("best_quality") or "best"
         if not best_quality or best_quality == "best":
-            return False, False, False, "best"
-        return False, False, False, str(best_quality)
+            return False, False, False, _cap_label
+        bq = str(best_quality)
+        if max_height and _quality_height(bq) > max_height:
+            bq = f"{max_height}p"
+        return False, False, False, bq
 
     # Specific choices: 360p / 480p / 720p / 1080p — exact match, else the
-    # nearest available height under it, else the lowest available.
+    # nearest available height under it, else the lowest available. A pick
+    # above the plan ceiling is treated as the ceiling itself.
     wanted = _quality_height(vq)
+    if max_height and wanted and wanted > max_height:
+        wanted = max_height
     exact = next((q.get("label") for q in qualities if str(q.get("label", "")).lower() == vq), None)
-    if exact:
+    if exact and not (max_height and _quality_height(exact) > max_height):
         return False, False, False, exact
-    lower = [q for q in qualities if 0 < _quality_height(q.get("label", "")) <= wanted]
+    lower = [q for q in qualities
+             if 0 < _quality_height(q.get("label", "")) <= (wanted or 10 ** 9)
+             and not (max_height and _quality_height(q.get("label", "")) > max_height)]
     if lower:
         chosen = max(lower, key=lambda q: _quality_height(q.get("label", "0p")))
-        return False, False, False, chosen.get("label", "best")
+        return False, False, False, chosen.get("label", _cap_label)
     if qualities:
-        chosen = min(qualities, key=lambda q: (_quality_height(q.get("label", "0p")) or 10 ** 9))
-        return False, False, False, chosen.get("label", "best")
-    return False, False, False, "best"
+        allowed = [q for q in qualities
+                   if not (max_height and _quality_height(q.get("label", "")) > max_height)] or qualities
+        chosen = min(allowed, key=lambda q: (_quality_height(q.get("label", "0p")) or 10 ** 9))
+        label = chosen.get("label", _cap_label)
+        if max_height and _quality_height(label) > max_height:
+            label = f"{max_height}p"
+        return False, False, False, label
+    return False, False, False, _cap_label
 
 
 def _resolve_download_choice(data: str, info: dict, settings: dict | None) -> tuple[bool, bool, bool, str, str, str]:
@@ -603,6 +654,14 @@ async def download_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if cdq and cdq != "auto" and str(settings.get("video_quality") or "auto") == "auto":
             settings = dict(settings)
             settings["video_quality"] = cdq
+        # Plan ceiling at DOWNLOAD time: a preference saved elsewhere (e.g.
+        # 1080p on the main bot) can never lift a Basic clone above 720p —
+        # server-side, on every press, regardless of where it was stored.
+        _vq = str(settings.get("video_quality") or "auto")
+        _clamped = plan_policy.clamp_quality(_vq, pctx["plan"])
+        if _clamped != _vq:
+            settings = dict(settings)
+            settings["video_quality"] = _clamped
 
     allowed_prefixes = ("dl_video_",)
     allowed_exact = {"dl_smart", "dl_audio", "dl_audio_320", "dl_image", "dl_album", "dl_unavailable"}
@@ -629,6 +688,16 @@ async def download_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     is_audio, is_image, is_album, quality_label, audio_bitrate, delivery_mode = (
         _resolve_download_choice(data, info, settings)
     )
+
+    # Plan quality ceiling — ONE final server-side clamp covering every
+    # button path (smart / explicit dl_video_*): Basic never exceeds 720p,
+    # even if the card offered a higher format or the callback was forged.
+    if pctx.get("is_clone") and not is_audio and not is_image and not is_album:
+        _mh = (pctx.get("limits") or {}).get("max_video_height")
+        if _mh:
+            _qh = _quality_height(quality_label)
+            if str(quality_label).lower() in ("best", "highest", "max") or (_qh and _qh > _mh):
+                quality_label = f"{_mh}p"
 
     if smart_mode and not is_audio:
         try:
@@ -799,6 +868,8 @@ async def download_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         logger.exception("Download error for user=%s url=%s: %s", user.id, str(info.get("url", ""))[:120], e)
         reason = summarize_error(e)
+        _log_clone_failure(context, user.id, str(info.get("url") or ""), reason,
+                           platform=str(info.get("platform") or ""))
         show_detail = bool(settings.get("notify_failure", 1))
         try:
             if show_detail:
@@ -1113,6 +1184,7 @@ async def _run_download(query, context, info, user, lang, quality_label,
             log_download,
             user.id, info["url"], title, platform, quality_label,
             "audio" if is_audio else ("image" if is_image else "video"),
+            instance_id=plan_policy.plan_context(context.bot).get("instance_id", 0),
         )
     finally:
         if file_path and os.path.exists(file_path):
