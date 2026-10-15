@@ -95,6 +95,18 @@ def _gate(context, user_id: int):
     return ctx, inst, acc
 
 
+def _allows_users(inst: dict, uid: int) -> bool:
+    """May this admin VIEW the clone's user directory?
+
+    Browsing serves two distinct workflows: banning (can_ban) and user
+    analytics (can_stats). Either permission grants read access — the ban
+    ACTION itself still re-checks can_ban separately on every press, so
+    this never widens what an admin can DO, only what they can see.
+    """
+    return (pp.perm_allows(inst, uid, "can_stats")
+            or pp.perm_allows(inst, uid, "can_ban"))
+
+
 def _plan_blocked_text() -> str:
     return (
         "\U0001F193 <b>نسختك تعمل بخطة Basic</b>\n\n"
@@ -462,17 +474,29 @@ async def clone_admin_callback(update: Update, context: ContextTypes.DEFAULT_TYP
         if data == "ca:home":
             text, kb = await _render_home(ctx, inst, acc)
         elif data.startswith("ca:users:search"):
+            # Server-side perm check on EVERY press — a forwarded panel
+            # message or a crafted callback can't browse users without
+            # can_stats/can_ban, no matter which buttons were rendered.
+            if not _allows_users(inst, user.id):
+                await _deny(query, "⛔ صلاحية الإحصائيات أو الحظر مطلوبة لعرض المستخدمين.")
+                return
             key = (context.bot.id, query.message.chat_id)
             _pending[key] = {"kind": "user_search", "ts": time.monotonic()}
             text, kb = ("🔎 أرسل Telegram ID (أرقام) أو اسم مستخدم للبحث داخل نسختك.",
                         _rows([[("🔵 إلغاء", {"callback_data": "ca:users:0"})]]))
         elif data.startswith("ca:users:"):
+            if not _allows_users(inst, user.id):
+                await _deny(query, "⛔ صلاحية الإحصائيات أو الحظر مطلوبة لعرض المستخدمين.")
+                return
             try:
                 offset = int(parts[2])
             except (ValueError, IndexError):
                 offset = 0
             text, kb = await _render_users(inst, max(0, offset))
         elif data.startswith("ca:user:"):
+            if not _allows_users(inst, user.id):
+                await _deny(query, "⛔ صلاحية الإحصائيات أو الحظر مطلوبة لعرض المستخدمين.")
+                return
             uid = int(parts[2])
             action = parts[3] if len(parts) > 3 else ""
             if action in ("ban", "unban"):
@@ -575,8 +599,16 @@ async def clone_admin_callback(update: Update, context: ContextTypes.DEFAULT_TYP
         elif data == "ca:status":
             text, kb = await _render_status(context, inst)
         elif data == "ca:log":
+            # The audit log contains actor ids + every admin action —
+            # gated by can_stats (owner passes perm_allows automatically).
+            if not pp.perm_allows(inst, user.id, "can_stats"):
+                await _deny(query, "⛔ صلاحية الإحصائيات (can_stats) مطلوبة لعرض السجل.")
+                return
             text, kb = await _render_log(inst)
         elif data == "ca:log:csv":
+            if not pp.perm_allows(inst, user.id, "can_stats"):
+                await _deny(query, "⛔ صلاحية الإحصائيات (can_stats) مطلوبة لتصدير السجل.")
+                return
             csv_text = pp.admin_log_csv(inst_id, 500)
             pp.log_admin_action(inst_id, user.id, "export_log_csv")
             await query.message.reply_document(
@@ -587,6 +619,13 @@ async def clone_admin_callback(update: Update, context: ContextTypes.DEFAULT_TYP
         elif data == "ca:subscription":
             text, kb = await _render_subscription(inst)
         elif data == "ca:renew":
+            # DB-backed cooldown — one renewal request per instance per 6h.
+            # Runs server-side on every press (hiding the button afterwards
+            # is cosmetics, not protection) and survives restarts because
+            # it reads the permanent clone_admin_log.
+            if pp.recent_renew_request(inst_id, hours=6):
+                await _deny(query, "⏳ طلب التجديد مُرسل مسبقًا — بانتظار رد مالك النظام.")
+                return
             from config.settings import OWNER_ID
             from services import referral
             referral.notify_user(
@@ -737,6 +776,12 @@ async def try_handle_capture(update: Update, context: ContextTypes.DEFAULT_TYPE)
         return True
 
     if kind == "user_search":
+        # Re-check on capture too — the pending flag alone is not authority:
+        # identity/instance/plan were re-gated above, and the directory perm
+        # is verified here again at the moment the data would be revealed.
+        if not _allows_users(inst, msg.from_user.id):
+            await msg.reply_text("⛔ صلاحية الإحصائيات أو الحظر مطلوبة.")
+            return True
         results = pp.search_clone_user(inst, text)
         if not results:
             await msg.reply_text("🔎 لا نتائج داخل نسختك.",

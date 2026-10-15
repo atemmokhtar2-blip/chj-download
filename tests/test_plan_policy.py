@@ -370,6 +370,16 @@ def _setup_module_checks() -> tuple[dict, dict]:
           len(pp.list_admin_log(int(inst_pro["id"]), 15)) == 0)
 
     # ------------------------------------------------------------------
+    print("== renew request cooldown (DB-backed spam guard) ==")
+    check("no renew request yet -> no cooldown",
+          pp.recent_renew_request(iid, hours=6) is False)
+    pp.log_admin_action(iid, BASIC_OWNER, "renew_requested")
+    check("after a renew request -> cooldown active",
+          pp.recent_renew_request(iid, hours=6) is True)
+    check("cooldown is instance-scoped",
+          pp.recent_renew_request(int(inst_pro["id"]), hours=6) is False)
+
+    # ------------------------------------------------------------------
     print("== clone user directory (ref_users source) ==")
     src = f"clone:{BASIC_BOT_ID}"
     for uid, uname, fname in ((USER_A, "user_a", "أحمد"), (USER_B, "user_b", "سارة")):

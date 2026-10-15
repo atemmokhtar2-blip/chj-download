@@ -535,6 +535,33 @@ def perm_allows(inst: dict | None, user_id: int, perm: str) -> bool:
 # Clone admin audit log + broadcast log
 # --------------------------------------------------------------------------
 
+def recent_renew_request(instance_id: int, hours: int = 6) -> bool:
+    """True when a renewal request was logged within the last N hours.
+
+    DB-backed cooldown for ca:renew — an admin can't spam the system owner
+    with renewal notifications by pressing the button repeatedly. Reads the
+    PERMANENT clone_admin_log, so it survives restarts (an in-memory timer
+    would reset on every deploy and reopen the spam window).
+    """
+    try:
+        with db_cursor() as c:
+            # clone_admin_log.created_at is a real TIMESTAMP column (unlike
+            # downloads.created_at which is TEXT) — compare timestamps
+            # directly instead of the portable datetime('now', ?) shorthand,
+            # which translates to a to_char() TEXT and would raise
+            # "operator does not exist: timestamp >= text" on PG.
+            c.execute(
+                "SELECT COUNT(*) AS cnt FROM clone_admin_log "
+                "WHERE instance_id = ? AND action = 'renew_requested' "
+                "AND created_at >= (now() at time zone 'utc' + (?)::interval)",
+                (int(instance_id), f"-{int(hours)} hours"))
+            row = c.fetchone()
+            return int((row or {}).get("cnt") or 0) > 0
+    except Exception:
+        logger.exception("renew cooldown check failed inst=%s", instance_id)
+        return False
+
+
 def log_admin_action(instance_id: int, actor_id: int, action: str, detail: str = "") -> None:
     try:
         pg.execute(
