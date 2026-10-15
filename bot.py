@@ -32,7 +32,9 @@ from handlers.admin import (
     engine_status_command, update_ytdlp_command, health_command,
     callbacks_health_command, commands_command,
 )
-from handlers.referral import referral_callback, try_handle_token_message
+from handlers.referral import (
+    referral_callback, try_handle_code_message, try_handle_token_message,
+)
 from handlers.owner_panel import owner_command, owner_callback, owner_text_handler
 from workers.cleanup import cleanup_temp_files, cleanup_old_cache, cleanup_old_history, clone_expiry_worker
 

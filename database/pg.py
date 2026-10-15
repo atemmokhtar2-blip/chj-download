@@ -292,6 +292,7 @@ def init_referral_schema() -> None:
                 logger.debug("Index skipped: %s", stmt[:60])
     ensure_reward_milestone_column()
     ensure_instance_plan_columns()
+    ensure_redemption_targeted_user_column()
     ensure_clone_settings_migration()
     logger.info("Referral schema ready on backend=%s", BACKEND)
 
@@ -352,3 +353,19 @@ def ensure_reward_milestone_column() -> None:
         )
     except Exception:
         logger.exception("referral milestone column migration failed")
+
+
+def ensure_redemption_targeted_user_column() -> None:
+    """Add the optional user restriction to redemption codes on older DBs.
+
+    ``CREATE TABLE IF NOT EXISTS`` does not evolve a table already created by
+    an earlier release, so targeted-code deployments need this additive
+    migration before any redemption/list query selects the column.
+    """
+    try:
+        execute(
+            "ALTER TABLE redemption_codes "
+            "ADD COLUMN IF NOT EXISTS targeted_user_id BIGINT"
+        )
+    except Exception:
+        logger.exception("redemption targeted-user column migration failed")
