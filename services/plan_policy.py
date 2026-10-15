@@ -73,6 +73,56 @@ def limits(plan) -> dict:
     return dict(PLAN_LIMITS[normalize_plan(plan)])
 
 
+# --------------------------------------------------------------------------
+# User-facing plan visibility (what exists / what doesn't — shown, not hidden)
+# --------------------------------------------------------------------------
+
+def plan_comparison_lines() -> list[str]:
+    """Arabic HTML lines comparing Basic vs Pro, rendered FROM PLAN_LIMITS so
+    what users SEE can never drift from what the server ENFORCES."""
+    b = PLAN_LIMITS[PLAN_BASIC]
+    p = PLAN_LIMITS[PLAN_PRO]
+    return [
+        f"• تحميلات يومية لكل مستخدم: 🆓 <b>{b['daily_downloads']}</b> — 👑 <b>{p['daily_downloads']}</b>",
+        f"• روابط في الدفعة الواحدة: 🆓 <b>{b['batch_urls']}</b> — 👑 <b>{p['batch_urls']}</b>",
+        f"• جودة الفيديو: 🆓 <b>{b['max_video_height']}p كحد أقصى</b> — 👑 <b>أعلى جودة متاحة</b>",
+        f"• سجل التحميلات: 🆓 <b>{b['history_days']} أيام</b> — 👑 <b>{p['history_days']} يومًا</b>",
+        "• لوحة إدارة خاصة: 🆓 ❌ غير موجودة — 👑 ✅ موجودة",
+        "• إدارة مستخدمي النسخة: 🆓 ❌ — 👑 ✅",
+        "• الإذاعة داخل النسخة: 🆓 ❌ — 👑 ✅",
+        "• إدارة الإداريين والصلاحيات: 🆓 ❌ — 👑 ✅",
+    ]
+
+
+def plan_summary_text(ctx: dict) -> str:
+    """The plan card any user can open (settings → 📊): full Basic-vs-Pro
+    comparison + which plan THIS bot runs under right now."""
+    compare = "\n".join(plan_comparison_lines())
+    text = (
+        "📦 <b>خطط النسخ الخاصة — Basic مقابل Pro</b>\n\n"
+        f"{compare}\n"
+        "• إدارة الأكواد والنسخ الأخرى: 🆓 ❌ — 👑 ❌ (للمالك الرئيسي فقط)\n\n"
+        "━━━━━━━━━━━━━━\n"
+    )
+    if ctx.get("is_clone"):
+        plan = normalize_plan(ctx.get("plan"))
+        badge = "👑 Pro" if plan == PLAN_PRO else "🆓 Basic"
+        text += f"🤖 <b>هذه النسخة تعمل حاليًا بخطة:</b> {badge}\n"
+        if plan == PLAN_BASIC:
+            text += (
+                "كل الحدود أعلاه تُطبَّق تلقائيًا داخل هذه النسخة.\n"
+                "الترقية إلى 👑 Pro تتم بقرار المالك — اطلب التجديد من صفحة 🎁."
+            )
+        else:
+            text += "لوحة الإدارة الخاصة متاحة لمالك النسخة وإدارييها (/admin)."
+    else:
+        text += (
+            "🤖 <b>أنت الآن في البوت الأساسي — بلا حدود خطط.</b>\n"
+            "الخطط أعلاه تخص النسخ الخاصة التي يكسبها المستخدمون من 🎁 الإحالات."
+        )
+    return text
+
+
 def instance_for_bot_id(bot_id) -> dict | None:
     """The ``bot_instances`` row behind a running clone bot, resolved by the
     numeric bot id PTB derives from the token. Briefly cached."""

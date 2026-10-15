@@ -347,6 +347,7 @@ def _plans_text(stats: dict) -> str:
     """Full plan-system page: what exists, what it costs, how time works,
     and where THIS user currently stands — one screen, everything visible."""
     from services.referral import clone_plan_days, pro_target
+    from services.plan_policy import plan_comparison_lines
 
     target = int(stats.get("target") or 0)
     pro_tgt = pro_target()
@@ -354,6 +355,7 @@ def _plans_text(stats: dict) -> str:
     pro_days = clone_plan_days("pro")
     qualified = int(stats.get("qualified") or 0)
     inst = stats.get("instance") or {}
+    compare = "\n".join(plan_comparison_lines())
 
     text = (
         "📦 <b>الخطط والباقات — كل التفاصيل</b>\n\n"
@@ -361,12 +363,15 @@ def _plans_text(stats: dict) -> str:
         "━━━━━━━━━━━━━━\n"
         f"🆓 <b>خطة Basic</b>\n"
         f"• المطلوب: <b>{target} مستخدمًا مؤهلًا</b>\n"
-        f"• المدة: <b>{basic_days} يومًا</b> من يوم التفعيل\n"
-        f"• نسخة كاملة الصلاحيات بنفس قوة البوت الأساسي\n\n"
+        f"• المدة: <b>{basic_days} يومًا</b> من يوم التفعيل\n\n"
         f"👑 <b>خطة Pro</b>\n"
         f"• المطلوب: <b>{pro_tgt} مستخدمًا مؤهلًا</b>\n"
         f"• المدة: <b>{pro_days} يومًا</b> من يوم التفعيل\n"
         "• تُمنح تلقائيًا لحظة التفعيل لو كنت وصلت للعدد المطلوب\n"
+        "━━━━━━━━━━━━━━\n\n"
+        "⚖️ <b>ما الموجود وما غير الموجود — 🆓 Basic مقابل 👑 Pro:</b>\n"
+        f"{compare}\n"
+        "• إدارة الأكواد والنسخ الأخرى: 🆓 ❌ — 👑 ❌ (للمالك الرئيسي فقط)\n"
         "━━━━━━━━━━━━━━\n\n"
         "⚙️ <b>إزاي بيتم تحديد خطتك؟</b>\n"
         f"وقت ما تفعّل نسختك، النظام يفحص عدد مؤهلكينك: لو <b>{pro_tgt}+</b> تاخد "

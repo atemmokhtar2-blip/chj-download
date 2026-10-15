@@ -438,10 +438,15 @@ def _user_profile(target_id: int, tab: str = "main") -> tuple[str, InlineKeyboar
         except Exception:
             inst = None
         if inst:
+            plan_badge = "👑 Pro" if (inst.get('plan') or 'basic') == 'pro' else "🆓 Basic"
+            exp_raw = inst.get('expires_at')
+            exp_txt = str(exp_raw)[:10] if exp_raw else "—"
             body = (
                 "\n🤖 <b>النسخة الخاصة</b>\n"
                 f"• البوت: <b>@{escape(inst.get('bot_username') or '—')}</b>\n"
                 f"• الحالة: {_INST_STATUS.get(inst.get('status'), inst.get('status'))}\n"
+                f"• الخطة: {plan_badge}\n"
+                f"• الانتهاء: <code>{escape(exp_txt)}</code>\n"
                 f"• آخر خطأ: <code>{escape(inst.get('last_error') or 'لا يوجد')}</code>\n"
                 f"• التفعيل: <code>{escape((inst.get('activated_at') or '—')[:16] if inst.get('activated_at') else '—')}</code>\n"
             )

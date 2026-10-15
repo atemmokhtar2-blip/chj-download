@@ -135,6 +135,7 @@ def build_home(settings: dict) -> tuple[str, list]:
     )
     rows = [
         [("🟢 🎁 اكسب نسختك من البوت", "settings:referral")],
+        [("🔵 📊 الخطط والحدود", "settings:plan")],
         [("🔵 🎯 الجودة والحجم", "settings:quality")],
         [("🔵 📦 طريقة الاستلام", "settings:delivery")],
         [("🔵 ⚡ مدير التحميلات", "settings:queue")],
@@ -508,6 +509,18 @@ async def settings_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if data == "settings:referral":
         from handlers.referral import referral_page
         await referral_page(update, context, edit=True)
+        return
+
+    # 📊 Plan card — the full Basic-vs-Pro comparison (what exists / what
+    # doesn't) and which plan THIS bot runs under. Visible to every user.
+    if data == "settings:plan":
+        from services import plan_policy
+        await safe_edit(
+            query.edit_message_text,
+            plan_policy.plan_summary_text(plan_policy.plan_context(context.bot)),
+            parse_mode="HTML",
+            reply_markup=_mk([[("🔵 ↩️ رجوع", "settings:home")]]),
+        )
         return
 
     # Re-download from history must actually START a download, so it lives in
