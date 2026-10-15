@@ -108,3 +108,156 @@ def test_hard_delete_erases_target_instance_only(isolated_db):
     again = referral.delete_instance_hard(inst_a)
     assert again["bot_instances"] == 0
     assert referral.get_instance(inst_b) is not None
+
+
+# ---- panel wiring: the confirm → execute flow (button-level contract) -----------------
+
+from pathlib import Path
+from types import SimpleNamespace
+
+_OWNER_PANEL = Path(__file__).resolve().parents[1] / "handlers" / "owner_panel.py"
+
+
+def _panel_src() -> str:
+    return _OWNER_PANEL.read_text(encoding="utf-8")
+
+
+def test_dispatcher_routes_delete_before_generic_detail():
+    """`own_inst_del_*` and `own_inst_deldo_*` MUST be dispatched to their own
+    handlers BEFORE the generic `own_inst_` catch-all — otherwise the press is
+    swallowed and the detail merely re-renders (the old broken behavior)."""
+    src = _panel_src()
+    i_deldo = src.index('elif data.startswith("own_inst_deldo_")')
+    i_del = src.index('elif data.startswith("own_inst_del_")')
+    i_generic = src.index('elif data.startswith("own_inst_"):')
+    assert i_deldo < i_generic and i_del < i_generic
+    assert "_inst_del_do(context, query, inst_id)" in src[i_deldo:i_del]
+    assert "_inst_del_confirm(query, inst_id)" in src[i_del:i_generic]
+
+
+def test_delete_execution_is_permanent_and_audited():
+    """_inst_del_do: process detach → DB wipe (delete_instance_hard is the ONLY
+    erase path) → PERMANENT admin-audit entry → clone-owner notification."""
+    src = _panel_src()
+    start = src.index("async def _inst_del_do(")
+    end = src.index("# ---- downloads section", start)
+    seg = src[start:end]
+    assert "await stop_instance(inst_id)" in seg
+    assert "referral.delete_instance_hard(inst_id)" in seg
+    assert 'log_admin_action(query.from_user.id, "owner_delete_instance", inst_id' in seg
+    assert "context.bot.send_message" in seg
+
+
+class _FakeQuery:
+    def __init__(self, uid: int = 9001):
+        self.from_user = SimpleNamespace(id=uid)
+        self.edits: list = []
+
+    async def edit_message_text(self, text=None, **kwargs):
+        self.edits.append((text or "", kwargs))
+        return SimpleNamespace(message_id=1, chat_id=1)
+
+
+def _cbs(markup) -> list[str]:
+    out = []
+    for row in getattr(markup, "inline_keyboard", []) or []:
+        for btn in row:
+            if getattr(btn, "callback_data", None):
+                out.append(btn.callback_data)
+    return out
+
+
+_INST = {"id": 5, "owner_id": 6001, "bot_id": 880011, "bot_username": "doomed_clone_bot",
+         "status": "active", "plan": "pro", "last_error": None,
+         "activated_at": "2026-01-01 00:00:00", "expires_at": "2026-02-01 00:00:00"}
+
+
+def test_detail_offers_hard_delete_for_every_status(monkeypatch):
+    """The 🗑️ button lives on the clone detail for EVERY status — an expired
+    or disabled clone is exactly the one an owner wants gone for good."""
+    import asyncio
+    import handlers.owner_panel as op
+    monkeypatch.setattr(op.referral, "instance_days_left", lambda inst: 10)
+    monkeypatch.setattr(op.referral, "clone_plan_days", lambda plan: 30)
+    for status in ("active", "expired", "disabled", "error"):
+        monkeypatch.setattr(op.referral, "get_instance",
+                            lambda iid, s=status: dict(_INST, status=s))
+        q = _FakeQuery()
+        asyncio.run(op._inst_detail(q, 5))
+        _text, kwargs = q.edits[-1]
+        markup = kwargs.get("reply_markup")
+        assert "own_inst_del_5" in _cbs(markup), status
+        labels = [btn.text or "" for row in getattr(markup, "inline_keyboard", [])
+                  for btn in row]
+        assert any("حذف النسخة تمامًا" in label for label in labels), status
+
+
+def test_del_confirm_shows_blast_radius_and_wires_do(monkeypatch):
+    import asyncio
+    import handlers.owner_panel as op
+    monkeypatch.setattr(op.referral, "get_instance", lambda iid: dict(_INST))
+    q = _FakeQuery()
+    asyncio.run(op._inst_del_confirm(q, 5))
+    text, kwargs = q.edits[-1]
+    assert "doomed_clone_bot" in text          # identity shown before execution
+    assert "لا يمكن التراجع" in text            # permanence warning
+    cbs = _cbs(kwargs.get("reply_markup"))
+    assert "own_inst_deldo_5" in cbs           # confirm → execute
+    assert "own_inst_5" in cbs                 # تراجع → back to detail
+
+
+def test_del_do_wipes_audits_and_notifies(monkeypatch):
+    import asyncio
+    import handlers.owner_panel as op
+
+    wiped: list = []
+    stopped: list = []
+    audits: list = []
+    notified: list = []
+
+    async def _fake_stop(inst_id):
+        stopped.append(inst_id)
+
+    async def _fake_send(chat_id, text, **kwargs):
+        notified.append((chat_id, text))
+
+    monkeypatch.setattr(op.referral, "get_instance", lambda iid: dict(_INST))
+    monkeypatch.setattr(op.referral, "delete_instance_hard",
+                        lambda iid: wiped.append(iid) or {
+                            "bot_instances": 1, "downloads": 3, "download_failures": 0,
+                            "clone_admins": 2, "clone_bans": 1, "clone_admin_log": 4,
+                            "clone_broadcasts": 0, "clone_settings": 1, "bot_secrets": 1,
+                            "activation_log": 2, "redemption_log": 0})
+    monkeypatch.setattr(op, "stop_instance", _fake_stop)
+    monkeypatch.setattr(op, "log_admin_action", lambda *a, **k: audits.append(a))
+
+    ctx = SimpleNamespace(bot=SimpleNamespace(send_message=_fake_send))
+    q = _FakeQuery(uid=555000)
+    asyncio.run(op._inst_del_do(ctx, q, 5))
+
+    assert wiped == [5]                        # the ONLY erase path, right id
+    assert stopped == [5]                      # process detached first
+    assert any(a[1] == "owner_delete_instance" and a[2] == 5 for a in audits)
+    assert notified and notified[0][0] == 6001 and "حذف نسختك" in notified[0][1]
+    text, _kw = q.edits[-1]
+    assert "تم حذف النسخة #5 نهائيًا" in text
+    assert "الحذف اكتمل" in text               # bot_instances == 1 → success copy
+
+
+def test_del_confirm_and_do_reject_missing_instance(monkeypatch):
+    """A stale callback for an already-deleted clone must NOT wipe anything."""
+    import asyncio
+    import handlers.owner_panel as op
+    wiped: list = []
+    monkeypatch.setattr(op.referral, "get_instance", lambda iid: None)
+    monkeypatch.setattr(op.referral, "delete_instance_hard", lambda iid: wiped.append(iid) or {})
+
+    q = _FakeQuery()
+    asyncio.run(op._inst_del_confirm(q, 999))
+    assert "غير موجودة" in q.edits[-1][0]
+
+    q2 = _FakeQuery()
+    ctx = SimpleNamespace(bot=SimpleNamespace(send_message=None))
+    asyncio.run(op._inst_del_do(ctx, q2, 999))
+    assert "غير موجودة" in q2.edits[-1][0]
+    assert wiped == []

@@ -1000,6 +1000,86 @@ async def _inst_plansw_do(context, query, inst_id: int):
         parse_mode="HTML", reply_markup=_kb(_back("own_inst", "🔙 إدارة النسخ")))
 
 
+async def _inst_del_confirm(query, inst_id: int):
+    """Permanent-delete confirmation: show the clone's identity and the FULL
+    blast radius BEFORE execution — the owner must see exactly what dies."""
+    inst = referral.get_instance(inst_id)
+    if not inst:
+        await _edit(query, "❌ النسخة غير موجودة.", parse_mode="HTML",
+                    reply_markup=_kb(_back("own_inst", "🔙 إدارة النسخ")))
+        return
+    plan_badge = "👑 Pro" if (inst.get("plan") or "basic") == "pro" else "🆓 Basic"
+    text = (
+        "🗑️ <b>تأكيد الحذف النهائي للنسخة</b>\n\n"
+        f"• اسم النسخة: <b>@{escape(inst.get('bot_username') or '—')}</b>\n"
+        f"• المالك: <code>{inst.get('owner_id')}</code>\n"
+        f"• المعرف: #<code>{inst_id}</code>\n"
+        f"• الخطة: <b>{plan_badge}</b>\n\n"
+        "سيتم محو النسخة <b>وكل ما يخصها نهائيًا</b>:\n"
+        "• سجل تحميلاتها وإخفاقاتها\n"
+        "• إداريوها وصلاحياتهم وقائمة حظرها وسجل إدارتها\n"
+        "• بثاتها وإعداداتها وتوكنها المشفر\n"
+        "• سجلات تفعيلها واستردادها\n"
+        "• صف النسخة نفسه من النظام\n\n"
+        "📌 تبقى بصمة الاستهلاك (تجربة/مكافأة) مسجلة بلا إشارة —"
+        " الحذف النهائي لا يمنح مالكها تجربة ثانية ولا مكافأة جديدة.\n\n"
+        "⛔ <b>لا يمكن التراجع عن هذه العملية.</b>"
+    )
+    rows = [
+        [inline_button("✅ نعم، احذف النسخة نهائيًا", callback_data=f"own_inst_deldo_{inst_id}"),
+         inline_button("↩️ تراجع", callback_data=f"own_inst_{inst_id}")],
+    ]
+    await _edit(query, text, parse_mode="HTML", reply_markup=_kb(rows))
+
+
+async def _inst_del_do(context, query, inst_id: int):
+    """Execute the permanent delete: detach the running process, wipe every
+    instance-scoped row (DB is the source of truth), audit PERMANENTLY in the
+    main admin log, and notify the clone owner. The confirm step is UI — the
+    owner gate on owner_callback plus the DB wipe are the real protection."""
+    inst = referral.get_instance(inst_id)
+    if not inst:
+        await _edit(query, "❌ النسخة غير موجودة (ربما حُذفت بالفعل).", parse_mode="HTML",
+                    reply_markup=_kb(_back("own_inst", "🔙 إدارة النسخ")))
+        return
+    # Best-effort process detach — the DB wipe is the actual point.
+    try:
+        await stop_instance(inst_id)
+    except Exception:
+        pass
+    counts = referral.delete_instance_hard(inst_id)
+    log_admin_action(query.from_user.id, "owner_delete_instance", inst_id,
+                     detail=f"bot=@{inst.get('bot_username', '')} owner={inst.get('owner_id')} counts={counts}")
+    try:
+        await context.bot.send_message(
+            int(inst.get("owner_id")),
+            f"❌ <b>تم حذف نسختك @{escape(inst.get('bot_username') or '')} نهائيًا</b> بقرار إداري.\n"
+            "النسخة وكل بياناتها أُزيلت من النظام ولا يمكن استعادتها."
+            " للاعتراض أو الاستفسار افتح تذكرة من 🛟 الدعم الفني.",
+            parse_mode="HTML",
+        )
+    except Exception:
+        pass
+
+    def _cnt(key: str) -> str:
+        v = counts.get(key, 0)
+        return "⚠️ فشل" if v == -1 else str(v)
+
+    await _edit(query,
+        f"🗑️ <b>تم حذف النسخة #{inst_id} نهائيًا</b>\n"
+        f"(@{escape(inst.get('bot_username') or '—')})\n\n"
+        "ما تم محوه:\n"
+        f"• التحميلات: <b>{_cnt('downloads')}</b> • الإخفاقات: <b>{_cnt('download_failures')}</b>\n"
+        f"• الإداريون: <b>{_cnt('clone_admins')}</b> • الحظر: <b>{_cnt('clone_bans')}</b>\n"
+        f"• سجل الإدارة: <b>{_cnt('clone_admin_log')}</b> • البثات: <b>{_cnt('clone_broadcasts')}</b>\n"
+        f"• الإعدادات: <b>{_cnt('clone_settings')}</b> • التوكن: <b>{_cnt('bot_secrets')}</b>\n"
+        f"• سجل التفعيل: <b>{_cnt('activation_log')}</b> • الاسترداد: <b>{_cnt('redemption_log')}</b>\n"
+        f"• صف النسخة: <b>{_cnt('bot_instances')}</b>\n\n"
+        + ("✅ الحذف اكتمل — النسخة لم يعد لها أي أثر." if counts.get("bot_instances") == 1 else
+           "⚠️ راجع الأرقام أعلاه — أي جدول عليه «⚠️ فشل» لم يُمحَ بالكامل."),
+        parse_mode="HTML", reply_markup=_kb(_back("own_inst", "🔙 إدارة النسخ")))
+
+
 # ---- downloads section --------------------------------------------------------------------
 
 def _dl_screen() -> tuple[str, InlineKeyboardMarkup]:
@@ -1605,6 +1685,14 @@ async def owner_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         inst_id = _suffix_int(data)
         if inst_id:
             await _inst_start_do(context, query, inst_id)
+    elif data.startswith("own_inst_deldo_"):
+        inst_id = _suffix_int(data)
+        if inst_id:
+            await _inst_del_do(context, query, inst_id)
+    elif data.startswith("own_inst_del_"):
+        inst_id = _suffix_int(data)
+        if inst_id:
+            await _inst_del_confirm(query, inst_id)
     elif data.startswith("own_inst_"):
         inst_id = _suffix_int(data)
         if inst_id:
