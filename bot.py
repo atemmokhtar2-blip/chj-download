@@ -33,7 +33,8 @@ from handlers.admin import (
 from handlers.referral import referral_callback, try_handle_token_message
 from workers.cleanup import cleanup_temp_files, cleanup_old_cache, cleanup_old_history
 
-# Arabic-only main menu.
+# Arabic-only main menu. Matching is emoji-insensitive (see normalize_button_text)
+# so the buttons work no matter how the client sends the label back.
 MENU_BUTTONS = {"📥 تحميل", "📥 Download", "⚙️ الإعدادات", "⚙️ Settings"}
 
 
@@ -72,18 +73,29 @@ async def message_router(update: Update, context):
     if await try_handle_settings_text(update, context):
         return
 
-    if text in MENU_BUTTONS:
+    # Emoji-insensitive matching: some clients send the reply-keyboard label
+    # without emoji or with different variation selectors, so both the press
+    # and the expected labels are normalized before comparison.
+    from utils.button_text import normalize_button_text
+    from locales import t
+    norm = normalize_button_text(text)
+    if norm in {normalize_button_text(b) for b in MENU_BUTTONS}:
         from database.users import get_user, update_user
-        from locales import t
         user_id = update.effective_user.id
         db_user = get_user(user_id)
         if db_user:
             update_user(user_id, language="ar")
-        download_btn = {t("ar", "menu_download"), t("en", "menu_download")}
-        settings_btn = {t("ar", "menu_settings"), t("en", "menu_settings")}
-        if text in download_btn:
+        download_btn = {
+            normalize_button_text(t("ar", "menu_download")),
+            normalize_button_text(t("en", "menu_download")),
+        }
+        settings_btn = {
+            normalize_button_text(t("ar", "menu_settings")),
+            normalize_button_text(t("en", "menu_settings")),
+        }
+        if norm in download_btn:
             await update.message.reply_text(t("ar", "send_url_prompt"), parse_mode="HTML")
-        elif text in settings_btn:
+        elif norm in settings_btn:
             # Open the real settings menu (same screen as /settings).
             await settings_command(update, context)
         return

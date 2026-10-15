@@ -16,7 +16,6 @@ import math
 import re
 
 from telegram import Update, InlineKeyboardMarkup
-from telegram.constants import KeyboardButtonStyle
 from utils.button_text import inline_button
 from telegram.ext import ContextTypes
 
@@ -109,37 +108,11 @@ def _parse_size_mb(raw: str) -> float | None:
 
 # ---- pure renderers (return (html_text, rows)) -----------------------------
 
-def _button_style(label: str, data: str) -> str:
-    """Use Telegram's official inline-button styles; clients may render them differently."""
-    action = (data or "").lower()
-    caption = (label or "").lower()
-
-    # Destructive actions and explicit cancellation use red.
-    if any(token in action for token in (
-        ":delete:", ":clear:yes", ":reset:yes", ":close"
-    )) or any(token in caption for token in ("حذف", "امسح", "إلغاء", "إغلاق")):
-        return KeyboardButtonStyle.DANGER
-
-    # Successful changes and affirmative, non-destructive actions use green.
-    if any(token in action for token in (
-        ":set:", ":toggle:", ":privacy:clean", ":reset:yes"
-    )) or any(token in caption for token in ("تم الحفظ", "تحميل مرة أخرى", "فتح الإعدادات")):
-        return KeyboardButtonStyle.SUCCESS
-
-    # Navigation and neutral choices use blue.
-    return KeyboardButtonStyle.PRIMARY
-
-
 def _mk(rows: list[list[tuple[str, str]]]) -> InlineKeyboardMarkup:
+    # Telegram inline buttons have no style/color option — the colored dots
+    # (🟢/🔵/🔴/🟡) inside the labels themselves carry the visual semantics.
     return InlineKeyboardMarkup([
-        [
-            inline_button(
-                label,
-                callback_data=data,
-                style=_button_style(label, data),
-            )
-            for label, data in row
-        ]
+        [inline_button(label, callback_data=data) for label, data in row]
         for row in rows
     ])
 

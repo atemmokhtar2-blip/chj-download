@@ -170,8 +170,8 @@ def _rows_for(stats: dict, bot_username: str | None) -> list[list[InlineKeyboard
     else:
         remaining = max(0, int(stats.get("target", 0)) - int(stats.get("qualified", 0)))
         rows.append([InlineKeyboardButton(f"🎁 نسختي الخاصة ({remaining} متبقي)", callback_data="ref:claim")])
-        rows.append([InlineKeyboardButton("📜 قواعد الإحالات", callback_data="ref:rules")])
 
+    # «📜 قواعد الإحالات» appears exactly once — in this fixed bottom row.
     rows.append([
         InlineKeyboardButton("🧾 سجل العمليات", callback_data="ref:activity"),
         InlineKeyboardButton("🛟 الدعم الفني", callback_data="ref:support"),

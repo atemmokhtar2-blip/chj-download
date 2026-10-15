@@ -20,7 +20,7 @@ def get_main_keyboard(lang: str = "ar", user_id: int = None, bot_username: str =
     main bot — required by the network design so every clone feeds users
     back to the source without nagging messages.
     """
-    rows = [[strip_button_emoji(t("ar", "menu_download")), strip_button_emoji(t("ar", "menu_settings"))]]
+    rows = [[t("ar", "menu_download"), t("ar", "menu_settings")]]
     try:
         if MAIN_BOT_USERNAME and is_clone_bot(bot_username):
             from telegram import KeyboardButton

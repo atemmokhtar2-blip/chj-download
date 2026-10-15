@@ -1,4 +1,10 @@
-"""Shared helpers for clean Telegram keyboard labels."""
+"""Shared helpers for Telegram keyboard labels.
+
+Button labels KEEP their emoji — emoji are part of the UX (color dots,
+section icons, state markers). ``normalize_button_text`` exists only for
+emoji-insensitive *comparison* of reply-keyboard presses (clients may send
+the label with or without variation selectors).
+"""
 from __future__ import annotations
 
 import re
@@ -18,10 +24,27 @@ _EMOJI_RE = re.compile(
     "]+"
 )
 
-def strip_button_emoji(value: str) -> str:
-    """Remove decorative emoji from button labels while preserving text."""
+
+def normalize_button_text(value: str) -> str:
+    """Comparison-only form of a label: emoji removed, whitespace collapsed.
+
+    Used to match incoming reply-keyboard messages against expected menu
+    buttons regardless of emoji/variation-selector differences between
+    clients. Never use this to *render* a button — rendering keeps emoji.
+    """
     return re.sub(r"\s{2,}", " ", _EMOJI_RE.sub("", str(value or ""))).strip()
 
+
+def strip_button_emoji(value: str) -> str:
+    """Deprecated: labels keep their emoji now. Kept for compatibility."""
+    return str(value or "").strip()
+
+
 def inline_button(text: str, *args, **kwargs):
-    """Create an inline button with emoji-free text and preserve all options."""
-    return _TelegramInlineKeyboardButton(strip_button_emoji(text), *args, **kwargs)
+    """Create an inline button preserving the label exactly (emoji included).
+
+    Any legacy ``style=`` kwarg is ignored — Telegram inline buttons have no
+    style/color option, and passing it would raise a TypeError.
+    """
+    kwargs.pop("style", None)
+    return _TelegramInlineKeyboardButton(str(text or "").strip(), *args, **kwargs)
