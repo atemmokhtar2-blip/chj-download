@@ -111,6 +111,12 @@ def _make_post_init(is_clone: bool):
             system_logger.info("Clone bot @%s started.", application.bot.username)
             return
         system_logger.info("Bot starting up...")
+        try:
+            from services import referral
+            referral.set_notifier(application.bot, asyncio.get_running_loop())
+            system_logger.info("Milestone notifier registered.")
+        except Exception:
+            system_logger.exception("Milestone notifier registration failed")
         asyncio.create_task(cleanup_temp_files())
         asyncio.create_task(cleanup_old_cache())
         asyncio.create_task(cleanup_old_history())

@@ -201,6 +201,7 @@ def init_referral_schema() -> None:
             user_id {bpk},
             qualified_count INTEGER DEFAULT 0,
             status TEXT DEFAULT 'progress',
+            notified_milestone INTEGER DEFAULT 0,
             claimed_at TIMESTAMP,
             instance_id {bi}
         )""",
@@ -251,4 +252,27 @@ def init_referral_schema() -> None:
                 c.execute(stmt)
             except Exception:
                 logger.debug("Index skipped: %s", stmt[:60])
+    ensure_reward_milestone_column()
     logger.info("Referral schema ready on backend=%s", BACKEND)
+
+
+def ensure_reward_milestone_column() -> None:
+    """Additive migration for the ``notified_milestone`` reward column.
+
+    New installs already get it from the CREATE TABLE DDL above; this upgrades
+    databases created before milestone notifications existed, on BOTH backends
+    (Postgres + SQLite fallback).
+    """
+    try:
+        if BACKEND == "postgres":
+            execute(
+                "ALTER TABLE referral_rewards "
+                "ADD COLUMN IF NOT EXISTS notified_milestone INTEGER DEFAULT 0"
+            )
+            return
+        with ref_cursor(commit=False) as c:
+            cols = {row.get("name") for row in c.execute("PRAGMA table_info(referral_rewards)").fetchall()}
+        if "notified_milestone" not in cols:
+            execute("ALTER TABLE referral_rewards ADD COLUMN notified_milestone INTEGER DEFAULT 0")
+    except Exception:
+        logger.exception("referral milestone column migration failed")

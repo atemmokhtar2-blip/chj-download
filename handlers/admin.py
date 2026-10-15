@@ -26,6 +26,7 @@ from database.downloads import (
     get_downloads_24h, get_total_data_bytes, get_top_user_today,
 )
 from database.cache import get_cache_count, get_cache_hits
+from database import support
 from database.broadcast import log_broadcast, get_broadcast_history
 from database.admin_audit import log_admin_action, get_admin_audit, get_admin_audit_stats
 from services.engine_maintenance import get_ytdlp_version, update_ytdlp
@@ -46,7 +47,9 @@ async def _edit(query, text, **kwargs):
 ADMIN_CONVERSATION_STATES = {}
 ADMIN_LAST_PAGE: dict[int, int] = {}
 ADMIN_USER_FILTER: dict[int, str] = {}
-_ADMIN_TEXT_STATES = {"search", "ban", "broadcast"}
+_ADMIN_TEXT_STATES = {"search", "ban", "broadcast", "support_reply"}
+ADMIN_SUPPORT_REPLY_TARGET: dict[int, int] = {}
+_SUP_STATUS = {"open": "🔓 مفتوحة", "answered": "🟢 تم الرد", "closed": "⚫ مغلقة"}
 
 
 def _clear_admin_state(user_id: int) -> None:
@@ -393,8 +396,120 @@ async def admin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "📢 أرسل الآن الرسالة التي تريد إذاعتها لكل المستخدمين.",
             reply_markup=InlineKeyboardMarkup(keyboard),
         )
+    elif data == "admin_support":
+        _clear_admin_state(user.id)
+        await _show_support_tickets(query)
+    elif data == "admin_support_answered":
+        _clear_admin_state(user.id)
+        await _show_support_tickets(query, status="answered")
+    elif data == "admin_support_closed":
+        _clear_admin_state(user.id)
+        await _show_support_tickets(query, status="closed")
+    elif data.startswith("admin_support_view_"):
+        _clear_admin_state(user.id)
+        await _show_support_ticket(query, _callback_int_suffix(data))
+    elif data.startswith("admin_support_reply_"):
+        _clear_admin_state(user.id)
+        tid = _callback_int_suffix(data)
+        ticket = support.get_ticket(tid)
+        if not ticket:
+            await query.answer("⚠️ التذكرة غير موجودة.", show_alert=True)
+            return
+        ADMIN_SUPPORT_REPLY_TARGET[user.id] = tid
+        ADMIN_CONVERSATION_STATES[user.id] = "support_reply"
+        keyboard = [[inline_button("🔙 إلغاء", callback_data=f"admin_support_view_{tid}")]]
+        await _edit(query,
+            f"📝 <b>الرد على التذكرة {ticket['ticket_no']}</b>\n\n"
+            "أرسل الآن نص الرد — هيوصله إشعار فوري للمستخدم.",
+            parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard),
+        )
+    elif data.startswith("admin_support_close_"):
+        _clear_admin_state(user.id)
+        tid = _callback_int_suffix(data)
+        ticket = support.get_ticket(tid)
+        if ticket:
+            support.close_ticket(tid)
+            log_admin_action(user.id, "support_close", detail=str(ticket.get("ticket_no", "")))
+            try:
+                await context.bot.send_message(
+                    ticket["user_id"],
+                    f"🛟 تذكرتك <code>{ticket['ticket_no']}</code> اتحولت إلى <b>مغلقة</b>.",
+                    parse_mode="HTML",
+                )
+            except Exception:
+                pass
+        await _show_support_ticket(query, tid)
+    elif data.startswith("admin_support_open_"):
+        _clear_admin_state(user.id)
+        tid = _callback_int_suffix(data)
+        ticket = support.get_ticket(tid)
+        if ticket:
+            support.reopen_ticket(tid)
+            log_admin_action(user.id, "support_reopen", detail=str(ticket.get("ticket_no", "")))
+        await _show_support_ticket(query, tid)
     else:
         logger.warning("Unhandled admin callback after validation: %s", data)
+
+
+async def _show_support_tickets(query, status: str | None = None) -> None:
+    tickets = support.list_tickets(status=status, limit=20)
+    open_count = support.count_tickets("open")
+    answered_count = support.count_tickets("answered")
+    text = (
+        "🛟 <b>تذاكر الدعم الفني</b>\n\n"
+        f"🔓 مفتوحة: <b>{open_count}</b> • 🟢 تم الرد: <b>{answered_count}</b>\n\n"
+    )
+    if not tickets:
+        text += "لا توجد تذاكر حاليًا."
+    else:
+        lines = []
+        for t in tickets:
+            lines.append(
+                f"• <code>{t['ticket_no']}</code> — {escape(str(t.get('subject') or t.get('category')))} "
+                f"— {_SUP_STATUS.get(t.get('status'), t.get('status'))}"
+            )
+        text += "\n".join(lines)
+    rows = [
+        [
+            inline_button("🔓 المفتوحة", callback_data="admin_support"),
+            inline_button("🟢 تم الرد", callback_data="admin_support_answered"),
+            inline_button("⚫ المغلقة", callback_data="admin_support_closed"),
+        ],
+    ]
+    for t in tickets[:12]:
+        rows.append([inline_button(f"🎫 {t['ticket_no']}", callback_data=f"admin_support_view_{t['id']}")])
+    rows.append([inline_button("🔙 لوحة التحكم", callback_data="admin_panel")])
+    await _edit(query, text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(rows))
+
+
+async def _show_support_ticket(query, ticket_id: int | None) -> None:
+    ticket = support.get_ticket(ticket_id) if ticket_id else None
+    if not ticket:
+        await _edit(
+            query, "❌ التذكرة غير موجودة.", parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup([[inline_button("🔙 تذاكر الدعم", callback_data="admin_support")]]),
+        )
+        return
+    msgs = support.get_messages(ticket["id"], limit=30)
+    lines = []
+    for m in msgs:
+        who = "🛟 الدعم" if m["sender"] == "admin" else "👤 المستخدم"
+        created = (m.get("created_at") or "—")[:16]
+        lines.append(f"{who} • <code>{created}</code>\n{escape(str(m.get('body') or ''))}")
+    text = (
+        f"🎫 <b>{ticket['ticket_no']}</b>\n"
+        f"👤 المستخدم: <code>{ticket['user_id']}</code>\n"
+        f"🏷 النوع: <b>{escape(str(ticket.get('subject') or ticket.get('category')))}</b>\n"
+        f"📌 الحالة: {_SUP_STATUS.get(ticket.get('status'), ticket.get('status'))}\n\n"
+        f"<b>المحادثة:</b>\n" + ("\n\n".join(lines) if lines else "لا توجد رسائل بعد.")
+    )
+    rows = [[inline_button("📝 رد على التذكرة", callback_data=f"admin_support_reply_{ticket['id']}")]]
+    if ticket["status"] != "closed":
+        rows.append([inline_button("⚫ إغلاق التذكرة", callback_data=f"admin_support_close_{ticket['id']}")])
+    else:
+        rows.append([inline_button("🔓 إعادة فتح التذكرة", callback_data=f"admin_support_open_{ticket['id']}")])
+    rows.append([inline_button("🔙 تذاكر الدعم", callback_data="admin_support")])
+    await _edit(query, text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(rows))
 
 
 async def _show_engine_status(query) -> None:
@@ -559,6 +674,7 @@ def _build_admin_panel(lang: str):
         ],
         [
             inline_button("🔐 فحص الأمان", callback_data="admin_security"),
+            inline_button("🛟 تذاكر الدعم", callback_data="admin_support"),
         ],
     ]
     return text, InlineKeyboardMarkup(keyboard)
@@ -828,7 +944,11 @@ def _invalid_admin_callback(data: str) -> bool:
     if data.startswith("admin_users_page_"):
         page = _callback_int_suffix(data)
         return page is None or page < 0
-    if data.startswith(("admin_user_detail_", "admin_unban_", "admin_ban_confirm_")):
+    if data.startswith((
+            "admin_user_detail_", "admin_unban_", "admin_ban_confirm_",
+            "admin_support_view_", "admin_support_reply_",
+            "admin_support_close_", "admin_support_open_",
+    )):
         return _callback_int_suffix(data) is None
     known = {
         "admin_panel", "admin_users", "admin_broadcast", "admin_announce_update",
@@ -836,6 +956,7 @@ def _invalid_admin_callback(data: str) -> bool:
         "admin_ban", "admin_maintenance_on", "admin_maintenance_off", "admin_send_broadcast",
         "admin_health", "admin_audit", "admin_security",
         "admin_users_active", "admin_users_banned",
+        "admin_support", "admin_support_answered", "admin_support_closed",
     }
     return data not in known
 
@@ -952,6 +1073,36 @@ async def admin_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
             parse_mode="HTML",
             reply_markup=InlineKeyboardMarkup(
                 [[inline_button("🔙 لوحة التحكم", callback_data="admin_panel")]]
+            ),
+        )
+        return True
+
+    elif state == "support_reply":
+        ticket_id = ADMIN_SUPPORT_REPLY_TARGET.pop(user_id, None)
+        ticket = support.get_ticket(ticket_id) if ticket_id else None
+        if not ticket:
+            await update.message.reply_text(
+                "❌ التذكرة غير موجودة. ارجع وأعد المحاولة.",
+                parse_mode="HTML",
+                reply_markup=InlineKeyboardMarkup([[inline_button("🔙 تذاكر الدعم", callback_data="admin_support")]]),
+            )
+            return True
+        body = text[:1900]
+        support.add_admin_reply(ticket["id"], body)
+        log_admin_action(user_id, "support_reply", detail=str(ticket.get("ticket_no", "")))
+        try:
+            await context.bot.send_message(
+                ticket["user_id"],
+                f"🛟 <b>رد جديد على تذكرتك <code>{ticket['ticket_no']}</code></b>\n\n{body}",
+                parse_mode="HTML",
+            )
+        except Exception:
+            pass
+        await update.message.reply_text(
+            f"✅ تم إرسال الرد لصاحب التذكرة <code>{ticket['ticket_no']}</code>.",
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup(
+                [[inline_button("🎫 عرض التذكرة", callback_data=f"admin_support_view_{ticket['id']}")]]
             ),
         )
         return True

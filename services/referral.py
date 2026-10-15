@@ -23,6 +23,7 @@ Tokens are secrets with full bot privileges:
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import hashlib
 import logging
@@ -38,6 +39,37 @@ from config.settings import (
 )
 
 logger = logging.getLogger(__name__)
+
+# ---- milestone notifications ---------------------------------------------------
+_notifier_bot = None
+_notifier_loop = None
+
+
+def set_notifier(bot, loop=None) -> None:
+    """Register the main bot so the engine can push milestone notifications."""
+    global _notifier_bot, _notifier_loop
+    _notifier_bot = bot
+    _notifier_loop = loop
+
+
+def notify_user(user_id: int, text: str) -> bool:
+    """Best-effort push of a milestone message through the main bot."""
+    if not _notifier_bot:
+        return False
+    try:
+        coro = _notifier_bot.send_message(
+            chat_id=int(user_id),
+            text=text,
+            parse_mode="HTML",
+            disable_web_page_preview=True,
+        )
+        if _notifier_loop is not None:
+            asyncio.run_coroutine_threadsafe(coro, _notifier_loop)
+        return True
+    except Exception:
+        logger.exception("milestone notification failed uid=%s", user_id)
+        return False
+
 
 # ---- anti-fraud knobs --------------------------------------------------------
 MAX_BINDS_PER_HOUR = int(os.getenv("REFERRAL_MAX_BINDS_PER_HOUR", "20"))
@@ -236,6 +268,7 @@ def _qualify_referral(referred_id: int, reason: str) -> bool:
     result = _recount_and_update_reward(referrer_id)
     log_activation(referrer_id, None, "referral_qualified",
                    f"referred={referred_id} reason={reason} total={result['qualified']}")
+    _auto_notify_milestones(referrer_id)
     return True
 
 
@@ -298,6 +331,97 @@ def get_referrals_list(user_id: int, limit: int = 10, offset: int = 0) -> list[d
         "SELECT referred_id, status, bound_at, qualified_at FROM referrals "
         "WHERE referrer_id = ? ORDER BY id DESC LIMIT ? OFFSET ?",
         (int(user_id), limit, offset),
+    )
+
+
+# ---- milestones & smart state ------------------------------------------------------
+
+MILESTONE_STEPS = (50, 60)
+
+
+def milestone_thresholds() -> list[int]:
+    """Breakpoints worthy of a push notification, incl. the clone target."""
+    return sorted({50, 60, max(1, REFERRAL_TARGET)})
+
+
+def claim_new_milestones(user_id: int) -> list[int]:
+    """Return milestone values crossed since the last notification (idempotent).
+
+    Reading this MUTATES ``referral_rewards.notified_milestone`` so a milestone
+    is announced only once. Safe to call lazily on page opens — it returns
+    ``[]`` when the automatic path already notified.
+    """
+    uid = int(user_id)
+    _ensure_reward_row(uid)
+    row = pg.fetchone("SELECT notified_milestone FROM referral_rewards WHERE user_id = ?", (uid,)) or {}
+    notified = int(row.get("notified_milestone") or 0)
+    qualified = int(get_stats(uid)["qualified"])
+    fresh = [t for t in milestone_thresholds() if qualified >= t and notified < t]
+    if not fresh:
+        return []
+    top = max(fresh)
+    pg.execute("UPDATE referral_rewards SET notified_milestone = ? WHERE user_id = ?", (top, uid))
+    for t in sorted(fresh):
+        log_activation(uid, None, "milestone_reached", f"qualified={qualified} milestone={t}")
+    return sorted(fresh)
+
+
+def milestone_text(value: int) -> str:
+    v = int(value)
+    if v >= REFERRAL_TARGET:
+        return (
+            f"🏆 <b>مبروك!</b> أكملت <b>{v}</b> مستخدمًا مؤهلًا.\n"
+            "أصبحت مؤهلًا الآن لتفعيل نسختك الخاصة.\n"
+            "افتح 🎁 <b>اكسب نسختك من البوت</b> واضغط «🚀 فعّل نسختك الآن»."
+        )
+    if v >= 60:
+        return f"🔥 <b>قربت!</b> وصلت إلى <b>{v}</b> مستخدمًا مؤهلًا — باقي القليل على هدفك. 🎯"
+    if v >= 50:
+        return f"🎉 <b>إنجاز كبير!</b> وصلت إلى <b>{v}</b> مستخدمًا مؤهلًا — أنت في منتصف الطريق. 💪"
+    return f"🎉 وصلت إلى <b>{v}</b> مستخدمًا مؤهلًا."
+
+
+def _auto_notify_milestones(user_id: int) -> None:
+    try:
+        for m in claim_new_milestones(user_id):
+            notify_user(user_id, milestone_text(m))
+    except Exception:
+        logger.exception("milestone auto-notify failed uid=%s", user_id)
+
+
+def referrer_stage(stats: dict) -> str:
+    """Pure state machine for the smart «نسختي» button.
+
+    Returns:
+      ``active``          — clone linked and active,
+      ``awaiting_token``  — reward claimed but token not yet linked,
+      ``eligible``        — reached target, clone not requested yet,
+      ``progress``        — still collecting qualified referrals.
+    """
+    inst = stats.get("instance") or {}
+    if inst.get("status") == "active" and inst.get("bot_username"):
+        return "active"
+    reward = stats.get("reward_status", "progress")
+    if reward in ("awaiting_token", "claimed"):
+        return "awaiting_token"
+    if reward == "eligible":
+        return "eligible"
+    return "progress"
+
+
+def get_user_activity_log(user_id: int, limit: int = 12) -> list[dict]:
+    return pg.fetchall(
+        "SELECT action, details, instance_id, created_at FROM activation_log "
+        "WHERE owner_id = ? ORDER BY id DESC LIMIT ?",
+        (int(user_id), limit),
+    )
+
+
+def get_instance(instance_id: int) -> dict | None:
+    return pg.fetchone(
+        "SELECT id, owner_id, bot_id, bot_username, status, last_error, activated_at "
+        "FROM bot_instances WHERE id = ?",
+        (int(instance_id),),
     )
 
 

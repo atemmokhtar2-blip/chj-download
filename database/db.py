@@ -163,6 +163,29 @@ def init_db():
             CREATE INDEX IF NOT EXISTS idx_downloads_date    ON downloads(created_at);
             CREATE INDEX IF NOT EXISTS idx_cache_hash        ON file_cache(url_hash);
             CREATE INDEX IF NOT EXISTS idx_admin_audit_date  ON admin_audit_log(created_at);
+
+            CREATE TABLE IF NOT EXISTS support_tickets (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                ticket_no   TEXT NOT NULL UNIQUE,
+                user_id     INTEGER NOT NULL,
+                category    TEXT NOT NULL DEFAULT 'other',
+                subject     TEXT NOT NULL DEFAULT '',
+                status      TEXT NOT NULL DEFAULT 'open',
+                created_at  TEXT DEFAULT (datetime('now')),
+                updated_at  TEXT DEFAULT (datetime('now'))
+            );
+
+            CREATE TABLE IF NOT EXISTS support_ticket_messages (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                ticket_id   INTEGER NOT NULL,
+                sender      TEXT NOT NULL DEFAULT 'user',
+                body        TEXT NOT NULL,
+                created_at  TEXT DEFAULT (datetime('now')),
+                FOREIGN KEY (ticket_id) REFERENCES support_tickets(id)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_support_user ON support_tickets(user_id);
+            CREATE INDEX IF NOT EXISTS idx_support_msg  ON support_ticket_messages(ticket_id);
         """)
     logger.info("Database initialized.")
     ensure_cache_schema()
