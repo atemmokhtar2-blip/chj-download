@@ -189,6 +189,28 @@ def init_db():
         """)
     logger.info("Database initialized.")
     ensure_cache_schema()
+    ensure_owner_schema()
+
+
+def ensure_owner_schema():
+    """Additive migrations for the owner panel (safe on existing DBs).
+
+    * ``users.ban_reason`` / ``users.banned_at`` — every ban carries a reason
+      and a timestamp (shown in the owner's banned list and audit trail).
+    * ``extra_admins`` — admins granted at runtime BY THE OWNER (never owners).
+    """
+    with db_cursor() as c:
+        cols = {row[1] for row in c.execute("PRAGMA table_info(users)").fetchall()}
+        if "ban_reason" not in cols:
+            c.execute("ALTER TABLE users ADD COLUMN ban_reason TEXT DEFAULT ''")
+        if "banned_at" not in cols:
+            c.execute("ALTER TABLE users ADD COLUMN banned_at TEXT")
+        c.execute("""
+            CREATE TABLE IF NOT EXISTS extra_admins (
+                user_id   INTEGER PRIMARY KEY,
+                added_at  TEXT DEFAULT (datetime('now'))
+            )
+        """)
 
 def ensure_cache_schema():
     """Additive migrations for fingerprint + vault columns (safe on existing DBs)."""

@@ -1,0 +1,1414 @@
+"""👑 Owner Control Center — لوحة إدارة النظام للمالك الأساسي فقط.
+
+Design contract (implemented exactly as specified):
+  * OWNER-ONLY **IN CODE** — every command, every callback and every text
+    state re-verifies ``is_owner(user.id)`` server-side. Hiding buttons is
+    cosmetic; the gate here is what actually protects the panel. Any denied
+    attempt is written to the security audit trail.
+  * The panel only runs in PRIVATE chat of the MAIN bot (never inside a
+    clone instance).
+  * Every sensitive action follows the confirmed path:
+      ban          → reason (text) → confirmation → execute + audit
+      broadcast    → text → preview + recipients count → confirm → report
+      stop clone   → shows instance name + owner → confirm → execute + audit
+      edit admins  → confirm the exact change → execute + audit
+      change rules → shows current vs new value → confirm → save + audit
+      cleanup      → shows targeted size → confirm → execute + result + audit
+
+Callback namespace: ``own_*`` (registered before the generic admin handler).
+"""
+
+from __future__ import annotations
+
+import asyncio
+import csv
+import io
+import logging
+import os
+import time
+from datetime import datetime
+from html import escape
+
+from telegram import Update, InlineKeyboardMarkup, InputFile
+from telegram.ext import ContextTypes
+
+from middlewares.auth import is_owner, is_admin
+from utils.button_text import inline_button
+from utils.telegram_safe import safe_edit
+from config.settings import OWNER_ID, ADMIN_IDS, TEMP_DIR
+from database.admin_audit import log_admin_action, get_admin_audit, get_admin_audit_stats
+from database.users import (
+    get_user, get_total_users, get_new_users_today, get_new_users_week,
+    get_new_users_month, get_active_today, get_active_24h,
+    get_banned_users_count, get_users_page, search_users, get_all_user_ids,
+    ban_user, unban_user, get_top_users, count_users, get_banned_users,
+    export_users_csv_rows,
+)
+from database.downloads import (
+    get_downloads_today, get_downloads_week, get_downloads_month,
+    get_downloads_by_platform, get_total_downloads, get_downloads_24h,
+    get_total_data_bytes, get_user_download_stats,
+)
+from database.broadcast import log_broadcast, get_broadcast_history
+from database.bot_settings import (
+    get_setting, set_setting, list_extra_admins, add_extra_admin,
+    remove_extra_admin,
+)
+from database import support
+from services import referral
+from services.instance_manager import is_clone_bot, spawn_instance, stop_instance
+
+logger = logging.getLogger(__name__)
+
+_STARTED_AT = time.time()
+
+# Owner text-input states. Keyed by owner id; values are short state names
+# with an optional payload after ":" (e.g. "ban_reason:123456").
+OWNER_STATES: dict[int, str] = {}
+# Pending confirmation payloads (ban reason, broadcast draft, target...).
+OWNER_PENDING: dict[int, dict] = {}
+
+_SUP_STATUS = {"open": "🔓 مفتوحة", "answered": "🟢 تم الرد", "closed": "⚫ مغلقة"}
+_INST_STATUS = {
+    "pending_token": "🟡 بانتظار التوكن",
+    "active": "🟢 نشطة",
+    "disabled": "⚫ موقوفة oleh المالك",
+    "error": "🔴 خطأ",
+}
+
+
+def _uptime() -> str:
+    secs = int(time.time() - _STARTED_AT)
+    h, m = secs // 3600, (secs % 3600) // 60
+    if h >= 24:
+        return f"{h // 24} يوم {h % 24} ساعة"
+    return f"{h} ساعة {m} دقيقة" if h else f"{m} دقيقة"
+
+
+def _fmt_bytes(size: int) -> str:
+    size = int(size or 0)
+    if size < 1024:
+        return f"{size} B"
+    if size < 1024 * 1024:
+        return f"{size / 1024:.1f} KB"
+    if size < 1024 * 1024 * 1024:
+        return f"{size / (1024 * 1024):.1f} MB"
+    return f"{size / (1024 * 1024 * 1024):.2f} GB"
+
+
+def _temp_dir_stats() -> tuple[int, int]:
+    """(bytes, file_count) currently sitting in TEMP_DIR."""
+    total, count = 0, 0
+    try:
+        for dirpath, _d, files in os.walk(TEMP_DIR):
+            for name in files:
+                try:
+                    total += os.path.getsize(os.path.join(dirpath, name))
+                    count += 1
+                except OSError:
+                    continue
+    except Exception:
+        pass
+    return total, count
+
+
+async def _edit(query, text, **kwargs):
+    return await safe_edit(query.edit_message_text, text=text, **kwargs)
+
+
+def _kb(rows) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(rows)
+
+
+def _back(cb: str = "own_home", label: str = "🔙 مركز التحكم") -> list:
+    return [[inline_button(label, callback_data=cb)]]
+
+
+def _suffix_int(data: str) -> int | None:
+    try:
+        return int(data.rsplit("_", 1)[-1])
+    except (TypeError, ValueError):
+        return None
+
+
+# ---- the gate ------------------------------------------------------------------
+
+def _owner_gate(update: Update) -> bool:
+    """THE protection layer: verified in code on EVERY interaction.
+
+    Denied attempts are recorded in the security audit trail so any probing
+    is visible to the owner.
+    """
+    user = update.effective_user
+    if user and is_owner(user.id):
+        # Private chat of the MAIN bot only — never inside a clone.
+        bot_username = getattr(update.effective_chat, "username", None)
+        chat_type = (update.effective_chat.type if update.effective_chat else "")
+        if chat_type != "private":
+            return False
+        return True
+    try:
+        log_admin_action(
+            int(user.id) if user else 0,
+            "owner_panel_denied",
+            detail="محاولة وصول غير مصرح بها للوحة المالك",
+        )
+    except Exception:
+        pass
+    return False
+
+
+def _clone_guard(update: Update) -> bool:
+    """Owner panel must not run inside clone instances."""
+    try:
+        bot = update.effective_message.bot if update.effective_message else None
+        if bot and is_clone_bot(getattr(bot, "username", None)):
+            return False
+    except Exception:
+        pass
+    return True
+
+
+# ---- command ---------------------------------------------------------------------
+
+async def owner_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not _owner_gate(update) or not _clone_guard(update):
+        await update.effective_message.reply_text(
+            "⛔ هذه اللوحة محمية ومخصصة للمالك الأساسي فقط."
+        )
+        return
+    OWNER_STATES.pop(update.effective_user.id, None)
+    text, keyboard = _build_home()
+    await update.effective_message.reply_text(text, parse_mode="HTML", reply_markup=keyboard)
+
+
+# ---- home dashboard ----------------------------------------------------------------
+
+def _build_home() -> tuple[str, InlineKeyboardMarkup]:
+    from database.pg import backend_name
+    try:
+        db_ok = get_total_users() >= 0
+    except Exception:
+        db_ok = False
+    total_users = get_total_users()
+    active_24h = get_active_24h()
+    total_downloads = get_total_downloads()
+    try:
+        overview = referral.get_network_overview()
+        inst_total = overview.get("instances_total", 0)
+        inst_active = overview.get("instances", {}).get("active", 0)
+    except Exception:
+        inst_total = inst_active = 0
+
+    text = (
+        "👑 <b>مركز التحكم الرئيسي</b>\n"
+        "<b>المالك الأساسي • لوحة إدارة النظام</b>\n\n"
+        "🟢 <b>متصل</b>\n"
+        f"حالة البوت: <b>يعمل</b> • قاعدة البيانات: <b>{'متصلة' if db_ok else 'غير متصلة'} ({escape(backend_name())})</b>\n"
+        f"وقت التشغيل: <b>{_uptime()}</b> • آخر تحديث: <code>{datetime.now().strftime('%Y-%m-%d %H:%M')}</code>\n\n"
+        f"👥 كل المستخدمين: <b>{total_users}</b>\n"
+        f"⚡ نشاط آخر 24 ساعة: <b>{active_24h}</b>\n"
+        f"📥 كل التحميلات: <b>{total_downloads}</b>\n"
+        f"🤖 النسخ الخاصة: <b>{inst_total}</b> (نشطة: <b>{inst_active}</b>)\n\n"
+        "<b>القائمة الرئيسية</b>"
+    )
+    keyboard = _kb([
+        [inline_button("👥 المستخدمون", callback_data="own_users"),
+         inline_button("🎁 الإحالات", callback_data="own_refs")],
+        [inline_button("🤖 إدارة النسخ", callback_data="own_inst"),
+         inline_button("📥 التحميلات", callback_data="own_dl")],
+        [inline_button("📢 الرسائل والإذاعة", callback_data="own_bc"),
+         inline_button("🛟 الدعم الفني", callback_data="own_sup")],
+        [inline_button("📈 التقارير", callback_data="own_rep"),
+         inline_button("⚙️ الإعدادات", callback_data="own_set")],
+        [inline_button("🔄 تحديث الأرقام", callback_data="own_home")],
+    ])
+    return text, keyboard
+
+
+# ---- users section --------------------------------------------------------------------
+
+def _users_home_text() -> str:
+    return (
+        "👥 <b>إدارة المستخدمين</b>\n"
+        "البحث والتحكم في كل حساب\n\n"
+        f"• الإجمالي: <b>{get_total_users()}</b>\n"
+        f"• نشط اليوم: <b>{get_active_today()}</b> • آخر 24 ساعة: <b>{get_active_24h()}</b>\n"
+        f"• جديد اليوم: <b>{get_new_users_today()}</b> • الأسبوع: <b>{get_new_users_week()}</b> • الشهر: <b>{get_new_users_month()}</b>\n"
+        f"• محظور: <b>{get_banned_users_count()}</b>"
+    )
+
+
+def _users_home_kb() -> InlineKeyboardMarkup:
+    return _kb([
+        [inline_button("📃 كل المستخدمين", callback_data="own_users_page_0"),
+         inline_button("🔍 بحث عن مستخدم", callback_data="own_users_search")],
+        [inline_button("✅ النشطون", callback_data="own_users_active"),
+         inline_button("🆕 المستخدمون الجدد", callback_data="own_users_new")],
+        [inline_button("🚫 المحظورون", callback_data="own_users_banned"),
+         inline_button("🏆 أعلى المستخدمين", callback_data="own_users_top")],
+        [inline_button("📤 تصدير القائمة (CSV)", callback_data="own_users_export")],
+        *_back(),
+    ])
+
+
+async def _show_users_page(query, page: int = 0, status: str = "all"):
+    per_page = 8
+    if status not in ("all", "active", "banned"):
+        status = "all"
+    total = count_users(status)
+    total_pages = max(1, (total + per_page - 1) // per_page)
+    page = max(0, min(page or 0, total_pages - 1))
+    users = get_users_page(offset=page * per_page, limit=per_page, status=status)
+    label = {"all": "الكل", "active": "النشطون", "banned": "المحظورون"}[status]
+
+    if not users:
+        await _edit(query,
+            f"👥 <b>المستخدمون — {label}</b>\n\nلا يوجد مستخدمون في هذه الفئة.",
+            parse_mode="HTML", reply_markup=_users_home_kb())
+        return
+
+    lines = []
+    for u in users:
+        icon = "🚫" if u.get("is_banned") else "✅"
+        name = escape(u.get("first_name") or "بدون اسم")
+        uname = escape(u.get("username") or "—")
+        lines.append(
+            f"{icon} <b>{name}</b> @{uname}\n"
+            f"    🆔 <code>{u['user_id']}</code> • 📥 <b>{u.get('downloads', 0)}</b> • 🕑 {(u.get('last_seen') or '—')[:10]}"
+        )
+    text = (
+        f"👥 <b>قائمة المستخدمين — {label}</b>\n"
+        f"الصفحة <b>{page + 1}</b>/<b>{total_pages}</b> • العدد: <b>{total}</b>\n\n"
+        + "\n".join(lines)
+    )
+    rows = []
+    row = []
+    for u in users:
+        row.append(inline_button(f"👤 {u['user_id']}", callback_data=f"own_user_{u['user_id']}"))
+        if len(row) == 2:
+            rows.append(row)
+            row = []
+    if row:
+        rows.append(row)
+    nav = []
+    if page > 0:
+        nav.append(inline_button("⬅️ السابق", callback_data=f"own_users_page_{page - 1}"))
+    if page < total_pages - 1:
+        nav.append(inline_button("التالي ➡️", callback_data=f"own_users_page_{page + 1}"))
+    if nav:
+        rows.append(nav)
+    rows.append([inline_button("🔙 إدارة المستخدمين", callback_data="own_users")])
+    await _edit(query, text, parse_mode="HTML", reply_markup=_kb(rows))
+
+
+async def _show_banned(query):
+    banned = get_banned_users(30)
+    if not banned:
+        await _edit(query, "🚫 <b>المحظورون</b>\n\nلا يوجد مستخدمون محظورون حاليًا.",
+                    parse_mode="HTML", reply_markup=_users_home_kb())
+        return
+    lines = []
+    for b in banned:
+        name = escape(b.get("first_name") or "بدون اسم")
+        reason = escape(b.get("ban_reason") or "بدون سبب مسجل")
+        date = (b.get("banned_at") or "—")[:16]
+        lines.append(f"🚫 <b>{name}</b> • <code>{b['user_id']}</code>\n    السبب: {reason} • 🕑 {date}")
+    rows = [[inline_button(f"👤 {b['user_id']}", callback_data=f"own_user_{b['user_id']}")] for b in banned[:12]]
+    rows.append([inline_button("🔙 إدارة المستخدمين", callback_data="own_users")])
+    await _edit(query,
+        f"🚫 <b>المحظورون ({get_banned_users_count()})</b>\n\n" + "\n".join(lines),
+        parse_mode="HTML", reply_markup=_kb(rows))
+
+
+async def _show_new_users(query):
+    users = get_users_page(offset=0, limit=10, status="all")  # ordered by join_date DESC
+    lines = [
+        f"🆕 <b>{escape(u.get('first_name') or 'بدون اسم')}</b> • <code>{u['user_id']}</code>"
+        f" • 🕑 {(u.get('join_date') or '—')[:16]}"
+        for u in users
+    ] or ["• لا يوجد مستخدمون بعد."]
+    text = (
+        "🆕 <b>المستخدمون الجدد</b>\n\n"
+        f"• اليوم: <b>{get_new_users_today()}</b>\n"
+        f"• آخر ٧ أيام: <b>{get_new_users_week()}</b>\n"
+        f"• آخر ٣٠ يومًا: <b>{get_new_users_month()}</b>\n\n"
+        "<b>أحدث التسجيلات</b>\n" + "\n".join(lines)
+    )
+    rows = [[inline_button(f"👤 {u['user_id']}", callback_data=f"own_user_{u['user_id']}")] for u in users[:8]]
+    rows.append([inline_button("🔙 إدارة المستخدمين", callback_data="own_users")])
+    await _edit(query, text, parse_mode="HTML", reply_markup=_kb(rows))
+
+
+async def _show_top_users(query):
+    top_dl = get_top_users(8)
+    dl_lines = [
+        f"{i}. <b>{escape(str(u.get('first_name') or u.get('user_id')))}</b>"
+        f" • <code>{u['user_id']}</code> — <b>{u.get('downloads', 0)}</b> تحميل"
+        for i, u in enumerate(top_dl, 1)
+    ] or ["• لا يوجد نشاط بعد."]
+    try:
+        top_ref = referral.get_top_referrers(8)
+    except Exception:
+        top_ref = []
+    ref_lines = [
+        f"{i}. <code>{r['referrer_id']}</code> — <b>{int(r.get('qualified') or 0)}</b> مؤهل"
+        f" من {int(r.get('total') or 0)} إحالة"
+        for i, r in enumerate(top_ref, 1)
+    ] or ["• لا توجد إحالات بعد."]
+    text = (
+        "🏆 <b>أعلى المستخدمين</b>\n\n"
+        "📥 <b>الأكثر تحميلًا</b>\n" + "\n".join(dl_lines)
+        + "\n\n🎁 <b>الأكثر إحالات (مؤهلون)</b>\n" + "\n".join(ref_lines)
+    )
+    rows = [[inline_button(f"👤 {u['user_id']}", callback_data=f"own_user_{u['user_id']}")] for u in top_dl[:6]]
+    rows.append([inline_button("🔙 إدارة المستخدمين", callback_data="own_users")])
+    await _edit(query, text, parse_mode="HTML", reply_markup=_kb(rows))
+
+
+async def _export_csv(context, query):
+    rows = export_users_csv_rows()
+    buf = io.StringIO()
+    w = csv.writer(buf)
+    w.writerow(["user_id", "username", "first_name", "last_name", "join_date",
+                "last_seen", "is_banned", "ban_reason", "downloads"])
+    for r in rows:
+        w.writerow([r.get(k, "") for k in ("user_id", "username", "first_name", "last_name",
+                                           "join_date", "last_seen", "is_banned", "ban_reason", "downloads")])
+    data = buf.getvalue().encode("utf-8-sig")
+    await context.bot.send_document(
+        chat_id=query.from_user.id,
+        document=InputFile(io.BytesIO(data), filename=f"users_{datetime.now():%Y%m%d_%H%M}.csv"),
+        caption=f"📤 تصدير {len(rows)} مستخدم — الحقول المسموح بها للمالك فقط.",
+    )
+    log_admin_action(query.from_user.id, "owner_export_users", detail=f"rows={len(rows)}")
+    await query.answer("✅ تم تجهيز الملف وإرساله.", show_alert=False)
+
+
+# ---- user profile ----------------------------------------------------------------------
+
+def _user_profile(target_id: int, tab: str = "main") -> tuple[str, InlineKeyboardMarkup] | None:
+    user = get_user(target_id)
+    if not user:
+        return None
+    full_name = " ".join(str(p) for p in [user.get("first_name"), user.get("last_name")] if p) or "—"
+    stats = get_user_download_stats(target_id)
+    is_banned = bool(user.get("is_banned"))
+
+    header = (
+        f"👤 <b>الملف الكامل</b>\n\n"
+        f"🆔 <code>{target_id}</code>\n"
+        f"👤 الاسم: <b>{escape(full_name)}</b>\n"
+        f"🔖 اليوزر: @{escape(user.get('username') or '—')}\n"
+        f"📅 التسجيل: <code>{escape((user.get('join_date') or '—')[:16])}</code>\n"
+        f"🕑 آخر ظهور: <code>{escape((user.get('last_seen') or '—')[:16])}</code>\n"
+        f"📌 الحالة: <b>{'🚫 محظور' if is_banned else '✅ نشط'}</b>\n"
+    )
+    if is_banned and user.get("ban_reason"):
+        header += f"🚫 سبب الحظر: <b>{escape(user.get('ban_reason'))}</b>\n"
+
+    if tab == "refs":
+        try:
+            counts = referral.get_referrer_counts(target_id)
+            referred_by = referral.get_referrer_of(target_id)
+        except Exception:
+            counts, referred_by = {}, None
+        body = (
+            "\n🎁 <b>الإحالات</b>\n"
+            f"• أحال: <b>{counts.get('total', 0)}</b> (مؤهلون: <b>{counts.get('qualified', 0)}</b>"
+            f" • معلقون: {counts.get('pending', 0)} • مشبوهون: {counts.get('suspicious', 0)})\n"
+        )
+        if referred_by:
+            body += (
+                f"• أُحيل بواسطة: <code>{referred_by.get('referrer_id')}</code>"
+                f" • الحالة: {referred_by.get('status')}\n"
+            )
+        else:
+            body += "• لم يُحَل بواسطة أحد (تسجيل مباشر).\n"
+    elif tab == "inst":
+        try:
+            inst = referral.get_instance_by_owner(target_id)
+        except Exception:
+            inst = None
+        if inst:
+            body = (
+                "\n🤖 <b>النسخة الخاصة</b>\n"
+                f"• البوت: <b>@{escape(inst.get('bot_username') or '—')}</b>\n"
+                f"• الحالة: {_INST_STATUS.get(inst.get('status'), inst.get('status'))}\n"
+                f"• آخر خطأ: <code>{escape(inst.get('last_error') or 'لا يوجد')}</code>\n"
+                f"• التفعيل: <code>{escape((inst.get('activated_at') or '—')[:16] if inst.get('activated_at') else '—')}</code>\n"
+            )
+        else:
+            body = "\n🤖 <b>النسخة الخاصة</b>\n• لا يملك نسخة خاصة.\n"
+    else:
+        body = (
+            "\n📥 <b>نشاط التحميل</b>\n"
+            f"• الإجمالي: <b>{stats.get('total', 0)}</b>\n"
+            f"• فيديو: <b>{stats.get('video', 0)}</b> • صوت: <b>{stats.get('audio', 0)}</b>\n"
+        )
+
+    rows = [
+        [inline_button("📋 النشاط والتسجيل", callback_data=f"own_user_{target_id}"),
+         inline_button("🎁 الإحالات", callback_data=f"own_user_{target_id}_refs")],
+        [inline_button("🤖 النسخة الخاصة", callback_data=f"own_user_{target_id}_inst")],
+    ]
+    if is_banned:
+        rows.append([inline_button("✅ فك الحظر", callback_data=f"own_unban_{target_id}")])
+    else:
+        rows.append([inline_button("🚫 حظر المستخدم", callback_data=f"own_ban_{target_id}")])
+    rows.append([inline_button("🔙 المستخدمون", callback_data="own_users")])
+    return header + body, _kb(rows)
+
+
+# ---- referrals section ------------------------------------------------------------------
+
+def _refs_screen() -> tuple[str, InlineKeyboardMarkup]:
+    try:
+        ov = referral.get_network_overview()
+    except Exception:
+        ov = {}
+    by = ov.get("by_status", {})
+    text = (
+        "🎁 <b>مركز الإحالات</b>\n"
+        "متابعة شبكة الدعوات والمكافآت\n\n"
+        f"• إجمالي الإحالات: <b>{ov.get('total', 0)}</b>\n"
+        f"• ✅ مؤهلون: <b>{by.get('qualified', 0)}</b> • ⏳ معلقون: <b>{by.get('pending', 0)}</b>"
+        f" • 🚩 مشبوهون: <b>{by.get('suspicious', 0)}</b>\n"
+        f"• نسبة التأهيل: <b>{ov.get('conversion', 0)}%</b>\n"
+        f"• أكواد الدعوة الصادرة: <b>{ov.get('codes', 0)}</b>\n"
+        f"• الهدف الحالي: <b>{ov.get('target', 0)}</b> مستخدمًا مؤهلًا\n\n"
+        "🏆 <b>المكافآت</b>\n"
+        f"• قيد التقدم: {ov.get('rewards', {}).get('progress', 0)}"
+        f" • مؤهلون للفتح: {ov.get('rewards', {}).get('eligible', 0)}"
+        f" • بانتظار توكن: {ov.get('rewards', {}).get('awaiting_token', 0)}"
+        f" • مستلمون: {ov.get('rewards', {}).get('claimed', 0)}"
+    )
+    keyboard = _kb([
+        [inline_button("🏆 ترتيب المحيلين", callback_data="own_refs_top")],
+        [inline_button("📜 تغيير قواعد الإحالات", callback_data="own_set_target")],
+        *_back(),
+    ])
+    return text, keyboard
+
+
+async def _refs_top(query):
+    try:
+        top = referral.get_top_referrers(12)
+    except Exception:
+        top = []
+    lines = [
+        f"{i}. <code>{r['referrer_id']}</code> — <b>{int(r.get('qualified') or 0)}</b> مؤهل"
+        f" / {int(r.get('total') or 0)} إحالة"
+        + (f" • 🚩 {int(r.get('suspicious') or 0)}" if int(r.get("suspicious") or 0) else "")
+        for i, r in enumerate(top, 1)
+    ] or ["• لا توجد إحالات مسجلة بعد."]
+    rows = [[inline_button(f"👤 {r['referrer_id']}", callback_data=f"own_user_{r['referrer_id']}")] for r in top[:8]]
+    rows.append([inline_button("🔙 مركز الإحالات", callback_data="own_refs")])
+    await _edit(query, "🏆 <b>ترتيب المحيلين</b>\n\n" + "\n".join(lines),
+                parse_mode="HTML", reply_markup=_kb(rows))
+
+
+# ---- instances section -------------------------------------------------------------------
+
+async def _inst_list(query):
+    try:
+        insts = referral.list_all_instances(20)
+    except Exception:
+        insts = []
+    lines = [
+        f"• <b>@{escape(i.get('bot_username') or '—')}</b> (#<code>{i['id']}</code>)"
+        f" — {_INST_STATUS.get(i.get('status'), i.get('status'))}"
+        f" • المالك <code>{i.get('owner_id')}</code>"
+        for i in insts
+    ] or ["• لا توجد نسخ مسجلة في النظام."]
+    rows = [[inline_button(f"🤖 #{i['id']} @{(i.get('bot_username') or '—')[:20]}",
+                           callback_data=f"own_inst_{i['id']}")] for i in insts[:10]]
+    rows.append([inline_button("🔙 مركز التحكم", callback_data="own_home")])
+    await _edit(query,
+        f"🤖 <b>إدارة النسخ الخاصة ({len(insts)})</b>\n"
+        "كل بوت أنشأه مستخدم من خلال النظام\n\n" + "\n".join(lines),
+        parse_mode="HTML", reply_markup=_kb(rows))
+
+
+async def _inst_detail(query, inst_id: int):
+    inst = referral.get_instance(inst_id)
+    if not inst:
+        await _edit(query, "❌ النسخة غير موجودة.", parse_mode="HTML",
+                    reply_markup=_kb(_back("own_inst", "🔙 إدارة النسخ")))
+        return
+    status = inst.get("status")
+    text = (
+        f"🤖 <b>النسخة #{inst_id}</b>\n\n"
+        f"• البوت: <b>@{escape(inst.get('bot_username') or '—')}</b>\n"
+        f"• المالك: <code>{inst.get('owner_id')}</code>\n"
+        f"• الحالة: {_INST_STATUS.get(status, status)}\n"
+        f"• آخر خطأ: <code>{escape(inst.get('last_error') or 'لا يوجد')}</code>\n"
+        f"• أُنشئت: <code>{escape(str(inst.get('created_at') or '—')[:16])}</code>\n"
+        f"• فُعّلت: <code>{escape(str(inst.get('activated_at') or '—')[:16])}</code>\n"
+    )
+    rows = [[inline_button("👤 ملف المالك", callback_data=f"own_user_{inst.get('owner_id')}")]]
+    if status == "active":
+        rows.append([inline_button("🛑 إيقاف النسخة", callback_data=f"own_inst_stop_{inst_id}")])
+    elif status in ("disabled", "error"):
+        rows.append([inline_button("▶️ إعادة التشغيل", callback_data=f"own_inst_start_{inst_id}")])
+    rows.append([inline_button("🔙 إدارة النسخ", callback_data="own_inst")])
+    await _edit(query, text, parse_mode="HTML", reply_markup=_kb(rows))
+
+
+async def _inst_stop_confirm(query, inst_id: int):
+    """Pre-execution: show instance name + owner, exactly as the contract says."""
+    inst = referral.get_instance(inst_id)
+    if not inst:
+        await _edit(query, "❌ النسخة غير موجودة.", parse_mode="HTML",
+                    reply_markup=_kb(_back("own_inst", "🔙 إدارة النسخ")))
+        return
+    text = (
+        "⚠️ <b>تأكيد إيقاف نسخة</b>\n\n"
+        f"• اسم النسخة: <b>@{escape(inst.get('bot_username') or '—')}</b>\n"
+        f"• المالك: <code>{inst.get('owner_id')}</code>\n"
+        f"• المعرف: #<code>{inst_id}</code>\n\n"
+        "سيتم فصل النسخة من العملية الحالية ومنع إقلاعها تلقائيًا عند إعادة التشغيل."
+    )
+    rows = [
+        [inline_button("✅ نعم، أوقف النسخة", callback_data=f"own_inst_stopdo_{inst_id}"),
+         inline_button("↩️ تراجع", callback_data=f"own_inst_{inst_id}")],
+    ]
+    await _edit(query, text, parse_mode="HTML", reply_markup=_kb(rows))
+
+
+async def _inst_stop_do(context, query, inst_id: int):
+    inst = referral.get_instance(inst_id) or {}
+    await stop_instance(inst_id)
+    referral.set_instance_status(inst_id, "disabled")
+    referral.log_activation(inst.get("owner_id"), inst_id, "instance_disabled_by_owner", "")
+    log_admin_action(query.from_user.id, "owner_stop_instance", inst_id,
+                     detail=f"bot=@{inst.get('bot_username', '')} owner={inst.get('owner_id')}")
+    try:
+        await context.bot.send_message(
+            int(inst.get("owner_id")),
+            f"⚠️ تم إيقاف نسختك <b>@{escape(inst.get('bot_username') or '')}</b> بقرار إداري."
+            " افتح تذكرة من 🛟 الدعم الفني للاستفسار.",
+            parse_mode="HTML",
+        )
+    except Exception:
+        pass
+    await _edit(query,
+        f"✅ <b>تم إيقاف النسخة #{inst_id}</b> (@{escape(inst.get('bot_username') or '—')})\n"
+        "تم تحديث الحالة في النظام وإشعار المالك.",
+        parse_mode="HTML", reply_markup=_kb(_back("own_inst", "🔙 إدارة النسخ")))
+
+
+async def _inst_start_do(context, query, inst_id: int):
+    inst = referral.get_instance(inst_id)
+    if not inst:
+        await _edit(query, "❌ النسخة غير موجودة.", parse_mode="HTML",
+                    reply_markup=_kb(_back("own_inst", "🔙 إدارة النسخ")))
+        return
+    ok = await spawn_instance(inst)
+    referral.set_instance_status(inst_id, "active" if ok else "error")
+    referral.log_activation(inst.get("owner_id"), inst_id,
+                            "instance_started_by_owner", f"ok={ok}")
+    log_admin_action(query.from_user.id, "owner_start_instance", inst_id,
+                     detail=f"ok={ok} bot=@{inst.get('bot_username', '')}")
+    await _edit(query,
+        ("✅ <b>تم إعادة تشغيل النسخة</b>." if ok else
+         "❌ <b>فشل تشغيل النسخة</b> — راجع حقل آخر خطأ في تفاصيل النسخة."),
+        parse_mode="HTML", reply_markup=_kb(_back("own_inst", "🔙 إدارة النسخ")))
+
+
+# ---- downloads section --------------------------------------------------------------------
+
+def _dl_screen() -> tuple[str, InlineKeyboardMarkup]:
+    platforms = get_downloads_by_platform()
+    top = sorted(platforms.items(), key=lambda kv: kv[1], reverse=True)[:8]
+    plat_lines = "\n".join(
+        f"• <b>{escape(str(p or 'غير معروف'))}</b>: {c}" for p, c in top
+    ) or "• لا توجد تحميلات مسجلة بعد."
+    text = (
+        "📥 <b>مركز التحميلات</b>\n"
+        "فهم استخدام البوت ومشاكل التنزيل\n\n"
+        f"• اليوم: <b>{get_downloads_today()}</b> • آخر 24 ساعة: <b>{get_downloads_24h()}</b>\n"
+        f"• آخر ٧ أيام: <b>{get_downloads_week()}</b> • آخر ٣٠ يومًا: <b>{get_downloads_month()}</b>\n"
+        f"• الإجمالي المسجل: <b>{get_total_downloads()}</b>\n"
+        f"• حجم البيانات الكلي: <b>{_fmt_bytes(get_total_data_bytes())}</b>\n\n"
+        "🌍 <b>المنصات</b>\n" + plat_lines
+    )
+    keyboard = _kb([
+        [inline_button("🩺 صحة النظام", callback_data="own_health"),
+         inline_button("🧠 حالة المحرك", callback_data="own_engine")],
+        *_back(),
+    ])
+    return text, keyboard
+
+
+# ---- broadcast section ------------------------------------------------------------------------
+
+def _bc_screen() -> tuple[str, InlineKeyboardMarkup]:
+    history = get_broadcast_history(5)
+    hist_lines = "\n".join(
+        f"• <code>{escape(str(h.get('created_at') or '—')[:16])}</code>"
+        f" — ✅ {h.get('success', 0)}/{h.get('total', 0)}"
+        f" • ❌ {h.get('failed', 0)}"
+        for h in history
+    ) or "• لا توجد إذاعات مسجلة بعد."
+    text = (
+        "📢 <b>الرسائل والإذاعة</b>\n"
+        "إرسال، معاينة، تقارير\n\n"
+        f"👥 المستلمون المحتملون (غير محظورين): <b>{len(get_all_user_ids())}</b>\n\n"
+        "<b>📜 آخر تقارير الإذاعة</b>\n" + hist_lines
+    )
+    keyboard = _kb([
+        [inline_button("📝 إذاعة جديدة", callback_data="own_bc_new")],
+        *_back(),
+    ])
+    return text, keyboard
+
+
+async def _bc_preview(query):
+    """Pre-execution: preview + recipients count, then explicit confirmation."""
+    draft = (OWNER_PENDING.get(query.from_user.id) or {}).get("bc_text", "")
+    recipients = len(get_all_user_ids())
+    text = (
+        "🔎 <b>معاينة الإذاعة قبل التنفيذ</b>\n\n"
+        f"─────────────\n{escape(draft[:900])}\n─────────────\n\n"
+        f"👥 عدد المستلمين: <b>{recipients}</b>\n"
+        "سيتم نسخ الرسالة كما هي لكل المستخدمين (غير المحظورين)."
+    )
+    rows = [
+        [inline_button("✅ تأكيد الإرسال", callback_data="own_bc_send")],
+        [inline_button("🗑 إلغاء", callback_data="own_bc")],
+    ]
+    await _edit(query, text, parse_mode="HTML", reply_markup=_kb(rows))
+
+
+async def _bc_send(context, query):
+    draft = (OWNER_PENDING.get(query.from_user.id) or {}).get("bc_text", "")
+    if not draft:
+        await _edit(query, "❌ لا توجد مسودة إذاعة. ابدأ من جديد.", parse_mode="HTML",
+                    reply_markup=_kb(_back("own_bc", "🔙 الإذاعة")))
+        return
+    OWNER_PENDING.pop(query.from_user.id, None)
+    await _edit(query, "⏳ <b>جاري إرسال الإذاعة...</b>", parse_mode="HTML")
+    all_ids = get_all_user_ids()
+    success = failed = blocked = 0
+    started = time.time()
+    for idx, uid in enumerate(all_ids, 1):
+        try:
+            await context.bot.send_message(chat_id=uid, text=draft[:4096])
+            success += 1
+        except Exception as exc:
+            failed += 1
+            msg = str(exc).lower()
+            if "blocked" in msg or "chat not found" in msg or "forbidden" in msg:
+                blocked += 1
+        if idx % 20 == 0:
+            await asyncio.sleep(1)
+    elapsed = round(time.time() - started, 1)
+    try:
+        log_broadcast(query.from_user.id, draft[:300], len(all_ids), success, failed)
+    except Exception:
+        pass
+    log_admin_action(query.from_user.id, "owner_broadcast",
+                     detail=f"success={success} failed={failed} total={len(all_ids)}")
+    report = (
+        "✅ <b>انتهت الإذاعة — تقرير النجاح والفشل</b>\n\n"
+        f"👥 الإجمالي: <b>{len(all_ids)}</b>\n"
+        f"✅ وصل: <b>{success}</b>\n"
+        f"❌ فشل: <b>{failed}</b>\n"
+        f"🚫 محظور/غير نشط: <b>{blocked}</b>\n"
+        f"⏱ الزمن: <b>{elapsed}s</b>"
+    )
+    await _edit(query, report, parse_mode="HTML", reply_markup=_kb(_back()))
+
+
+# ---- support section --------------------------------------------------------------------------
+
+async def _sup_list(query, status: str | None = None):
+    tickets = support.list_tickets(status=status, limit=15)
+    text = (
+        "🛟 <b>الدعم الفني</b>\n"
+        "التذاكر والردود والتصعيد\n\n"
+        f"🔓 مفتوحة: <b>{support.count_tickets('open')}</b>"
+        f" • 🟢 تم الرد: <b>{support.count_tickets('answered')}</b>"
+        f" • ⚫ مغلقة: <b>{support.count_tickets('closed')}</b>\n\n"
+    )
+    if tickets:
+        text += "\n".join(
+            f"• <code>{escape(tk['ticket_no'])}</code> — {escape(str(tk.get('subject') or tk.get('category')))}"
+            f" — {_SUP_STATUS.get(tk.get('status'), tk.get('status'))}"
+            for tk in tickets
+        )
+    else:
+        text += "لا توجد تذاكر في هذه الفئة."
+    rows = [[
+        inline_button("🔓 المفتوحة", callback_data="own_sup"),
+        inline_button("🟢 تم الرد", callback_data="own_sup_answered"),
+        inline_button("⚫ المغلقة", callback_data="own_sup_closed"),
+    ]]
+    for tk in tickets[:10]:
+        rows.append([inline_button(f"🎫 {tk['ticket_no']}", callback_data=f"own_sup_{tk['id']}")])
+    rows.append([inline_button("🔙 مركز التحكم", callback_data="own_home")])
+    await _edit(query, text, parse_mode="HTML", reply_markup=_kb(rows))
+
+
+async def _sup_detail(query, tid: int):
+    tk = support.get_ticket(tid)
+    if not tk:
+        await _edit(query, "❌ التذكرة غير موجودة.", parse_mode="HTML",
+                    reply_markup=_kb(_back("own_sup", "🔙 التذاكر")))
+        return
+    msgs = support.get_messages(tk["id"], limit=20)
+    lines = [
+        f"{'🛟 الدعم' if m['sender'] == 'admin' else '👤 المستخدم'} • <code>{(m.get('created_at') or '—')[:16]}</code>\n"
+        f"{escape(str(m.get('body') or ''))}"
+        for m in msgs
+    ]
+    text = (
+        f"🎫 <b>{tk['ticket_no']}</b>\n"
+        f"👤 المستخدم: <code>{tk['user_id']}</code>\n"
+        f"🏷 النوع: <b>{escape(str(tk.get('subject') or tk.get('category')))}</b>\n"
+        f"📌 الحالة: {_SUP_STATUS.get(tk.get('status'), tk.get('status'))}\n\n"
+        + ("\n\n".join(lines) if lines else "لا توجد رسائل بعد.")
+    )
+    rows = [
+        [inline_button("📝 رد على التذكرة", callback_data=f"own_sup_reply_{tid}")],
+        [inline_button("👤 ملف المستخدم", callback_data=f"own_user_{tk['user_id']}")],
+    ]
+    if tk["status"] != "closed":
+        rows.append([inline_button("⚫ إغلاق التذكرة", callback_data=f"own_sup_close_{tid}")])
+    else:
+        rows.append([inline_button("🔓 إعادة فتح", callback_data=f"own_sup_open_{tid}")])
+    rows.append([inline_button("🔙 التذاكر", callback_data="own_sup")])
+    await _edit(query, text, parse_mode="HTML", reply_markup=_kb(rows))
+
+
+# ---- reports section ---------------------------------------------------------------------------
+
+def _rep_screen() -> tuple[str, InlineKeyboardMarkup]:
+    try:
+        ov = referral.get_network_overview()
+    except Exception:
+        ov = {}
+    text = (
+        "📈 <b>التقارير والتحليلات</b>\n"
+        "متابعة نمو المشروع\n\n"
+        "👥 <b>نمو المستخدمين</b>\n"
+        f"• اليوم: <b>{get_new_users_today()}</b> • الأسبوع: <b>{get_new_users_week()}</b>"
+        f" • الشهر: <b>{get_new_users_month()}</b>\n"
+        f"• الإجمالي: <b>{get_total_users()}</b> • نشط 24 ساعة: <b>{get_active_24h()}</b>\n\n"
+        "📥 <b>نمو التحميلات</b>\n"
+        f"• اليوم: <b>{get_downloads_today()}</b> • الأسبوع: <b>{get_downloads_week()}</b>"
+        f" • الشهر: <b>{get_downloads_month()}</b>\n"
+        f"• الإجمالي: <b>{get_total_downloads()}</b> • البيانات: <b>{_fmt_bytes(get_total_data_bytes())}</b>\n\n"
+        "🎁 <b>نمو شبكة الإحالات</b>\n"
+        f"• إجمالي الإحالات: <b>{ov.get('total', 0)}</b>"
+        f" • مؤهلون: <b>{ov.get('by_status', {}).get('qualified', 0)}</b>\n"
+        f"• نسبة التأهيل: <b>{ov.get('conversion', 0)}%</b>"
+        f" • نسخ نشطة: <b>{ov.get('instances', {}).get('active', 0)}</b>\n\n"
+        "🛟 <b>الدعم</b>\n"
+        f"• تذاكر مفتوحة: <b>{support.count_tickets('open')}</b>"
+        f" • تم الرد: <b>{support.count_tickets('answered')}</b>\n\n"
+        "📜 <b>سجل الأمان</b>\n"
+        f"• عمليات مسجلة: <b>{get_admin_audit_stats().get('total', 0)}</b>"
+    )
+    keyboard = _kb([
+        [inline_button("📜 سجل الأمان الكامل", callback_data="own_audit"),
+         inline_button("🔄 تحديث", callback_data="own_rep")],
+        *_back(),
+    ])
+    return text, keyboard
+
+
+# ---- settings & security --------------------------------------------------------------------------
+
+def _set_screen() -> tuple[str, InlineKeyboardMarkup]:
+    from utils.maintenance import is_maintenance_mode
+    from database.pg import backend_name
+    text = (
+        "⚙️ <b>الإعدادات والأمان</b>\n"
+        "الصلاحيات والأمان والتشغيل\n\n"
+        f"👑 المالك (ثابت وغير قابل للتغيير): <code>{OWNER_ID}</code>\n"
+        f"🛡 أدمن من البيئة: <b>{len(ADMIN_IDS)}</b>"
+        f" • أدمن ممنوحون منك: <b>{len(list_extra_admins())}</b>\n"
+        f"🗄 قاعدة البيانات: <b>{escape(backend_name())}</b>\n"
+        f"🚧 وضع الصيانة: <b>{'🔴 مفعّل' if is_maintenance_mode() else '🟢 معطّل'}</b>\n"
+        f"🎯 هدف الإحالات الحالي: <b>{referral.get_effective_target()}</b>\n"
+        f"🧹 التخزين المؤقت: <b>{_fmt_bytes(_temp_dir_stats()[0])}</b>"
+    )
+    keyboard = _kb([
+        [inline_button("🛡 الصلاحيات والأدمن", callback_data="own_set_perms"),
+         inline_button("📜 سجل الأمان", callback_data="own_audit")],
+        [inline_button("🎯 تغيير قواعد الإحالات", callback_data="own_set_target"),
+         inline_button("🧹 تنظيف الملفات", callback_data="own_set_clean")],
+        [inline_button("🚧 تفعيل الصيانة", callback_data="own_set_maint_on"),
+         inline_button("🟢 إيقاف الصيانة", callback_data="own_set_maint_off")],
+        *_back(),
+    ])
+    return text, keyboard
+
+
+def _perms_screen() -> tuple[str, InlineKeyboardMarkup]:
+    extra = list_extra_admins()
+    lines = [
+        f"• <code>{a['user_id']}</code> • أُضيف: {(a.get('added_at') or '—')[:16]}"
+        for a in extra
+    ] or ["• لا يوجد أدمن ممنوحون حاليًا."]
+    text = (
+        "🛡 <b>الصلاحيات</b>\n\n"
+        f"👑 المالك الأساسي: <code>{OWNER_ID}</code> — <b>ثابت من البيئة، لا يمكن تعديله من البوت</b>\n"
+        f"🛡 أدمن البيئة: <code>{', '.join(str(a) for a in ADMIN_IDS) or '—'}</code>\n\n"
+        "<b>أدمن ممنوحون من المالك (قابلون للسحب)</b>\n" + "\n".join(lines)
+        + "\n\n⚠️ منح/سحب الأدمن يُسجل في سجل الأمان فورًا."
+    )
+    rows = [[inline_button("➕ منح أدمن جديد", callback_data="own_set_perm_add")]]
+    for a in extra[:8]:
+        rows.append([inline_button(f"❌ سحب {a['user_id']}", callback_data=f"own_set_perm_del_{a['user_id']}")])
+    rows.append([inline_button("🔙 الإعدادات", callback_data="own_set")])
+    return text, _kb(rows)
+
+
+async def _audit_screen(query):
+    stats = get_admin_audit_stats()
+    entries = get_admin_audit(15)
+    lines = []
+    for i, e in enumerate(entries, 1):
+        line = (
+            f"{i}. <b>{escape(str(e.get('action') or '—'))}</b>"
+            f" • <code>{escape(str(e.get('admin_id') or '—'))}</code>"
+        )
+        if e.get("target_id"):
+            line += f" • هدف <code>{e.get('target_id')}</code>"
+        line += f"\n   🕑 {escape(str(e.get('created_at') or '—')[:16])}"
+        if e.get("detail"):
+            line += f" • {escape(str(e.get('detail'))[:80])}"
+        lines.append(line)
+    text = (
+        "📜 <b>سجل الأمان</b>\n\n"
+        f"إجمالي العمليات: <b>{stats.get('total', 0)}</b>\n\n"
+        + ("\n\n".join(lines) if lines else "لا توجد أحداث مسجلة بعد.")
+    )
+    await _edit(query, text, parse_mode="HTML", reply_markup=_kb(_back("own_set", "🔙 الإعدادات")))
+
+
+async def _clean_confirm(query):
+    """Pre-execution: show the targeted size, exactly as the contract says."""
+    size, count = _temp_dir_stats()
+    text = (
+        "🧹 <b>تنظيف الملفات المؤقتة</b>\n\n"
+        f"• الحجم المستهدف: <b>{_fmt_bytes(size)}</b>\n"
+        f"• عدد الملفات: <b>{count}</b>\n\n"
+        "سيتم حذف كل الملفات الأقدم من ساعة داخل مجلد temp."
+    )
+    rows = [
+        [inline_button("✅ نفذ التنظيف", callback_data="own_set_cleando"),
+         inline_button("↩️ تراجع", callback_data="own_set")],
+    ]
+    await _edit(query, text, parse_mode="HTML", reply_markup=_kb(rows))
+
+
+async def _clean_do(query):
+    now = time.time()
+    freed = removed = 0
+    try:
+        for name in os.listdir(TEMP_DIR):
+            path = os.path.join(TEMP_DIR, name)
+            try:
+                if os.path.isfile(path) and now - os.path.getmtime(path) > 3600:
+                    freed += os.path.getsize(path)
+                    os.remove(path)
+                    removed += 1
+            except OSError:
+                continue
+    except Exception:
+        pass
+    log_admin_action(query.from_user.id, "owner_cleanup",
+                     detail=f"removed={removed} freed={freed}")
+    await _edit(query,
+        "✅ <b>تم التنظيف — نتيجة العملية</b>\n\n"
+        f"• ملفات محذوفة: <b>{removed}</b>\n"
+        f"• مساحة محررة: <b>{_fmt_bytes(freed)}</b>",
+        parse_mode="HTML", reply_markup=_kb(_back("own_set", "🔙 الإعدادات")))
+
+
+# ---- callback dispatcher -------------------------------------------------------------------------
+
+async def owner_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    # THE code-level owner gate — every single callback passes through here.
+    if not _owner_gate(update) or not _clone_guard(update):
+        try:
+            await query.answer("⛔ هذه اللوحة محمية للمالك الأساسي فقط.", show_alert=True)
+        except Exception:
+            pass
+        return
+    uid = query.from_user.id
+    data = query.data or ""
+    await query.answer()
+
+    if data == "own_home":
+        OWNER_STATES.pop(uid, None)
+        text, kb = _build_home()
+        await _edit(query, text, parse_mode="HTML", reply_markup=kb)
+
+    # ---- users ----
+    elif data == "own_users":
+        OWNER_STATES.pop(uid, None)
+        await _edit(query, _users_home_text(), parse_mode="HTML", reply_markup=_users_home_kb())
+    elif data.startswith("own_users_page_"):
+        await _show_users_page(query, _suffix_int(data) or 0, "all")
+    elif data == "own_users_active":
+        await _show_users_page(query, 0, "active")
+    elif data == "own_users_banned":
+        await _show_banned(query)
+    elif data == "own_users_new":
+        await _show_new_users(query)
+    elif data == "own_users_top":
+        await _show_top_users(query)
+    elif data == "own_users_search":
+        OWNER_STATES[uid] = "search"
+        await _edit(query,
+            "🔍 <b>بحث عن مستخدم</b>\n\nأرسل الآن <code>ID</code> أو <code>@username</code> أو الاسم.",
+            parse_mode="HTML", reply_markup=_kb(_back("own_users", "🔙 إلغاء")))
+    elif data == "own_users_export":
+        await _export_csv(context, query)
+
+    # ---- user profile ----
+    elif data.startswith("own_user_"):
+        OWNER_STATES.pop(uid, None)
+        parts = data.split("_")
+        target_id = _suffix_int("x_" + parts[2]) if len(parts) >= 3 else None
+        tab = parts[3] if len(parts) >= 4 else "main"
+        if not target_id:
+            return
+        rendered = _user_profile(target_id, tab)
+        if rendered is None:
+            await _edit(query, "❌ المستخدم غير موجود.", parse_mode="HTML",
+                        reply_markup=_kb(_back("own_users", "🔙 المستخدمون")))
+            return
+        text, kb = rendered
+        await _edit(query, text, parse_mode="HTML", reply_markup=kb)
+
+    # ---- ban flow: reason → confirm → execute ----
+    elif data.startswith("own_ban_") and not data.startswith("own_ban_do_"):
+        target_id = _suffix_int(data)
+        if not target_id:
+            return
+        OWNER_STATES[uid] = f"ban_reason:{target_id}"
+        await _edit(query,
+            f"🚫 <b>حظر المستخدم <code>{target_id}</code></b>\n\n"
+            "أرسل الآن <b>سبب الحظر</b> (سيُحفظ في ملف المستخدم وسجل الأمان):",
+            parse_mode="HTML", reply_markup=_kb(_back(f"own_user_{target_id}", "↩️ تراجع")))
+    elif data.startswith("own_ban_do_"):
+        target_id = _suffix_int(data)
+        pending = OWNER_PENDING.pop(uid, {})
+        reason = pending.get("ban_reason", "")
+        if not target_id or pending.get("ban_target") != target_id or not reason:
+            await _edit(query, "⚠️ انتهت صلاحية جلسة الحظر. أعد المحاولة من ملف المستخدم.",
+                        parse_mode="HTML", reply_markup=_kb(_back()))
+            return
+        user = get_user(target_id)
+        if user and user.get("is_banned"):
+            await _edit(query, "ℹ️ المستخدم محظور بالفعل.", parse_mode="HTML",
+                        reply_markup=_kb(_back(f"own_user_{target_id}", "🔙 الملف")))
+            return
+        ban_user(target_id, reason)
+        log_admin_action(uid, "owner_ban_user", target_id, detail=f"reason={reason[:120]}")
+        try:
+            await context.bot.send_message(
+                target_id,
+                f"🚫 <b>تم حظر حسابك</b>\n\nالسبب: {escape(reason[:300])}\n"
+                "للاعتراض تواصل مع الدعم.",
+                parse_mode="HTML",
+            )
+        except Exception:
+            pass
+        await _edit(query,
+            f"✅ <b>تم حظر المستخدم <code>{target_id}</code></b>\n"
+            f"• السبب: {escape(reason[:200])}\n"
+            f"• تم التنفيذ والتسجيل في سجل الأمان وإشعار المستخدم.",
+            parse_mode="HTML", reply_markup=_kb(_back(f"own_user_{target_id}", "🔙 الملف")))
+    elif data.startswith("own_unban_do_"):
+        target_id = _suffix_int(data)
+        if not target_id:
+            return
+        unban_user(target_id)
+        log_admin_action(uid, "owner_unban_user", target_id)
+        try:
+            await context.bot.send_message(target_id, "✅ تم رفع الحظر عن حسابك.")
+        except Exception:
+            pass
+        await _edit(query,
+            f"✅ <b>تم فك حظر المستخدم <code>{target_id}</code></b> — نُفذ وسُجل في سجل الأمان.",
+            parse_mode="HTML", reply_markup=_kb(_back(f"own_user_{target_id}", "🔙 الملف")))
+    elif data.startswith("own_unban_"):
+        target_id = _suffix_int(data)
+        if not target_id:
+            return
+        user = get_user(target_id)
+        if not user or not user.get("is_banned"):
+            await _edit(query, "ℹ️ المستخدم غير محظور.", parse_mode="HTML",
+                        reply_markup=_kb(_back(f"own_user_{target_id}", "🔙 الملف")))
+            return
+        name = escape(user.get("first_name") or str(target_id))
+        rows = [
+            [inline_button("✅ نعم، فك الحظر", callback_data=f"own_unban_do_{target_id}"),
+             inline_button("↩️ تراجع", callback_data=f"own_user_{target_id}")],
+        ]
+        await _edit(query,
+            f"⚠️ <b>تأكيد فك الحظر</b>\n\n• المستخدم: <b>{name}</b>\n• المعرف: <code>{target_id}</code>",
+            parse_mode="HTML", reply_markup=_kb(rows))
+
+    # ---- referrals ----
+    elif data == "own_refs":
+        OWNER_STATES.pop(uid, None)
+        text, kb = _refs_screen()
+        await _edit(query, text, parse_mode="HTML", reply_markup=kb)
+    elif data == "own_refs_top":
+        await _refs_top(query)
+
+    # ---- instances ----
+    elif data == "own_inst":
+        OWNER_STATES.pop(uid, None)
+        await _inst_list(query)
+    elif data.startswith("own_inst_stopdo_"):
+        inst_id = _suffix_int(data)
+        if inst_id:
+            await _inst_stop_do(context, query, inst_id)
+    elif data.startswith("own_inst_stop_"):
+        inst_id = _suffix_int(data)
+        if inst_id:
+            await _inst_stop_confirm(query, inst_id)
+    elif data.startswith("own_inst_start_"):
+        inst_id = _suffix_int(data)
+        if inst_id:
+            await _inst_start_do(context, query, inst_id)
+    elif data.startswith("own_inst_"):
+        inst_id = _suffix_int(data)
+        if inst_id:
+            await _inst_detail(query, inst_id)
+
+    # ---- downloads ----
+    elif data == "own_dl":
+        OWNER_STATES.pop(uid, None)
+        text, kb = _dl_screen()
+        await _edit(query, text, parse_mode="HTML", reply_markup=kb)
+    elif data == "own_health":
+        from services.runtime_diagnostics import render_diagnostics_html
+        await _edit(query, render_diagnostics_html(), parse_mode="HTML",
+                    reply_markup=_kb(_back("own_dl", "🔙 التحميلات")))
+    elif data == "own_engine":
+        # Re-render inside the owner panel with an owner back button.
+        from config.settings import YTDLP_COOKIES_FILE, YTDLP_COOKIES_FROM_BROWSER, DOWNLOAD_PROXY
+        from services.engine_maintenance import get_ytdlp_version
+        from services.engines import list_engines
+        cookies_ready = bool(YTDLP_COOKIES_FROM_BROWSER or (YTDLP_COOKIES_FILE and os.path.exists(YTDLP_COOKIES_FILE)))
+        engines = list_engines()
+        text = (
+            "🧠 <b>حالة محرك التنزيل</b>\n\n"
+            f"• yt-dlp: <code>{escape(get_ytdlp_version())}</code>\n"
+            f"• Cookies: <b>{'مفعّلة' if cookies_ready else 'غير مفعّلة'}</b>\n"
+            f"• Proxy: <b>{'مفعّل' if DOWNLOAD_PROXY else 'غير مفعّل'}</b>\n"
+            f"• المحركات النشطة: <b>{len(engines)}</b>\n\n"
+            + "\n".join(f"• <code>{escape(e['name'])}</code>" for e in engines)
+        )
+        await _edit(query, text, parse_mode="HTML", reply_markup=_kb(_back("own_dl", "🔙 التحميلات")))
+
+    # ---- broadcast ----
+    elif data == "own_bc":
+        OWNER_STATES.pop(uid, None)
+        OWNER_PENDING.pop(uid, None)
+        text, kb = _bc_screen()
+        await _edit(query, text, parse_mode="HTML", reply_markup=kb)
+    elif data == "own_bc_new":
+        OWNER_STATES[uid] = "broadcast"
+        await _edit(query,
+            "📢 <b>إذاعة جديدة</b>\n\nأرسل الآن نص الرسالة — ستراها أولًا في <b>معاينة مع عدد المستلمين</b> قبل أي إرسال.",
+            parse_mode="HTML", reply_markup=_kb(_back("own_bc", "🔙 إلغاء")))
+    elif data == "own_bc_preview":
+        await _bc_preview(query)
+    elif data == "own_bc_send":
+        await _bc_send(context, query)
+
+    # ---- support ----
+    elif data == "own_sup":
+        OWNER_STATES.pop(uid, None)
+        await _sup_list(query)
+    elif data == "own_sup_answered":
+        await _sup_list(query, "answered")
+    elif data == "own_sup_closed":
+        await _sup_list(query, "closed")
+    elif data.startswith("own_sup_reply_"):
+        tid = _suffix_int(data)
+        if not tid:
+            return
+        tk = support.get_ticket(tid)
+        if not tk:
+            return
+        OWNER_STATES[uid] = f"sup_reply:{tid}"
+        await _edit(query,
+            f"📝 <b>الرد على التذكرة {escape(tk['ticket_no'])}</b>\n\nأرسل نص الرد الآن — سيصل المستخدم إشعار فوري.",
+            parse_mode="HTML", reply_markup=_kb(_back(f"own_sup_{tid}", "🔙 التذكرة")))
+    elif data.startswith("own_sup_close_"):
+        tid = _suffix_int(data)
+        tk = support.get_ticket(tid) if tid else None
+        if tk:
+            support.close_ticket(tid)
+            log_admin_action(uid, "owner_support_close", detail=str(tk.get("ticket_no", "")))
+            try:
+                await context.bot.send_message(
+                    tk["user_id"],
+                    f"🛟 تذكرتك <code>{tk['ticket_no']}</code> أُغلقت.", parse_mode="HTML")
+            except Exception:
+                pass
+        await _sup_detail(query, tid)
+    elif data.startswith("own_sup_open_"):
+        tid = _suffix_int(data)
+        tk = support.get_ticket(tid) if tid else None
+        if tk:
+            support.reopen_ticket(tid)
+            log_admin_action(uid, "owner_support_reopen", detail=str(tk.get("ticket_no", "")))
+        await _sup_detail(query, tid)
+    elif data.startswith("own_sup_"):
+        tid = _suffix_int(data)
+        if tid:
+            await _sup_detail(query, tid)
+
+    # ---- reports ----
+    elif data == "own_rep":
+        OWNER_STATES.pop(uid, None)
+        text, kb = _rep_screen()
+        await _edit(query, text, parse_mode="HTML", reply_markup=kb)
+
+    # ---- settings ----
+    elif data == "own_set":
+        OWNER_STATES.pop(uid, None)
+        text, kb = _set_screen()
+        await _edit(query, text, parse_mode="HTML", reply_markup=kb)
+    elif data == "own_set_perms":
+        text, kb = _perms_screen()
+        await _edit(query, text, parse_mode="HTML", reply_markup=kb)
+    elif data == "own_set_perm_add":
+        OWNER_STATES[uid] = "perm_add"
+        await _edit(query,
+            "➕ <b>منح أدمن جديد</b>\n\nأرسل <code>ID</code> المستخدم (أرقام فقط).\n"
+            "⚠️ الأدمن يرى لوحة الأدمن العادية فقط — <b>لوحة المالك تظل لك وحدك</b>.",
+            parse_mode="HTML", reply_markup=_kb(_back("own_set_perms", "🔙 إلغاء")))
+    # NOTE: execution callbacks (*_do_) MUST be matched BEFORE their shorter
+    # confirmation prefixes, otherwise the confirm screen swallows them.
+    elif data.startswith("own_set_perm_del_do_"):
+        target_id = _suffix_int(data)
+        if not target_id:
+            return
+        remove_extra_admin(target_id)
+        log_admin_action(uid, "owner_revoke_admin", target_id, detail="سحب صلاحية أدمن")
+        text, kb = _perms_screen()
+        await _edit(query, text, parse_mode="HTML", reply_markup=kb)
+    elif data.startswith("own_set_perm_add_do_"):
+        target_id = _suffix_int(data)
+        if not target_id:
+            return
+        add_extra_admin(target_id)
+        log_admin_action(uid, "owner_grant_admin", target_id, detail="منح صلاحية أدمن")
+        text, kb = _perms_screen()
+        await _edit(query, text, parse_mode="HTML", reply_markup=kb)
+    elif data.startswith("own_set_perm_del_"):
+        target_id = _suffix_int(data)
+        if not target_id:
+            return
+        rows = [
+            [inline_button("✅ نعم، اسحب الصلاحية", callback_data=f"own_set_perm_del_do_{target_id}"),
+             inline_button("↩️ تراجع", callback_data="own_set_perms")],
+        ]
+        await _edit(query,
+            f"⚠️ <b>تأكيد سحب صلاحية أدمن</b>\n\n• المستخدم: <code>{target_id}</code>\n"
+            "سيفقد الوصول للوحة الأدمن فورًا.",
+            parse_mode="HTML", reply_markup=_kb(rows))
+    elif data == "own_audit":
+        await _audit_screen(query)
+    elif data == "own_set_target":
+        OWNER_STATES[uid] = "target"
+        current = referral.get_effective_target()
+        await _edit(query,
+            "🎯 <b>تغيير قواعد الإحالات</b>\n\n"
+            f"• القاعدة الحالية: <b>{current}</b> مستخدمًا مؤهلًا = نسخة بوت خاصة.\n\n"
+            "أرسل الرقم الجديد (سيُعرض لك مقارنة الحالي/الجديد قبل الحفظ):",
+            parse_mode="HTML", reply_markup=_kb(_back("own_set", "🔙 إلغاء")))
+    elif data.startswith("own_set_target_do_"):
+        new_val = _suffix_int(data)
+        if not new_val or new_val <= 0:
+            return
+        old = referral.get_effective_target()
+        referral.set_target_override(new_val)
+        log_admin_action(uid, "owner_change_referral_target",
+                         detail=f"old={old} new={new_val}")
+        await _edit(query,
+            "✅ <b>تم حفظ القاعدة الجديدة</b>\n\n"
+            f"• قبل: <b>{old}</b>\n• بعد: <b>{new_val}</b>\n"
+            "• التعديل سُجل في سجل الأمان، ويسري فورًا على كل المستخدمين.",
+            parse_mode="HTML", reply_markup=_kb(_back("own_set", "🔙 الإعدادات")))
+    elif data == "own_set_clean":
+        await _clean_confirm(query)
+    elif data == "own_set_cleando":
+        await _clean_do(query)
+    elif data == "own_set_maint_on":
+        from utils.maintenance import set_maintenance_mode
+        set_maintenance_mode(True)
+        log_admin_action(uid, "owner_maintenance", detail="enabled")
+        text, kb = _set_screen()
+        await _edit(query, text, parse_mode="HTML", reply_markup=kb)
+    elif data == "own_set_maint_off":
+        from utils.maintenance import set_maintenance_mode
+        set_maintenance_mode(False)
+        log_admin_action(uid, "owner_maintenance", detail="disabled")
+        text, kb = _set_screen()
+        await _edit(query, text, parse_mode="HTML", reply_markup=kb)
+
+    else:
+        logger.warning("Unhandled owner callback: %s", data)
+
+
+# ---- text states ---------------------------------------------------------------------------------
+
+async def owner_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
+    """Consume owner text inputs (search / ban reason / broadcast / etc).
+
+    Re-verifies ownership on EVERY message — the state dict alone is never
+    trusted as authorization.
+    """
+    user = update.effective_user
+    if not user or user.id not in OWNER_STATES:
+        return False
+    if not is_owner(user.id):
+        OWNER_STATES.pop(user.id, None)
+        OWNER_PENDING.pop(user.id, None)
+        try:
+            log_admin_action(user.id, "owner_panel_denied", detail="محاولة إدخال نصي غير مصرح")
+        except Exception:
+            pass
+        return False
+    uid = user.id
+    state = OWNER_STATES.pop(uid)
+    text = (update.message.text or "").strip()
+    if not text:
+        await update.message.reply_text("⚠️ أرسل نصًا صالحًا.")
+        return True
+
+    if state == "search":
+        results = search_users(text)
+        if not results:
+            await update.message.reply_text(
+                "❌ لا توجد نتائج لهذا البحث.",
+                reply_markup=_kb(_back("own_users", "🔙 المستخدمون")))
+            return True
+        if len(results) == 1:
+            rendered = _user_profile(results[0]["user_id"])
+            if rendered:
+                t_text, kb = rendered
+                await update.message.reply_text(t_text, parse_mode="HTML", reply_markup=kb)
+            return True
+        lines, rows = [], []
+        for r in results[:10]:
+            icon = "🚫" if r.get("is_banned") else "✅"
+            lines.append(
+                f"{icon} <b>{escape(r.get('first_name') or 'بدون اسم')}</b>"
+                f" @{escape(r.get('username') or '—')} • <code>{r['user_id']}</code>"
+            )
+            rows.append([inline_button(f"👤 {r['user_id']}", callback_data=f"own_user_{r['user_id']}")])
+        rows.append([inline_button("🔙 المستخدمون", callback_data="own_users")])
+        await update.message.reply_text(
+            f"🔍 <b>نتائج البحث ({len(results)})</b>\n\n" + "\n".join(lines),
+            parse_mode="HTML", reply_markup=_kb(rows))
+        return True
+
+    if state.startswith("ban_reason:"):
+        target_id = int(state.split(":", 1)[1])
+        OWNER_PENDING[uid] = {"ban_target": target_id, "ban_reason": text[:300]}
+        user_row = get_user(target_id)
+        name = escape((user_row or {}).get("first_name") or str(target_id))
+        rows = [
+            [inline_button("✅ تأكيد الحظر", callback_data=f"own_ban_do_{target_id}"),
+             inline_button("↩️ إلغاء", callback_data=f"own_user_{target_id}")],
+        ]
+        await update.message.reply_text(
+            "⚠️ <b>تأكيد الحظر — قبل التنفيذ</b>\n\n"
+            f"• المستخدم: <b>{name}</b>\n"
+            f"• المعرف: <code>{target_id}</code>\n"
+            f"• السبب: <b>{escape(text[:300])}</b>\n\n"
+            "بعد التنفيذ: حظر + تسجيل في سجل الأمان + إشعار المستخدم.",
+            parse_mode="HTML", reply_markup=_kb(rows))
+        return True
+
+    if state == "broadcast":
+        OWNER_PENDING[uid] = {"bc_text": text}
+        # Re-render the preview through a fresh message with confirm buttons.
+        recipients = len(get_all_user_ids())
+        rows = [
+            [inline_button("✅ تأكيد الإرسال", callback_data="own_bc_send")],
+            [inline_button("🗑 إلغاء", callback_data="own_bc")],
+        ]
+        await update.message.reply_text(
+            "🔎 <b>معاينة الإذاعة — قبل التنفيذ</b>\n\n"
+            f"─────────────\n{escape(text[:900])}\n─────────────\n\n"
+            f"👥 عدد المستلمين: <b>{recipients}</b>",
+            parse_mode="HTML", reply_markup=_kb(rows))
+        return True
+
+    if state.startswith("sup_reply:"):
+        tid = int(state.split(":", 1)[1])
+        tk = support.get_ticket(tid)
+        if not tk:
+            await update.message.reply_text("❌ التذكرة غير موجودة.")
+            return True
+        support.add_admin_reply(tk["id"], text[:1900])
+        log_admin_action(uid, "owner_support_reply", detail=str(tk.get("ticket_no", "")))
+        try:
+            await context.bot.send_message(
+                tk["user_id"],
+                f"🛟 <b>رد جديد على تذكرتك <code>{tk['ticket_no']}</code></b>\n\n{escape(text[:1500])}",
+                parse_mode="HTML")
+        except Exception:
+            pass
+        await update.message.reply_text(
+            f"✅ تم إرسال الرد لصاحب التذكرة <code>{tk['ticket_no']}</code>.",
+            parse_mode="HTML",
+            reply_markup=_kb([[inline_button("🎫 عرض التذكرة", callback_data=f"own_sup_{tid}")]]))
+        return True
+
+    if state == "perm_add":
+        if not text.lstrip("-").isdigit():
+            await update.message.reply_text("⚠️ أرسل ID رقميًا فقط.")
+            return True
+        target_id = int(text)
+        rows = [
+            [inline_button("✅ تأكيد المنح", callback_data=f"own_set_perm_add_do_{target_id}"),
+             inline_button("↩️ إلغاء", callback_data="own_set_perms")],
+        ]
+        await update.message.reply_text(
+            "⚠️ <b>تأكيد الصلاحيات الجديدة</b>\n\n"
+            f"• المستخدم: <code>{target_id}</code>\n"
+            f"• الصلاحية الممنوحة: <b>أدمن عادي</b> (لوحة /admin فقط)\n"
+            "• لوحة المالك: <b>لا تُمنح أبدًا</b>\n\n"
+            "سيُسجل التعديل في سجل الأمان.",
+            parse_mode="HTML", reply_markup=_kb(rows))
+        return True
+
+    if state == "target":
+        if not text.isdigit() or int(text) <= 0 or int(text) > 100000:
+            await update.message.reply_text("⚠️ أرسل رقمًا صحيحًا أكبر من صفر.")
+            return True
+        new_val = int(text)
+        current = referral.get_effective_target()
+        rows = [
+            [inline_button("✅ حفظ القاعدة", callback_data=f"own_set_target_do_{new_val}"),
+             inline_button("↩️ إلغاء", callback_data="own_set")],
+        ]
+        await update.message.reply_text(
+            "🎯 <b>تأكيد تغيير قاعدة الإحالات</b>\n\n"
+            f"• القاعدة الحالية: <b>{current}</b> مستخدمًا مؤهلًا\n"
+            f"• القاعدة الجديدة: <b>{new_val}</b> مستخدمًا مؤهلًا\n\n"
+            "بعد الحفظ: تسري فورًا + تُسجل في سجل الأمان.",
+            parse_mode="HTML", reply_markup=_kb(rows))
+        return True
+
+    logger.warning("Dropped unknown owner text state: %s", state)
+    return True

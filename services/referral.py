@@ -309,7 +309,7 @@ def get_stats(user_id: int) -> dict:
         "SELECT COUNT(*) AS cnt FROM referrals WHERE referrer_id = ? AND status = 'suspicious'", (uid,)
     )["cnt"]
     qualified = int(qualified or 0)
-    target = REFERRAL_TARGET
+    target = get_effective_target()
     pct = min(100.0, round(qualified * 100.0 / target, 1)) if target else 0.0
     instance = pg.fetchone(
         "SELECT id, bot_username, status FROM bot_instances WHERE owner_id = ? ORDER BY id DESC LIMIT 1", (uid,)
@@ -331,6 +331,128 @@ def get_referrals_list(user_id: int, limit: int = 10, offset: int = 0) -> list[d
         "SELECT referred_id, status, bound_at, qualified_at FROM referrals "
         "WHERE referrer_id = ? ORDER BY id DESC LIMIT ? OFFSET ?",
         (int(user_id), limit, offset),
+    )
+
+
+# ---- owner-level network intelligence ------------------------------------------
+
+def get_effective_target() -> int:
+    """The referral target actually in force.
+
+    The owner can override REFERRAL_TARGET at runtime from the owner panel;
+    the override lives in the main bot_settings table. Falls back to the env
+    value (module attribute, so tests that patch it keep working).
+    """
+    try:
+        from database.bot_settings import get_setting
+        raw = get_setting("referral_target", "")
+        if str(raw).strip().isdigit() and int(raw) > 0:
+            return int(raw)
+    except Exception:
+        pass
+    return int(REFERRAL_TARGET)
+
+
+def set_target_override(value: int | None) -> None:
+    """Persist (or clear with None) the owner's referral-target override."""
+    from database.bot_settings import set_setting, delete_setting
+    if value is None:
+        delete_setting("referral_target")
+    else:
+        set_setting("referral_target", str(int(value)))
+
+
+def get_network_overview() -> dict:
+    """Whole-network counters for the owner's referral center."""
+    def _cnt(sql: str, params: tuple = ()) -> int:
+        row = pg.fetchone(sql, params)
+        return int((row or {}).get("cnt") or 0)
+
+    by_status = {
+        row["status"]: int(row["cnt"])
+        for row in pg.fetchall(
+            "SELECT status, COUNT(*) AS cnt FROM referrals GROUP BY status"
+        )
+    }
+    rewards = {
+        row["status"]: int(row["cnt"])
+        for row in pg.fetchall(
+            "SELECT status, COUNT(*) AS cnt FROM referral_rewards GROUP BY status"
+        )
+    }
+    instances = {
+        row["status"]: int(row["cnt"])
+        for row in pg.fetchall(
+            "SELECT status, COUNT(*) AS cnt FROM bot_instances GROUP BY status"
+        )
+    }
+    total_refs = sum(by_status.values())
+    qualified = by_status.get("qualified", 0)
+    return {
+        "total": total_refs,
+        "by_status": by_status,
+        "codes": _cnt("SELECT COUNT(*) AS cnt FROM referral_codes"),
+        "rewards": rewards,
+        "instances": instances,
+        "instances_total": sum(instances.values()),
+        "conversion": round(qualified * 100.0 / total_refs, 1) if total_refs else 0.0,
+        "target": get_effective_target(),
+    }
+
+
+def get_top_referrers(limit: int = 10) -> list[dict]:
+    """Leaderboard: most qualified referrals first."""
+    return pg.fetchall(
+        "SELECT referrer_id, COUNT(*) AS total, "
+        "SUM(CASE WHEN status = 'qualified' THEN 1 ELSE 0 END) AS qualified, "
+        "SUM(CASE WHEN status = 'suspicious' THEN 1 ELSE 0 END) AS suspicious "
+        "FROM referrals GROUP BY referrer_id "
+        "ORDER BY qualified DESC, total DESC LIMIT ?",
+        (limit,),
+    )
+
+
+def list_all_instances(limit: int = 30) -> list[dict]:
+    """Every clone instance ever created (owner's instance-management screen)."""
+    return pg.fetchall(
+        "SELECT id, owner_id, bot_id, bot_username, status, last_error, created_at, activated_at "
+        "FROM bot_instances ORDER BY id DESC LIMIT ?",
+        (limit,),
+    )
+
+
+def set_instance_status(instance_id: int, status: str) -> None:
+    pg.execute(
+        "UPDATE bot_instances SET status = ? WHERE id = ?",
+        (status[:30], int(instance_id)),
+    )
+
+
+def get_referrer_of(user_id: int) -> dict | None:
+    """Who referred this user (owner's user-profile 'الإحالات' tab)."""
+    return pg.fetchone(
+        "SELECT referrer_id, code, status, bound_at FROM referrals WHERE referred_id = ?",
+        (int(user_id),),
+    )
+
+
+def get_referrer_counts(user_id: int) -> dict:
+    row = pg.fetchone(
+        "SELECT COUNT(*) AS total, "
+        "SUM(CASE WHEN status = 'qualified' THEN 1 ELSE 0 END) AS qualified, "
+        "SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END) AS pending, "
+        "SUM(CASE WHEN status = 'suspicious' THEN 1 ELSE 0 END) AS suspicious "
+        "FROM referrals WHERE referrer_id = ?",
+        (int(user_id),),
+    ) or {}
+    return {k: int(row.get(k) or 0) for k in ("total", "qualified", "pending", "suspicious")}
+
+
+def get_instance_by_owner(owner_id: int) -> dict | None:
+    return pg.fetchone(
+        "SELECT id, bot_username, status, last_error, activated_at "
+        "FROM bot_instances WHERE owner_id = ? ORDER BY id DESC LIMIT 1",
+        (int(owner_id),),
     )
 
 

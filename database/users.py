@@ -75,13 +75,61 @@ def get_new_users_today() -> int:
         c.execute("SELECT COUNT(*) as cnt FROM users WHERE date(join_date) = date('now')")
         return c.fetchone()["cnt"]
 
-def ban_user(user_id: int):
+def ban_user(user_id: int, reason: str = ""):
+    """Ban a user, always recording WHY and WHEN (owner-panel requirement)."""
     with db_cursor() as c:
-        c.execute("UPDATE users SET is_banned = 1 WHERE user_id = ?", (user_id,))
+        c.execute(
+            "UPDATE users SET is_banned = 1, ban_reason = ?, banned_at = datetime('now') "
+            "WHERE user_id = ?",
+            ((reason or "")[:300], user_id),
+        )
 
 def unban_user(user_id: int):
     with db_cursor() as c:
-        c.execute("UPDATE users SET is_banned = 0 WHERE user_id = ?", (user_id,))
+        c.execute(
+            "UPDATE users SET is_banned = 0, ban_reason = '', banned_at = NULL "
+            "WHERE user_id = ?",
+            (user_id,),
+        )
+
+
+def get_banned_users(limit: int = 50) -> list[dict]:
+    """Banned list with reason + date, newest ban first."""
+    with db_cursor() as c:
+        c.execute(
+            "SELECT user_id, username, first_name, ban_reason, banned_at "
+            "FROM users WHERE is_banned = 1 ORDER BY banned_at DESC LIMIT ?",
+            (limit,),
+        )
+        return [dict(row) for row in c.fetchall()]
+
+
+def get_new_users_week() -> int:
+    with db_cursor() as c:
+        c.execute("SELECT COUNT(*) AS cnt FROM users WHERE join_date >= datetime('now', '-7 days')")
+        return c.fetchone()["cnt"]
+
+
+def get_new_users_month() -> int:
+    with db_cursor() as c:
+        c.execute("SELECT COUNT(*) AS cnt FROM users WHERE join_date >= datetime('now', '-30 days')")
+        return c.fetchone()["cnt"]
+
+
+def export_users_csv_rows(limit: int = 5000) -> list[dict]:
+    """Rows for the owner's CSV export (only fields the owner may export)."""
+    with db_cursor() as c:
+        c.execute("""
+            SELECT u.user_id, u.username, u.first_name, u.last_name,
+                   u.join_date, u.last_seen, u.is_banned, u.ban_reason,
+                   COALESCE(d.cnt, 0) AS downloads
+            FROM users u
+            LEFT JOIN (SELECT user_id, COUNT(*) AS cnt FROM downloads GROUP BY user_id) d
+              ON d.user_id = u.user_id
+            ORDER BY u.join_date DESC
+            LIMIT ?
+        """, (limit,))
+        return [dict(row) for row in c.fetchall()]
 
 def count_users(status: str | None = None) -> int:
     """Total users, optionally filtered by status: 'all', 'active', 'banned'."""
