@@ -1,33 +1,33 @@
-import sqlite3
+"""PostgreSQL-only main database.
+
+EVERYTHING — users, downloads, cache, settings, tickets, audit logs — lives
+in PostgreSQL (the DSN database/pg.py resolves: NEON_DATABASE_URL /
+POSTGRES_URL / postgres DATABASE_URL). The former SQLite fallback has been
+removed completely; without a DSN the database layer now fails loudly with
+an actionable error instead of silently degrading.
+
+All SQL below (and in every database/*.py module) is written in the portable
+shorthand dialect; _pg_translate() maps it to PostgreSQL on the fly —
+datetime modifiers, INSERT OR IGNORE, AUTOINCREMENT DDL, date() helpers and
+`?` placeholders are all translated before the statement is executed.
+"""
+
 import logging
-import os
 import re
-import shutil
 from contextlib import contextmanager
-from config.settings import DATABASE_PATH
 
 logger = logging.getLogger(__name__)
 
 
-# ============================================================================
-# Dual-backend main database.
-#
-# PRIMARY: PostgreSQL (the same DSN pg.py resolves: NEON_DATABASE_URL /
-# POSTGRES_URL / postgres DATABASE_URL). When it is set, EVERYTHING — users,
-# downloads, cache, settings, tickets, audit logs — lives in Postgres and
-# survives restarts/redeploys permanently.
-#
-# FALLBACK: the SQLite file (DATABASE_PATH) for local dev / hosts without
-# Postgres. All SQL below (and in every database/*.py module) is written in
-# the portable SQLite dialect; on Postgres it is translated on the fly by
-# _pg_translate() — datetime modifiers, INSERT OR IGNORE, AUTOINCREMENT DDL,
-# date() helpers and `?` placeholders are all mapped to PG equivalents.
-# ============================================================================
-
 _PG_TS_FMT = "YYYY-MM-DD HH24:MI:SS"
 
+_MISSING_DSN_ERROR = (
+    "PostgreSQL is required but no DSN is configured. Set NEON_DATABASE_URL "
+    "(or POSTGRES_URL / DATABASE_URL) to your PostgreSQL connection string."
+)
+
 # Tables whose PK is a serial ``id`` — INSERTs get RETURNING id appended so
-# ``cursor.lastrowid`` keeps working on Postgres.
+# ``cursor.lastrowid`` keeps working.
 _ID_RETURN_TABLES = {
     "downloads", "file_cache", "broadcast_log", "admin_audit_log",
     "support_tickets", "support_ticket_messages",
@@ -47,14 +47,14 @@ _RE_INSERT_INTO = re.compile(r"^\s*INSERT\s+INTO\s+([A-Za-z_][A-Za-z0-9_]*)", re
 
 
 def _pg_dsn() -> str:
-    """The Postgres DSN in force (resolved once by database/pg.py)."""
+    """The PostgreSQL DSN in force (resolved once by database/pg.py)."""
     from .pg import PG_DSN
     return PG_DSN
 
 
 def backend_name() -> str:
-    """'postgres' when a Postgres DSN is configured, else 'sqlite'."""
-    return "postgres" if _pg_dsn() else "sqlite"
+    """The one and only backend."""
+    return "postgres"
 
 
 def _pg_now() -> str:
@@ -62,12 +62,12 @@ def _pg_now() -> str:
 
 
 def _pg_translate(sql: str) -> str:
-    """Translate the portable SQLite dialect used across database/*.py to PG."""
+    """Translate the portable shorthand dialect used across database/*.py to PG."""
     s = sql
     # datetime('now', '-' || ? || ' days')  ->  make_interval(days => ?)
     s = _RE_DT_CONCAT_DAYS.sub(
         f"to_char((now() at time zone 'utc') - make_interval(days => ?), '{_PG_TS_FMT}')", s)
-    # datetime('now', ?)  — param is an SQLite modifier string like
+    # datetime('now', ?)  — param is a modifier string like
     # '-86400 seconds' / '-30 days'; both are valid PG interval literals.
     s = _RE_DT_PARAM.sub(
         f"to_char((now() at time zone 'utc') + (?)::interval, '{_PG_TS_FMT}')", s)
@@ -84,7 +84,7 @@ def _pg_translate(sql: str) -> str:
         s = _RE_INSERT_OR_IGNORE.sub("INSERT INTO", s)
         if "ON CONFLICT" not in s.upper():
             s = s.rstrip().rstrip(";") + " ON CONFLICT DO NOTHING"
-    # DDL types: SQLite AUTOINCREMENT -> PG SERIAL; widen INTEGER -> BIGINT
+    # DDL types: AUTOINCREMENT -> PG SERIAL; widen INTEGER -> BIGINT
     # (Telegram ids exceed int4).
     s = _RE_PK_AUTOINC.sub("SERIAL PRIMARY KEY", s)
     s = _RE_PK_PLAIN.sub("BIGINT PRIMARY KEY", s)
@@ -95,8 +95,8 @@ def _pg_translate(sql: str) -> str:
 
 
 class _PGCompatCursor:
-    """psycopg2 cursor wrapped to behave like the sqlite3 cursor the whole
-    codebase expects: ``execute`` returns self (chaining), rows are dicts,
+    """psycopg2 cursor wrapped to behave like the cursor the whole codebase
+    expects: ``execute`` returns self (chaining), rows are dicts,
     ``lastrowid`` works, and ``executescript`` is available."""
 
     def __init__(self, raw):
@@ -147,112 +147,42 @@ class _PGCompatCursor:
 
 
 def table_columns(table: str) -> set:
-    """Column names of a table, on BOTH backends (replaces PRAGMA table_info)."""
-    if _pg_dsn():
-        with db_cursor() as c:
-            c.execute(
-                "SELECT column_name FROM information_schema.columns "
-                "WHERE table_name = ?", (table,),
-            )
-            return {row["column_name"] for row in c.fetchall()}
+    """Column names of a table (information_schema)."""
     with db_cursor() as c:
-        return {row[1] for row in c.execute(f"PRAGMA table_info({table})").fetchall()}
+        c.execute(
+            "SELECT column_name FROM information_schema.columns "
+            "WHERE table_name = ?", (table,),
+        )
+        return {row["column_name"] for row in c.fetchall()}
 
-
-def _has_users(path: str) -> bool:
-    """True when the SQLite file at ``path`` has at least one row in ``users``."""
-    if not path or not os.path.exists(path):
-        return False
-    try:
-        con = sqlite3.connect(path)
-        try:
-            row = con.execute("SELECT COUNT(*) FROM users").fetchone()
-            return bool(row and row[0] and int(row[0]) > 0)
-        finally:
-            con.close()
-    except Exception:
-        return False
-
-
-def _migrate_legacy_database() -> None:
-    """One-time copy of the repo-relative DB to the persistent location.
-
-    Older deployments stored ``database/bot.db`` next to the code, which is
-    wiped on every rebuild. When the process now points at a persistent path
-    (``/data/bot.db`` or ``DATABASE_PATH``) and the persistent file is empty or
-    missing while the legacy file still has users, copy the legacy file over so
-    no accumulated users are lost during the switch.
-    """
-    legacy = os.path.join(os.getcwd(), "database", "bot.db")
-    try:
-        same = os.path.abspath(legacy) == os.path.abspath(DATABASE_PATH)
-    except Exception:
-        same = True
-    if same:
-        return
-    if not _has_users(legacy):
-        return
-    if _has_users(DATABASE_PATH):
-        return
-    try:
-        os.makedirs(os.path.dirname(DATABASE_PATH) or ".", exist_ok=True)
-        shutil.copy2(legacy, DATABASE_PATH)
-        logger.info("Migrated legacy database %s -> %s", legacy, DATABASE_PATH)
-    except Exception:
-        logger.exception("Failed to migrate legacy database; starting fresh at %s", DATABASE_PATH)
-
-def get_connection():
-    conn = sqlite3.connect(DATABASE_PATH, check_same_thread=False, timeout=10)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA journal_mode=WAL")
-    # Durability: guarantee that committed writes survive process/OS/power
-    # failure (WAL's default NORMAL is crash-safe but NOT power-loss-safe).
-    conn.execute("PRAGMA synchronous=FULL")
-    conn.execute("PRAGMA busy_timeout=5000")
-    conn.execute("PRAGMA foreign_keys=ON")
-    return conn
 
 @contextmanager
 def db_cursor():
     dsn = _pg_dsn()
-    if dsn:
-        # ---- Postgres path: same interface, translated SQL ----
-        import psycopg2
-        import psycopg2.extras
-        conn = psycopg2.connect(dsn, connect_timeout=15)
-        try:
-            raw = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-            yield _PGCompatCursor(raw)
-            conn.commit()
-        except Exception:
-            try:
-                conn.rollback()
-            except Exception:
-                pass
-            raise
-        finally:
-            try:
-                conn.close()
-            except Exception:
-                pass
-        return
-    # ---- SQLite fallback (local dev / hosts without Postgres) ----
-    conn = get_connection()
+    if not dsn:
+        raise RuntimeError(_MISSING_DSN_ERROR)
+    import psycopg2
+    import psycopg2.extras
+    conn = psycopg2.connect(dsn, connect_timeout=15)
     try:
-        cursor = conn.cursor()
-        yield cursor
+        raw = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        yield _PGCompatCursor(raw)
         conn.commit()
     except Exception:
-        conn.rollback()
+        try:
+            conn.rollback()
+        except Exception:
+            pass
         raise
     finally:
-        conn.close()
+        try:
+            conn.close()
+        except Exception:
+            pass
+
 
 def init_db():
-    if backend_name() == "postgres":
-        logger.info("Main database backend: postgres (persistent)")
-    else:
-        _migrate_legacy_database()
+    logger.info("Main database backend: postgres (persistent)")
     with db_cursor() as c:
         c.executescript("""
             CREATE TABLE IF NOT EXISTS users (
@@ -376,8 +306,6 @@ def ensure_owner_schema():
       and a timestamp (shown in the owner's banned list and audit trail).
     * ``extra_admins`` — admins granted at runtime BY THE OWNER (never owners).
     """
-    # SQLite's PRAGMA is not valid SQL on PostgreSQL; use the shared,
-    # backend-aware information_schema/PRAGMA helper instead.
     cols = table_columns("users")
     with db_cursor() as c:
         if "ban_reason" not in cols:
@@ -391,10 +319,9 @@ def ensure_owner_schema():
             )
         """)
 
+
 def ensure_cache_schema():
     """Additive migrations for fingerprint + vault columns (safe on existing DBs)."""
-    # Same PRAGMA-on-Postgres hazard as ensure_owner_schema — use the
-    # dual-backend table_columns() helper instead.
     cols = table_columns("file_cache")
     with db_cursor() as c:
         if "fingerprint" not in cols:

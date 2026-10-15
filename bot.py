@@ -238,9 +238,8 @@ def build_application(token: str | None = None, clone: bool = False) -> Applicat
 def main():
     init_db()
     system_logger.info("Database initialized.")
-    # Referral/clone tables (Neon Postgres when NEON_DATABASE_URL is set,
-    # otherwise the local SQLite file) must exist before the first /start
-    # attribution or any claim attempt.
+    # Referral/clone tables (PostgreSQL — the only database backend) must
+    # exist before the first /start attribution or any claim attempt.
     try:
         from database.pg import init_referral_schema, backend_name
         init_referral_schema()

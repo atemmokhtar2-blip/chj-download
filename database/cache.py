@@ -3,7 +3,7 @@ Telegram media file_id cache — 3-tier production architecture (2026).
 
   Request → L1 in-process TTLCache (cachetools, µs)
          → L2 Redis (optional, multi-worker, ms)
-         → L3 SQLite (durable, TTL + LRU eviction)
+         → L3 PostgreSQL (durable, TTL + LRU eviction)
 
 Also supports album/media-group entries as ordered JSON lists of file_ids.
 
@@ -157,9 +157,9 @@ def _redis_key(h: str, quality: str, media_type: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-# L3 helpers — SQLite
+# L3 helpers — PostgreSQL
 # ---------------------------------------------------------------------------
-def _sqlite_get(h: str, quality: str, media_type: str) -> str | None:
+def _db_get(h: str, quality: str, media_type: str) -> str | None:
     with db_cursor() as c:
         c.execute(
             """
@@ -191,7 +191,7 @@ def _sqlite_get(h: str, quality: str, media_type: str) -> str | None:
         return row["file_id"]
 
 
-def _sqlite_set(
+def _db_set(
     h: str, quality: str, media_type: str, file_id: str,
     title: str, platform: str,
 ) -> None:
@@ -225,7 +225,7 @@ def _sqlite_set(
                 )
 
 
-def _sqlite_delete(h: str, quality: str | None = None, media_type: str | None = None) -> int:
+def _db_delete(h: str, quality: str | None = None, media_type: str | None = None) -> int:
     with db_cursor() as c:
         if quality is not None and media_type is not None:
             c.execute(
@@ -263,9 +263,9 @@ def get_cached(url: str, quality: str, media_type: str) -> str | None:
 
     # L3
     try:
-        file_id = _sqlite_get(h, quality, media_type)
+        file_id = _db_get(h, quality, media_type)
     except Exception as e:
-        logger.debug("SQLite cache get failed: %s", e)
+        logger.debug("DB cache get failed: %s", e)
         file_id = None
 
     if not file_id:
@@ -303,9 +303,9 @@ def set_cache(
             except Exception as e:
                 logger.debug("Redis cache operation failed: %s", e)
         try:
-            _sqlite_set(h, quality, media_type, file_id, title, platform)
+            _db_set(h, quality, media_type, file_id, title, platform)
         except Exception as e:
-            logger.warning("SQLite cache set failed: %s", e)
+            logger.warning("DB cache set failed: %s", e)
 
 
 def invalidate_cache(
@@ -334,7 +334,7 @@ def invalidate_cache(
             logger.debug("Redis cache operation failed: %s", e)
 
     try:
-        deleted = _sqlite_delete(h, quality, media_type)
+        deleted = _db_delete(h, quality, media_type)
     except Exception:
         deleted = 0
     if deleted:

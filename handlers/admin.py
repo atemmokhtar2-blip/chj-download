@@ -57,7 +57,7 @@ def _clear_admin_state(user_id: int) -> None:
 
 
 def _short_datetime(value: str | None) -> str:
-    """Return 'اليوم' or YYYY-MM-DD from an SQLite datetime string."""
+    """Return 'اليوم' or YYYY-MM-DD from a database datetime string."""
     if not value:
         return "—"
     text = str(value).strip()

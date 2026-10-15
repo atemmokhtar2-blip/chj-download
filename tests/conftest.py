@@ -1,37 +1,45 @@
-"""Pytest session configuration.
+"""Pytest session configuration — PostgreSQL-only test suite.
 
-This file is imported BEFORE any test module, which is the only reliable
-moment to pin the database location: ``config.settings`` resolves
-``DATABASE_PATH`` from the environment exactly once (at first import) and
-every database module caches that value. Without this, whichever test module
-happens to import settings first decides where ALL tests write — which in a
-full-suite run leaked test rows into the real ``database/bot.db``.
+Production stores EVERYTHING in PostgreSQL (NEON_DATABASE_URL); the SQLite
+fallback has been removed entirely. To guarantee the tests exercise the real
+backend, this conftest makes a PostgreSQL server available BEFORE any
+project module is imported:
 
-Every test therefore runs against one disposable SQLite file
-(``temp/test_suite.db``), recreated fresh each session, and the Postgres
-env vars are stripped so the SQLite fallback path is always exercised.
-Test modules that need their own isolated DB (e.g. test_clone_plans) pin
-the module-level constants themselves and restore them afterwards.
+  * when ``TEST_PG_DSN`` is set (e.g. a CI service container) it is used;
+  * otherwise a throwaway embedded PostgreSQL (``embedded-postgres``
+    package) is booted under ``temp/`` and stopped at session end.
+
+NEON_DATABASE_URL is then pointed at a dedicated suite database. Test
+modules that need full isolation create their own dedicated database with
+``pgtest.create_test_database(...)`` and pin ``database.pg.PG_DSN``
+(restoring it afterwards), exactly like the old per-module SQLite files.
 """
 
+import atexit
 import os
 import sys
 
 TESTS_DIR = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(TESTS_DIR)
-SUITE_DB = os.path.join(ROOT, "temp", "test_suite.db")
-
-# Must happen before config.settings (and thus any database module) is imported.
-os.environ["DATABASE_PATH"] = SUITE_DB
-for _var in ("NEON_DATABASE_URL", "POSTGRES_URL", "DATABASE_URL"):
-    os.environ.pop(_var, None)
-
-os.makedirs(os.path.dirname(SUITE_DB), exist_ok=True)
-try:
-    if os.path.exists(SUITE_DB):
-        os.remove(SUITE_DB)
-except OSError:
-    pass
-
+if TESTS_DIR not in sys.path:
+    sys.path.insert(0, TESTS_DIR)
 if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
+
+import pgtest  # noqa: E402
+
+# Must happen before config.settings (and thus database.pg) is imported.
+pgtest.bootstrap()
+
+# Referral/clone defaults shared by the whole suite (production values).
+os.environ.setdefault("REFERRAL_TARGET", "70")
+os.environ.setdefault("REFERRAL_QUALIFIED_DAYS", "30")
+os.environ.setdefault("CLONE_PRO_TARGET_MULTIPLIER", "2")
+os.environ.setdefault("CLONE_PLAN_BASIC_DAYS", "30")
+os.environ.setdefault("CLONE_PLAN_PRO_DAYS", "40")
+
+atexit.register(pgtest.stop)
+
+
+def pytest_sessionfinish(session, exitstatus):  # noqa: ARG001
+    pgtest.stop()

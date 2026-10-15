@@ -1,6 +1,6 @@
 """Owner-controlled runtime settings + dynamic admin registry.
 
-Everything here is stored in the main SQLite database (``bot_settings``
+Everything here is stored in the main PostgreSQL database (``bot_settings``
 key/value table and ``extra_admins`` table created by ``ensure_owner_schema``).
 
 Security model:

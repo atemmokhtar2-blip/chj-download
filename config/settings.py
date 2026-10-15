@@ -9,33 +9,11 @@ BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
 ADMIN_IDS = [int(x) for x in os.getenv("ADMIN_IDS", "7631249810").split(",") if x.strip().isdigit()]
 OWNER_ID = int(os.getenv("OWNER_ID", "7631249810")) if os.getenv("OWNER_ID", "7631249810").isdigit() else 7631249810
 
-def _resolve_database_path() -> str:
-    """Persistent SQLite location across redeploys/restarts.
-
-    Hosts like Railway / Render mount persistent disks at ``/data``
-    while the app directory itself is rebuilt from git on every deploy, so a
-    default ``database/bot.db`` next to the code is wiped each time and users
-    "disappear". Priority:
-      1. ``DATABASE_PATH`` env var (explicit, any host)
-      2. ``DATA_DIR`` env var (a directory that is already a persistent volume)
-      3. ``/data`` when the platform exposes it
-      4. the legacy repo-relative path (local development)
-    """
-    explicit = os.getenv("DATABASE_PATH", "").strip()
-    if explicit:
-        return explicit
-
-    data_dir = os.getenv("DATA_DIR", "").strip()
-    if data_dir:
-        return os.path.join(data_dir, "bot.db")
-
-    if os.path.isdir("/data"):
-        return os.path.join("/data", "bot.db")
-
-    return os.path.join(os.getcwd(), "database", "bot.db")
-
-
-DATABASE_PATH = _resolve_database_path()
+# PostgreSQL is the ONE and ONLY database backend. The DSN is resolved in
+# database/pg.py from NEON_DATABASE_URL / POSTGRES_URL / DATABASE_URL
+# (postgres:// prefix) and MUST be set — without it the bot fails loudly at
+# startup instead of silently degrading. The former SQLite fallback
+# (DATABASE_PATH) has been removed completely.
 TEMP_DIR = os.path.join(os.getcwd(), "temp")
 LOGS_DIR = os.path.join(os.getcwd(), "logs")
 
@@ -46,7 +24,7 @@ DOWNLOAD_TIMEOUT = int(os.getenv("DOWNLOAD_TIMEOUT", "300"))
 # Moving-window cooldown: RATE_LIMIT_BURST hits allowed per RATE_LIMIT_SECONDS.
 RATE_LIMIT_SECONDS = int(os.getenv("RATE_LIMIT_SECONDS", "15"))
 RATE_LIMIT_BURST = int(os.getenv("RATE_LIMIT_BURST", "2"))
-# Moving-window quotas (`limits` library; SQLite backstop without Redis).
+# Moving-window quotas (`limits` library; in-memory backstop without Redis).
 HOURLY_DOWNLOAD_LIMIT = int(os.getenv("HOURLY_DOWNLOAD_LIMIT", "30"))
 DAILY_DOWNLOAD_LIMIT = int(os.getenv("DAILY_DOWNLOAD_LIMIT", "100"))
 # Batch handling: how many URLs may be processed in a single multi-link message.
@@ -100,9 +78,9 @@ ENABLE_CLONE_INSTANCES = os.getenv("ENABLE_CLONE_INSTANCES", "1") == "1"
 CLONE_PLAN_BASIC_DAYS = int(os.getenv("CLONE_PLAN_BASIC_DAYS", "30"))
 CLONE_PLAN_PRO_DAYS = int(os.getenv("CLONE_PLAN_PRO_DAYS", "40"))
 CLONE_PRO_TARGET_MULTIPLIER = float(os.getenv("CLONE_PRO_TARGET_MULTIPLIER", "2"))
-# Neon/Postgres DSN is resolved in database/pg.py from NEON_DATABASE_URL /
-# POSTGRES_URL / DATABASE_URL (postgres:// prefix). Without one, the referral
-# tables live in the same SQLite file as the rest of the bot.
+# The PostgreSQL DSN (NEON_DATABASE_URL / POSTGRES_URL / DATABASE_URL with a
+# postgres:// prefix) is resolved in database/pg.py — the referral tables
+# live in the same PostgreSQL database as the rest of the bot.
 
 SUPPORTED_DOMAINS = [
     "youtube.com", "youtu.be", "youtube-nocookie.com", "m.youtube.com", "music.youtube.com",
@@ -141,4 +119,3 @@ SUPPORTED_DOMAINS = [
 
 os.makedirs(TEMP_DIR, exist_ok=True)
 os.makedirs(LOGS_DIR, exist_ok=True)
-os.makedirs(os.path.dirname(DATABASE_PATH), exist_ok=True)

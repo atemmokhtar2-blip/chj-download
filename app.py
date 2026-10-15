@@ -30,7 +30,6 @@ sys.path.append(current_dir)
 from config.settings import (  # noqa: E402
     BOT_TOKEN,
     ADMIN_IDS,
-    DATABASE_PATH,
     MAX_FILE_SIZE_MB,
     RATE_LIMIT_SECONDS,
     RATE_LIMIT_BURST,
@@ -66,7 +65,7 @@ def format_uptime(seconds: float) -> str:
 
 
 def _first_value(row):
-    """First column value from a dict row (postgres) or sqlite3.Row."""
+    """First column value from a PostgreSQL dict row."""
     try:
         return row[0]
     except Exception:
@@ -77,8 +76,8 @@ def _first_value(row):
 
 
 def safe_scalar(query: str, default=0):
-    # Routes through database.db.db_cursor — Postgres when a DSN is set,
-    # SQLite fallback otherwise (SQLite date()/datetime() translate on the fly).
+    # Routes through database.db.db_cursor — PostgreSQL only (the portable
+    # date()/datetime() shorthand translates to PG on the fly).
     try:
         from database.db import db_cursor
         with db_cursor() as c:

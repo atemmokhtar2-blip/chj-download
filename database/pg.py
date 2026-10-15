@@ -1,34 +1,37 @@
-"""Dual-backend persistence for the referral & clone-instance network.
+"""PostgreSQL persistence for the referral & clone-instance network.
 
-PRIMARY: Neon PostgreSQL (serverless Postgres) — set ``NEON_DATABASE_URL``
-(or ``POSTGRES_URL`` / a postgres ``DATABASE_URL``). This is the production
-path: all referral, reward, instance and secret tables live in Neon.
+PostgreSQL is the ONLY backend (the former SQLite fallback has been removed
+completely). The DSN is resolved ONCE at import time from
+``NEON_DATABASE_URL`` (preferred), ``POSTGRES_URL``, or a postgres
+``DATABASE_URL``. Without a DSN every operation fails loudly with an
+actionable error instead of silently degrading — one database, no split
+brain between environments.
 
-FALLBACK: the bot's existing SQLite file (``DATABASE_PATH``) with the exact
-same tables, so local development and hosts without Postgres keep working.
-
-SQL in this module is written with ``?`` placeholders; on Postgres they are
-translated to ``%s``. Rows always come back as plain dicts on both backends.
-Ids that need to be returned use ``insert_returning_id`` (PG ``RETURNING``,
-SQLite ``lastrowid``).
+SQL in this module is written with ``?`` placeholders; they are translated
+to ``%s`` before execution. Rows always come back as plain dicts. Ids that
+need to be returned use ``insert_returning_id`` (PostgreSQL ``RETURNING``).
 
 Connections are short-lived (open → execute → commit → close). Referral
-traffic is low-frequency, and Neon is designed for exactly this pattern.
+traffic is low-frequency, and Neon/serverless Postgres is designed for
+exactly this pattern.
 """
 
 from __future__ import annotations
 
 import logging
 import os
-import sqlite3
 import threading
 from contextlib import contextmanager
-
-from config.settings import DATABASE_PATH
 
 logger = logging.getLogger(__name__)
 
 _local = threading.local()
+
+MISSING_DSN_ERROR = (
+    "PostgreSQL is the only database backend, but no DSN is configured. "
+    "Set NEON_DATABASE_URL (or POSTGRES_URL / DATABASE_URL) to your "
+    "PostgreSQL connection string."
+)
 
 
 def _resolve_pg_dsn() -> str:
@@ -40,7 +43,7 @@ def _resolve_pg_dsn() -> str:
 
 
 PG_DSN = _resolve_pg_dsn()
-BACKEND = "postgres" if PG_DSN else "sqlite"
+BACKEND = "postgres"
 
 
 def backend_name() -> str:
@@ -48,14 +51,12 @@ def backend_name() -> str:
 
 
 def _translate(sql: str) -> str:
-    """Convert portable `?` placeholders to psycopg2's `%s` on Postgres."""
-    if BACKEND == "postgres":
-        return sql.replace("?", "%s")
-    return sql
+    """Convert portable `?` placeholders to psycopg2's `%s`."""
+    return sql.replace("?", "%s")
 
 
 class _Cursor:
-    """Normalizes sqlite3 / psycopg2 cursors into a dict-row interface."""
+    """Wraps a psycopg2 cursor into the dict-row interface callers expect."""
 
     def __init__(self, raw):
         self._raw = raw
@@ -77,25 +78,18 @@ class _Cursor:
     def rowcount(self) -> int:
         return self._raw.rowcount
 
-    @property
-    def lastrowid(self):
-        return getattr(self._raw, "lastrowid", None)
-
 
 @contextmanager
 def ref_cursor(commit: bool = True):
     """Yield a dict-row cursor; commit on success, rollback on error."""
+    if not PG_DSN:
+        raise RuntimeError(MISSING_DSN_ERROR)
     conn = None
     try:
-        if BACKEND == "postgres":
-            import psycopg2
-            import psycopg2.extras
-            conn = psycopg2.connect(PG_DSN, connect_timeout=15)
-            raw = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-        else:
-            conn = sqlite3.connect(DATABASE_PATH, timeout=30)
-            conn.row_factory = sqlite3.Row
-            raw = conn.cursor()
+        import psycopg2
+        import psycopg2.extras
+        conn = psycopg2.connect(PG_DSN, connect_timeout=15)
+        raw = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
         cur = _Cursor(raw)
         yield cur
         if commit:
@@ -135,32 +129,28 @@ def fetchall(sql: str, params: tuple = ()) -> list[dict]:
 
 
 def insert_returning_id(sql: str, params: tuple = ()) -> int | None:
-    """INSERT and return the new row id on both backends.
+    """INSERT and return the new row id (PostgreSQL ``RETURNING``).
 
-    ``sql`` must NOT include a RETURNING clause; it is appended for Postgres,
-    while SQLite uses ``lastrowid``.
+    ``sql`` must NOT include a RETURNING clause; it is appended here.
     """
     with ref_cursor() as c:
-        if BACKEND == "postgres":
-            c.execute(sql + " RETURNING id", params)
-            row = c.fetchone()
-            return int(row["id"]) if row else None
-        c.execute(sql, params)
-        return c.lastrowid
+        c.execute(sql + " RETURNING id", params)
+        row = c.fetchone()
+        return int(row["id"]) if row else None
 
 
 # ---- schema -----------------------------------------------------------------
 
 def _pk_col() -> str:
-    return "SERIAL PRIMARY KEY" if BACKEND == "postgres" else "INTEGER PRIMARY KEY AUTOINCREMENT"
+    return "SERIAL PRIMARY KEY"
 
 
 def _bigpk() -> str:
-    return "BIGINT PRIMARY KEY" if BACKEND == "postgres" else "INTEGER PRIMARY KEY"
+    return "BIGINT PRIMARY KEY"
 
 
 def _bigint() -> str:
-    return "BIGINT" if BACKEND == "postgres" else "INTEGER"
+    return "BIGINT"
 
 
 def init_referral_schema() -> None:
@@ -227,10 +217,10 @@ def init_referral_schema() -> None:
             last_used_at TIMESTAMP
         )""",
         # Per-instance clone configuration. NOTE: deliberately named
-        # ``clone_settings`` (NOT ``bot_settings``): the main SQLite database
-        # has its OWN global key/value ``bot_settings`` table (database/db.py),
-        # and on the SQLite fallback both schemas share ONE file — same name
-        # meant whichever DDL ran first broke the other's ON CONFLICT clauses.
+        # ``clone_settings`` (NOT ``bot_settings``): the main database has
+        # its OWN global key/value ``bot_settings`` table (database/db.py) —
+        # same name meant whichever DDL ran first broke the other's
+        # ON CONFLICT clauses.
         f"""CREATE TABLE IF NOT EXISTS clone_settings (
             instance_id {bi} NOT NULL,
             key TEXT NOT NULL,
@@ -269,42 +259,28 @@ def ensure_clone_settings_migration() -> None:
     """Migrate legacy per-instance settings out of the colliding ``bot_settings``.
 
     Databases created before the rename may hold a ``bot_settings`` table in
-    the REFERRAL shape (instance_id, key, value). On the SQLite fallback that
-    table hijacks the main database's global key/value ``bot_settings`` and
-    breaks ``ON CONFLICT(key)`` upserts (and vice versa). This copies any
-    legacy rows into ``clone_settings`` and drops the mis-shaped table so the
-    main schema can recreate its own. Idempotent on both backends.
+    the REFERRAL shape (instance_id, key, value), which hijacks the main
+    database's global key/value ``bot_settings`` and breaks
+    ``ON CONFLICT(key)`` upserts. This copies any legacy rows into
+    ``clone_settings`` and drops the mis-shaped table so the main schema can
+    recreate its own. Idempotent.
     """
     try:
-        if BACKEND == "postgres":
-            row = fetchone("SELECT to_regclass('public.bot_settings') AS t")
-            if row and row.get("t"):
-                cols = fetchall(
-                    "SELECT column_name FROM information_schema.columns "
-                    "WHERE table_name = 'bot_settings'"
-                )
-                names = {c["column_name"] for c in cols}
-                if "instance_id" in names:
-                    execute(
-                        "INSERT INTO clone_settings (instance_id, key, value) "
-                        "SELECT instance_id, key, value FROM bot_settings "
-                        "ON CONFLICT (instance_id, key) DO NOTHING"
-                    )
-                    execute("DROP TABLE bot_settings")
-                    logger.info("Migrated legacy referral bot_settings -> clone_settings (postgres)")
-            return
-        with ref_cursor(commit=False) as c:
-            bs_cols = {
-                row.get("name")
-                for row in c.execute("PRAGMA table_info(bot_settings)").fetchall()
-            }
-        if "instance_id" in bs_cols:
-            execute(
-                "INSERT OR IGNORE INTO clone_settings (instance_id, key, value) "
-                "SELECT instance_id, key, value FROM bot_settings"
+        row = fetchone("SELECT to_regclass('public.bot_settings') AS t")
+        if row and row.get("t"):
+            cols = fetchall(
+                "SELECT column_name FROM information_schema.columns "
+                "WHERE table_name = 'bot_settings'"
             )
-            execute("DROP TABLE bot_settings")
-            logger.info("Migrated legacy referral bot_settings -> clone_settings (sqlite)")
+            names = {c["column_name"] for c in cols}
+            if "instance_id" in names:
+                execute(
+                    "INSERT INTO clone_settings (instance_id, key, value) "
+                    "SELECT instance_id, key, value FROM bot_settings "
+                    "ON CONFLICT (instance_id, key) DO NOTHING"
+                )
+                execute("DROP TABLE bot_settings")
+                logger.info("Migrated legacy referral bot_settings -> clone_settings")
     except Exception:
         logger.exception("clone_settings migration failed")
 
@@ -313,19 +289,11 @@ def ensure_instance_plan_columns() -> None:
     """Additive migration: clone plan (basic/pro) + validity-window columns.
 
     New installs get them from the CREATE TABLE DDL above; this upgrades
-    databases created before the plan system existed, on BOTH backends.
+    databases created before the plan system existed.
     """
     try:
-        if BACKEND == "postgres":
-            execute("ALTER TABLE bot_instances ADD COLUMN IF NOT EXISTS plan TEXT DEFAULT 'basic'")
-            execute("ALTER TABLE bot_instances ADD COLUMN IF NOT EXISTS expires_at TIMESTAMP")
-            return
-        with ref_cursor(commit=False) as c:
-            cols = {row.get("name") for row in c.execute("PRAGMA table_info(bot_instances)").fetchall()}
-        if "plan" not in cols:
-            execute("ALTER TABLE bot_instances ADD COLUMN plan TEXT DEFAULT 'basic'")
-        if "expires_at" not in cols:
-            execute("ALTER TABLE bot_instances ADD COLUMN expires_at TIMESTAMP")
+        execute("ALTER TABLE bot_instances ADD COLUMN IF NOT EXISTS plan TEXT DEFAULT 'basic'")
+        execute("ALTER TABLE bot_instances ADD COLUMN IF NOT EXISTS expires_at TIMESTAMP")
     except Exception:
         logger.exception("instance plan columns migration failed")
 
@@ -333,20 +301,13 @@ def ensure_instance_plan_columns() -> None:
 def ensure_reward_milestone_column() -> None:
     """Additive migration for the ``notified_milestone`` reward column.
 
-    New installs already get it from the CREATE TABLE DDL above; this upgrades
-    databases created before milestone notifications existed, on BOTH backends
-    (Postgres + SQLite fallback).
+    New installs already get it from the CREATE TABLE DDL above; this
+    upgrades databases created before milestone notifications existed.
     """
     try:
-        if BACKEND == "postgres":
-            execute(
-                "ALTER TABLE referral_rewards "
-                "ADD COLUMN IF NOT EXISTS notified_milestone INTEGER DEFAULT 0"
-            )
-            return
-        with ref_cursor(commit=False) as c:
-            cols = {row.get("name") for row in c.execute("PRAGMA table_info(referral_rewards)").fetchall()}
-        if "notified_milestone" not in cols:
-            execute("ALTER TABLE referral_rewards ADD COLUMN notified_milestone INTEGER DEFAULT 0")
+        execute(
+            "ALTER TABLE referral_rewards "
+            "ADD COLUMN IF NOT EXISTS notified_milestone INTEGER DEFAULT 0"
+        )
     except Exception:
         logger.exception("referral milestone column migration failed")

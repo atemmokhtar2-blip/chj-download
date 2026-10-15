@@ -1,12 +1,11 @@
 from __future__ import annotations
 
 import os
-import sqlite3
 import sys
 from pathlib import Path
 from typing import Any
 
-from config.settings import BOT_TOKEN, DATABASE_PATH, TEMP_DIR, REDIS_URL, STORAGE_CHANNEL_ID
+from config.settings import BOT_TOKEN, TEMP_DIR, REDIS_URL, STORAGE_CHANNEL_ID
 
 
 def _ok(label: str, value: str = "OK") -> dict[str, str]:
@@ -26,18 +25,15 @@ def collect_runtime_diagnostics() -> list[dict[str, str]]:
     checks.append(_ok("Python", sys.version.split()[0]))
     checks.append(_ok("Telegram token", "loaded") if BOT_TOKEN else _fail("Telegram token", "missing TELEGRAM_BOT_TOKEN"))
 
-    # Database health: backend-aware (postgres when a DSN is configured,
-    # SQLite fallback otherwise).
+    # Database health: PostgreSQL is the only backend — a failure here is
+    # always critical (no silent fallback exists anymore).
     try:
-        from database.db import backend_name, db_cursor
-        backend = backend_name()
+        from database.db import db_cursor
         with db_cursor() as c:
             c.execute("SELECT 1")
-        label = "PostgreSQL" if backend == "postgres" else "SQLite"
-        value = "connected (persistent)" if backend == "postgres" else str(DATABASE_PATH)
-        checks.append(_ok(label, value))
+        checks.append(_ok("PostgreSQL", "connected (persistent)"))
     except Exception as exc:
-        checks.append(_fail("Database", str(exc)))
+        checks.append(_fail("PostgreSQL", str(exc)))
 
     temp = Path(TEMP_DIR)
     try:
@@ -62,7 +58,7 @@ def collect_runtime_diagnostics() -> list[dict[str, str]]:
     except Exception as exc:
         checks.append(_fail("Content Intelligence", str(exc)))
 
-    checks.append(_ok("Redis", "configured") if REDIS_URL else _warn("Redis", "not configured; memory/SQLite fallback active"))
+    checks.append(_ok("Redis", "configured") if REDIS_URL else _warn("Redis", "not configured; in-memory rate limits active"))
     checks.append(_ok("Media Vault", "configured") if STORAGE_CHANNEL_ID else _warn("Media Vault", "not configured; Telegram file_id cache only"))
     return checks
 

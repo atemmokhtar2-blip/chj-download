@@ -1,6 +1,6 @@
 """Support ticket storage + workflow.
 
-Tickets live in the MAIN SQLite database (``database.db`` schema) so they work
+Tickets live in the MAIN PostgreSQL database (``database.db`` schema) so they work
 for every user — main-bot users and clone users alike — and survive alongside
 the existing users/downloads data.
 """
