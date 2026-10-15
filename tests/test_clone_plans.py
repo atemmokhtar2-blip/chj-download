@@ -69,6 +69,7 @@ from services import referral  # noqa: E402
 # These modules may already have been imported by pytest collection before this
 # script changes the environment. Pin both backend paths and plan constants so
 # the smoke test remains isolated and order-independent.
+_original_database_paths = (main_db.DATABASE_PATH, pg.DATABASE_PATH)
 main_db.DATABASE_PATH = DB
 pg.DATABASE_PATH = DB
 _original_plan_settings = (
@@ -240,6 +241,7 @@ check("rules point to plans page", "الخطط والباقات" in _RULES_TEXT)
     referral.CLONE_PLAN_BASIC_DAYS,
     referral.CLONE_PLAN_PRO_DAYS,
 ) = _original_plan_settings
+main_db.DATABASE_PATH, pg.DATABASE_PATH = _original_database_paths
 
 print()
 if failures:
