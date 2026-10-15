@@ -481,7 +481,7 @@ async def clone_admin_callback(update: Update, context: ContextTypes.DEFAULT_TYP
                 await _deny(query, "⛔ صلاحية الإحصائيات أو الحظر مطلوبة لعرض المستخدمين.")
                 return
             key = (context.bot.id, query.message.chat_id)
-            _pending[key] = {"kind": "user_search", "ts": time.monotonic()}
+            _pending[key] = {"kind": "user_search", "ts": time.monotonic(), "uid": int(user.id)}
             text, kb = ("🔎 أرسل Telegram ID (أرقام) أو اسم مستخدم للبحث داخل نسختك.",
                         _rows([[("🔵 إلغاء", {"callback_data": "ca:users:0"})]]))
         elif data.startswith("ca:users:"):
@@ -516,7 +516,7 @@ async def clone_admin_callback(update: Update, context: ContextTypes.DEFAULT_TYP
             text, kb = await _render_settings(inst, user.id)
         elif data == "ca:settings:welcome":
             key = (context.bot.id, query.message.chat_id)
-            _pending[key] = {"kind": "welcome", "ts": time.monotonic()}
+            _pending[key] = {"kind": "welcome", "ts": time.monotonic(), "uid": int(user.id)}
             text, kb = ("✏️ أرسل رسالة الترحيب الجديدة (أو /cancel للإلغاء).\n"
                         "تُعرض للمستخدمين الجدد عند /start داخل نسختك.",
                         _rows([[("🔵 إلغاء", {"callback_data": "ca:settings"})]]))
@@ -541,7 +541,7 @@ async def clone_admin_callback(update: Update, context: ContextTypes.DEFAULT_TYP
                 await _deny(query, "⛔ صلاحية الإذاعة مطلوبة.")
                 return
             key = (context.bot.id, query.message.chat_id)
-            _pending[key] = {"kind": "broadcast", "ts": time.monotonic()}
+            _pending[key] = {"kind": "broadcast", "ts": time.monotonic(), "uid": int(user.id)}
             text, kb = ("✉️ أرسل نص الرسالة التي تريد إذاعتها لمستخدمي نسختك.\n"
                         "ستظهر لك معاينة وعدد المستلمين قبل الإرسال.",
                         _rows([[("🔵 إلغاء", {"callback_data": "ca:broadcast"})]]))
@@ -553,6 +553,12 @@ async def clone_admin_callback(update: Update, context: ContextTypes.DEFAULT_TYP
             draft = _drafts.pop(key, None)
             if not draft or time.monotonic() - draft.get("ts", 0) > _CAPTURE_TTL:
                 await _deny(query, "انتهت صلاحية المسودة — ابدأ رسالة جديدة.")
+                return
+            # Identity binding: a draft may only be confirmed by the admin
+            # who authored it — another admin (even with can_broadcast)
+            # cannot send someone else's draft text.
+            if int(draft.get("uid") or 0) != int(user.id):
+                await _deny(query, "🔒 المسودة تخص إداريًا آخر — أنشئ رسالة جديدة بنفسك.")
                 return
             await _do_broadcast(context, inst, user.id, str(draft["text"]), query)
             return
@@ -569,7 +575,7 @@ async def clone_admin_callback(update: Update, context: ContextTypes.DEFAULT_TYP
                 await _deny(query, "🔒 إدارة الإداريين لصاحب النسخة فقط.")
                 return
             key = (context.bot.id, query.message.chat_id)
-            _pending[key] = {"kind": "add_admin", "ts": time.monotonic()}
+            _pending[key] = {"kind": "add_admin", "ts": time.monotonic(), "uid": int(user.id)}
             text, kb = ("➕ أرسل Telegram ID (أرقام) للشخص الذي تريد منحه صلاحية إداري.\n"
                         "الافتراضي: مشاهدة الإحصائيات فقط — بقية الصلاحيات تُفعَّل يدويًا.",
                         _rows([[("🔵 إلغاء", {"callback_data": "ca:admins"})]]))
@@ -710,6 +716,14 @@ async def try_handle_capture(update: Update, context: ContextTypes.DEFAULT_TYPE)
     if time.monotonic() - pend.get("ts", 0) > _CAPTURE_TTL:
         _pending.pop(key, None)
         return False
+    # Identity binding — server-side, per action: ONLY the exact user who
+    # pressed the button may complete this capture. In a group chat nobody
+    # else can hijack it, and a stranger's chatter can no longer wipe the
+    # session; a mismatched sender is simply not handled here (returns
+    # False so the message routes on normally, pending stays intact).
+    sender_id = int(msg.from_user.id) if msg.from_user else 0
+    if not sender_id or sender_id != int(pend.get("uid") or 0):
+        return False
     gated = _gate(context, msg.from_user.id if msg.from_user else 0)
     if not gated:
         _pending.pop(key, None)
@@ -733,7 +747,7 @@ async def try_handle_capture(update: Update, context: ContextTypes.DEFAULT_TYPE)
         if not pp.perm_allows(inst, msg.from_user.id, "can_broadcast"):
             await msg.reply_text("⛔ صلاحية الإذاعة مطلوبة.")
             return True
-        _drafts[key] = {"text": text[:3500], "ts": time.monotonic()}
+        _drafts[key] = {"text": text[:3500], "ts": time.monotonic(), "uid": int(msg.from_user.id)}
         count = pp.clone_users_count(inst)
         preview = escape(text[:300]) + ("…" if len(text) > 300 else "")
         await msg.reply_text(

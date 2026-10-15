@@ -501,6 +501,80 @@ _br_main = _resolve_download_choice(
     "dl_audio", {}, {"audio_quality": "high"}, plan=None)[4]
 check("same preference untouched on main bot", _br_main == "320")
 
+print("== capture identity binding (server-side, per action) ==")
+import asyncio
+import time as _time_mod
+import handlers.clone_admin as ca
+
+_CAP_BOT = 900333
+_CAP_OWNER = 4301
+_CAP_ADMIN = 4302
+_CAP_STRANGER = 4303
+_cap_inst = _mk_instance(_CAP_OWNER, _CAP_BOT, "xd_cap_bot", "pro")
+pp.invalidate_instance_cache(_CAP_BOT)
+pp.add_clone_admin(int(_cap_inst["id"]), _CAP_ADMIN, _CAP_OWNER)
+
+
+class _FakeFrom:
+    def __init__(self, uid):
+        self.id = uid
+
+
+class _FakeMsg:
+    def __init__(self, text, uid, chat_id=777):
+        self.text = text
+        self.chat_id = chat_id
+        self.from_user = _FakeFrom(uid)
+        self.replies = []
+
+    async def reply_text(self, text, **kwargs):
+        self.replies.append(text)
+
+
+class _FakeBot:
+    def __init__(self, bid):
+        self.id = bid
+        self.username = "xd_cap_bot"  # is_clone_bot: non-empty and != main
+
+
+class _FakeCtx:
+    def __init__(self, bid):
+        self.bot = _FakeBot(bid)
+
+
+class _FakeUpdate:
+    def __init__(self, msg):
+        self.message = msg
+
+
+# A pending capture is bound to the EXACT user who pressed the button:
+# in a group chat a stranger's text neither completes nor wipes it.
+ca._pending[(_CAP_BOT, 777)] = {"kind": "add_admin", "ts": _time_mod.monotonic(), "uid": _CAP_OWNER}
+_s_msg = _FakeMsg(str(_CAP_STRANGER), _CAP_STRANGER)
+check("stranger text does NOT consume the owner's capture",
+      asyncio.run(ca.try_handle_capture(_FakeUpdate(_s_msg), _FakeCtx(_CAP_BOT))) is False)
+check("stranger text does NOT wipe the pending session", (_CAP_BOT, 777) in ca._pending)
+
+# Even a legitimate admin of the SAME clone cannot hijack the owner's capture.
+_a_msg = _FakeMsg(str(_CAP_STRANGER), _CAP_ADMIN)
+check("admin cannot hijack the owner's capture",
+      asyncio.run(ca.try_handle_capture(_FakeUpdate(_a_msg), _FakeCtx(_CAP_BOT))) is False)
+check("pending survives the admin's attempt", (_CAP_BOT, 777) in ca._pending)
+
+# The initiator himself completes it — and the grant lands in the permanent DB.
+_o_msg = _FakeMsg(str(_CAP_STRANGER), _CAP_OWNER)
+check("initiator completes his own capture",
+      asyncio.run(ca.try_handle_capture(_FakeUpdate(_o_msg), _FakeCtx(_CAP_BOT))) is True)
+check("grant landed in the permanent DB",
+      bool(pp.get_clone_admin(int(_cap_inst["id"]), _CAP_STRANGER)))
+check("capture consumed after completion", (_CAP_BOT, 777) not in ca._pending)
+
+# Broadcast drafts carry their author — identity is re-checked at confirm.
+ca._drafts[(_CAP_BOT, 777)] = {"text": "hi", "ts": _time_mod.monotonic(), "uid": _CAP_OWNER}
+check("draft stores its author",
+      int(ca._drafts[(_CAP_BOT, 777)].get("uid") or 0) == _CAP_OWNER)
+ca._drafts.pop((_CAP_BOT, 777), None)
+
 
 def test_plan_policy():
     assert not _failures, "FAILED CHECKS:\n" + "\n".join(_failures)
