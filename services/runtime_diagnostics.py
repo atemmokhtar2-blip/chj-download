@@ -26,16 +26,18 @@ def collect_runtime_diagnostics() -> list[dict[str, str]]:
     checks.append(_ok("Python", sys.version.split()[0]))
     checks.append(_ok("Telegram token", "loaded") if BOT_TOKEN else _fail("Telegram token", "missing TELEGRAM_BOT_TOKEN"))
 
-    db_path = Path(DATABASE_PATH)
-    if db_path.exists():
-        try:
-            with sqlite3.connect(DATABASE_PATH) as conn:
-                conn.execute("SELECT 1")
-            checks.append(_ok("SQLite", str(db_path)))
-        except Exception as exc:
-            checks.append(_fail("SQLite", str(exc)))
-    else:
-        checks.append(_fail("SQLite", f"missing {db_path}"))
+    # Database health: backend-aware (postgres when a DSN is configured,
+    # SQLite fallback otherwise).
+    try:
+        from database.db import backend_name, db_cursor
+        backend = backend_name()
+        with db_cursor() as c:
+            c.execute("SELECT 1")
+        label = "PostgreSQL" if backend == "postgres" else "SQLite"
+        value = "connected (persistent)" if backend == "postgres" else str(DATABASE_PATH)
+        checks.append(_ok(label, value))
+    except Exception as exc:
+        checks.append(_fail("Database", str(exc)))
 
     temp = Path(TEMP_DIR)
     try:

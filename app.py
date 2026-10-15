@@ -5,7 +5,6 @@ import sys
 import time
 import logging
 import asyncio
-import sqlite3
 import secrets
 from datetime import datetime
 from pathlib import Path
@@ -66,12 +65,28 @@ def format_uptime(seconds: float) -> str:
     return " ".join(parts)
 
 
-def safe_scalar(query: str, default=0):
+def _first_value(row):
+    """First column value from a dict row (postgres) or sqlite3.Row."""
     try:
-        with sqlite3.connect(DATABASE_PATH) as conn:
-            cur = conn.execute(query)
-            row = cur.fetchone()
-            return row[0] if row and row[0] is not None else default
+        return row[0]
+    except Exception:
+        try:
+            return next(iter(row.values()))
+        except Exception:
+            return None
+
+
+def safe_scalar(query: str, default=0):
+    # Routes through database.db.db_cursor — Postgres when a DSN is set,
+    # SQLite fallback otherwise (SQLite date()/datetime() translate on the fly).
+    try:
+        from database.db import db_cursor
+        with db_cursor() as c:
+            row = c.execute(query).fetchone()
+            if not row:
+                return default
+            val = _first_value(row)
+            return val if val is not None else default
     except Exception as exc:
         logger.warning("Dashboard query failed: %s", exc)
         return default
@@ -79,9 +94,10 @@ def safe_scalar(query: str, default=0):
 
 def safe_rows(query: str, limit: int = 10):
     try:
-        with sqlite3.connect(DATABASE_PATH) as conn:
-            conn.row_factory = sqlite3.Row
-            return [dict(row) for row in conn.execute(query).fetchmany(limit)]
+        from database.db import db_cursor
+        with db_cursor() as c:
+            rows = c.execute(query).fetchall()
+            return [dict(row) for row in rows[:limit]]
     except Exception as exc:
         logger.warning("Dashboard rows failed: %s", exc)
         return []
