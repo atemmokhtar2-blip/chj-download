@@ -37,6 +37,9 @@ _STATUS_LABELS = {
 }
 
 _MAX_TOKEN_ATTEMPTS = 5
+# Wrong-code attempts before the capture closes (typos are recoverable —
+# definitive rejections like expired/revoked close it immediately instead).
+_MAX_CODE_ATTEMPTS = 5
 
 _SUPPORT_CATEGORY_LABELS = {
     "token": "🔑 التوكن مرفوض",
@@ -856,6 +859,7 @@ async def referral_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 
     if data == "ref:code:cancel":
         context.user_data.pop("awaiting_code", None)
+        context.user_data.pop("code_attempts", None)
         await q.edit_message_text(
             "❌ تم إلغاء تفعيل الكود.",
             parse_mode="HTML",
@@ -943,6 +947,8 @@ _CODE_REASON_AR = {
     "already_used": "⚠️ <b>لقد استخدمت هذا الكود من قبل.</b> كل كود يُستخدم مرة واحدة فقط لكل مستخدم.",
     "not_for_you": "👤 هذا الكود <b>مخصص لمستخدم آخر</b> ولا يمكن لحسابك استخدامه.",
     "has_active_instance": "🤖 لديك نسخة نشطة بالفعل — الكود مخصص لمن لا يملك نسخة عاملة.",
+    "pending_flow": "⏳ لديك محاولة تفعيل أخرى قيد الانتظار — أكملها أو ألغها أولًا"
+                    " (من «🤖 النسخ الخاصة») ثم فعّل هذا الكود.",
 }
 
 
@@ -995,7 +1001,9 @@ async def _render_private_hub(update: Update, context: ContextTypes.DEFAULT_TYPE
         + (f"📊 تجربتك: <b>مستخدمة</b> ({str(trial.get('created_at') or '')[:10]})\n"
            if trial.get("used") else
            ("🎁 التجربة المجانية: <b>متاحة لك</b>\n" if trial_ok
-            else "🎁 التجربة المجانية: غير متاحة (لديك نسخة في النظام)\n"))
+            else ("⏳ التجربة المجانية: متوقفة مؤقتًا — عندك خطوة تفعيل قيد الانتظار،"
+                  " أكملها أو ألغها أولًا.\n" if trial_reason == "pending_flow"
+                  else "🎁 التجربة المجانية: غير متاحة (لديك نسخة في النظام)\n")))
     )
     rows = []
     if trial_ok:
@@ -1049,7 +1057,6 @@ async def try_handle_code_message(update: Update, context: ContextTypes.DEFAULT_
     except Exception:
         pass
 
-    context.user_data.pop("awaiting_code", None)
     uid = msg.from_user.id
     code_text = msg.text.strip()
 
@@ -1058,8 +1065,26 @@ async def try_handle_code_message(update: Update, context: ContextTypes.DEFAULT_
     if not result.get("ok"):
         reason = result.get("reason", "")
         text = _CODE_REASON_AR.get(reason, "❌ تعذر تفعيل هذا الكود. تواصل مع المالك للتأكد من صلاحيته.")
+        # Typos happen — RECOVERABLE reasons keep the capture open (up to
+        # 5 attempts, same policy as the token flow). Definitive reasons
+        # (expired / revoked / targeted / duplicate flow…) close it: only
+        # the owner or the user's own state can resolve those.
+        attempts = int(context.user_data.get("code_attempts", 0)) + 1
+        context.user_data["code_attempts"] = attempts
+        if reason in ("shape", "not_found") and attempts < _MAX_CODE_ATTEMPTS:
+            context.user_data["awaiting_code"] = True  # re-arm the capture
+            text += f"\n\n🔁 أرسل الكود الصحيح الآن — المحاولة {attempts} من {_MAX_CODE_ATTEMPTS}."
+        else:
+            context.user_data.pop("awaiting_code", None)
+            context.user_data.pop("code_attempts", None)
+            if reason in ("shape", "not_found"):
+                text += ("\n\n⛔ تم إيقاف المحاولات بعد 5 مرات — "
+                         "تقدر تبدأ التفعيل مجددًا من «🤖 النسخ الخاصة».")
         await msg.reply_text(text, parse_mode="HTML")
         return True
+
+    context.user_data.pop("awaiting_code", None)
+    context.user_data.pop("code_attempts", None)
 
     # Slot reserved + pending instance created → straight into the SAME
     # secure token-linking flow used by referral rewards.
@@ -1156,7 +1181,26 @@ async def try_handle_token_message(update: Update, context: ContextTypes.DEFAULT
             text = "⚠️ لا يوجد طلب تفعيل نشط لحسابك. افتح 🎁 اكسب نسختك من البوت أولًا."
         else:
             text = "❌ التوكن غير صحيح أو مرفوض من تيليجرام. تأكد من نسخه كاملًا من @BotFather وأرسله مرة أخرى."
-        if attempts >= _MAX_TOKEN_ATTEMPTS:
+        if reason == "has_other_instance":
+            # Another of this user's instances is active/mid-activation —
+            # retrying can't help. Close this flow and RETURN the reserved
+            # code use / trial chance instead of burning 5 pointless tries.
+            failed_cr = context.user_data.pop("code_redeem", None)
+            context.user_data.pop("awaiting_token", None)
+            context.user_data.pop("token_attempts", None)
+            if failed_cr:
+                try:
+                    if failed_cr.get("kind") == "trial":
+                        redemption.release_trial(uid, "blocked_other_instance")
+                    else:
+                        redemption.release_reservation(uid, int(failed_cr["code_id"]),
+                                                       "blocked_other_instance")
+                except Exception:
+                    logger.exception("code/trial release failed")
+            text = ("⚠️ <b>لديك نسخة أخرى نشطة أو قيد التفعيل</b> — لا يمكن ربط نسختين "
+                    "لنفس الحساب.\nأنهِ أو ألغِ المحاولة الأخرى أولًا، أو تواصل مع الدعم."
+                    + ("\n\n✅ الكود محفوظ ولم يُستهلك." if failed_cr else ""))
+        elif attempts >= _MAX_TOKEN_ATTEMPTS:
             context.user_data.pop("awaiting_token", None)
             context.user_data.pop("token_attempts", None)
             failed_cr = context.user_data.pop("code_redeem", None)

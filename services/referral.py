@@ -716,6 +716,19 @@ def verify_and_link_token(owner_id: int, token_text: str, *,
     if existing:
         return {"ok": False, "reason": "already_linked"}
 
+    # One clone per user — FINAL choke point. Whatever flow is calling
+    # (reward / redemption code / trial), the link must never succeed while
+    # ANOTHER of this user's instances is already active or mid-activation
+    # in a parallel flow; upstream guards make this unreachable in normal
+    # use, and this makes it unreachable under forged/parallel callbacks.
+    other = pg.fetchone(
+        "SELECT id FROM bot_instances WHERE owner_id = ? AND id <> ? "
+        "AND status IN ('active', 'pending_token') LIMIT 1",
+        (uid, int(instance_id)),
+    )
+    if other:
+        return {"ok": False, "reason": "has_other_instance"}
+
     try:
         # Upsert: re-linking the SAME instance with a fresh token (e.g. the
         # owner revoked the old one in BotFather) must replace the secret,

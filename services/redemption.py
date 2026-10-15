@@ -266,7 +266,7 @@ def _sweep_stale_reservations(code_id: int) -> None:
     completed (no later 'used'/'released' row for the same user+code)."""
     try:
         stale = pg.fetchall(
-            "SELECT r.user_id FROM redemption_log r "
+            "SELECT r.user_id, r.instance_id FROM redemption_log r "
             "WHERE r.code_id = ? AND r.action = 'reserved' "
             "AND r.created_at < CURRENT_TIMESTAMP - (? * INTERVAL '1 minute') "
             "AND NOT EXISTS ("
@@ -280,6 +280,15 @@ def _sweep_stale_reservations(code_id: int) -> None:
                 "UPDATE redemption_codes SET uses_consumed = GREATEST(uses_consumed - 1, 0) "
                 "WHERE id = ?", (int(code_id),),
             )
+            # The abandoned pre-created instance MUST go too — a lingering
+            # pending_token row would block the user from every future flow
+            # (one clone per user) long after the slot was given back.
+            inst = row.get("instance_id")
+            if inst:
+                pg.execute(
+                    "DELETE FROM bot_instances WHERE id = ? AND status = 'pending_token'",
+                    (int(inst),),
+                )
             _log(code_id, "released", user_id=row.get("user_id"),
                  details="stale_reservation_sweep")
     except Exception:
@@ -366,6 +375,17 @@ def redeem_code(user_id: int, code_text: str) -> dict:
     if active_inst:
         return {"ok": False, "reason": "has_active_instance"}
 
+    # One flow at a time: a PENDING instance means the user is mid-activation
+    # somewhere else (another code, the trial, or the referral reward). The
+    # same-code resume already returned above, so anything pending here is a
+    # DIFFERENT flow — starting a second one could end in two clones.
+    pending_other = pg.fetchone(
+        "SELECT id FROM bot_instances WHERE owner_id = ? AND status = 'pending_token' LIMIT 1",
+        (uid,),
+    )
+    if pending_other:
+        return {"ok": False, "reason": "pending_flow"}
+
     if int(row.get("uses_consumed") or 0) >= int(row.get("max_uses") or 0):
         return {"ok": False, "reason": "exhausted"}
 
@@ -430,10 +450,19 @@ def release_reservation(user_id: int, code_id: int, reason: str = "") -> bool:
 # ---- 24-hour free trial (one per Telegram user, ever) -------------------------
 
 def trial_eligible(user_id: int) -> tuple[bool, str]:
-    """(ok, reason). reasons: trial_used | has_instance."""
+    """(ok, reason). reasons: trial_used | pending_flow | has_instance."""
     uid = int(user_id)
     if pg.fetchone("SELECT 1 AS ok FROM clone_trials WHERE user_id = ?", (uid,)):
         return False, "trial_used"
+    # Mid-activation elsewhere (code/reward flow left a pending instance) —
+    # the user must finish or cancel that flow first; otherwise two parallel
+    # flows could each link a token and yield two clones.
+    pend = pg.fetchone(
+        "SELECT id FROM bot_instances WHERE owner_id = ? AND status = 'pending_token' LIMIT 1",
+        (uid,),
+    )
+    if pend:
+        return False, "pending_flow"
     inst = pg.fetchone(
         "SELECT id FROM bot_instances WHERE owner_id = ? AND status <> 'pending_token' LIMIT 1",
         (uid,),

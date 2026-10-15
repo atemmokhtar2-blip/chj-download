@@ -330,6 +330,94 @@ def _setup_module_checks() -> None:
     check("trial blocked for user with an active clone",
           ok2 is False and reason2 == "has_instance")
 
+    print("== parallel-flow lockdown (one clone per user) ==")
+    par = redemption.create_code("basic", 30, 3, 7, created_by=OWNER)
+    check("parallel-test code created", par.get("ok") is True)
+    u = 9700
+    r1 = redemption.redeem_code(u, par["code"])
+    check("first redemption reserves", r1.get("ok") is True)
+    # A SECOND code while the first reservation is in flight must be
+    # blocked — two parallel flows could otherwise each link a token and
+    # yield two clones for one user.
+    par2 = redemption.create_code("pro", 40, 3, 7, created_by=OWNER)
+    r2 = redemption.redeem_code(u, par2["code"])
+    check("second code blocked while first pending (pending_flow)",
+          r2.get("ok") is False and r2.get("reason") == "pending_flow")
+    check("blocked code's uses NOT consumed",
+          int(redemption.get_code(par2["code_id"])["uses_consumed"]) == 0)
+    ok3, reason3 = redemption.trial_eligible(u)
+    check("trial blocked while code flow pending",
+          ok3 is False and reason3 == "pending_flow")
+    check("in-flight released",
+          redemption.release_reservation(u, par["code_id"], "test") is True)
+    ok4, _ = redemption.trial_eligible(u)
+    check("trial eligible again after release", ok4 is True)
+    r3 = redemption.redeem_code(u, par2["code"])
+    check("second code redeems after release", r3.get("ok") is True)
+
+    # FINAL choke point: verify_and_link_token must refuse while ANOTHER
+    # of the user's instances is active / mid-activation — even if the
+    # caller forged a parallel flow.
+    other_inst = pg.insert_returning_id(
+        "INSERT INTO bot_instances (owner_id, status, plan) VALUES (?, 'pending_token', 'basic')",
+        (u,),
+    )
+
+    def _fake_par_get_me(_tok):
+        return {"id": 990700, "username": "parallel_user_bot"}
+
+    referral._tg_get_me = _fake_par_get_me
+    link1 = referral.verify_and_link_token(
+        u, "123456789:AAParallelToken_fake_pad_pad_1",
+        instance_id=r3["instance_id"], plan="pro", days=40)
+    check("link blocked while a parallel pending instance exists",
+          link1.get("ok") is False and link1.get("reason") == "has_other_instance")
+    check("no secret stored for the blocked link",
+          pg.fetchone("SELECT 1 AS ok FROM bot_secrets WHERE instance_id = ?",
+                      (r3["instance_id"],)) is None)
+    pg.execute("DELETE FROM bot_instances WHERE id = ?", (other_inst,))
+    link2 = referral.verify_and_link_token(
+        u, "123456789:AAParallelToken_fake_pad_pad_1",
+        instance_id=r3["instance_id"], plan="pro", days=40)
+    check("link succeeds once the parallel instance is gone", link2.get("ok") is True)
+
+    # While the clone is ACTIVE, a forged second instance must NEVER link.
+    forged = pg.insert_returning_id(
+        "INSERT INTO bot_instances (owner_id, status, plan) VALUES (?, 'pending_token', 'basic')",
+        (u,),
+    )
+
+    def _fake_par_get_me2(_tok):
+        return {"id": 990701, "username": "parallel_user_second_bot"}
+
+    referral._tg_get_me = _fake_par_get_me2
+    link3 = referral.verify_and_link_token(
+        u, "123456789:AAParallelToken_fake_pad_pad_2",
+        instance_id=forged, plan="basic", days=30)
+    check("second clone never links while first is ACTIVE",
+          link3.get("ok") is False and link3.get("reason") == "has_other_instance")
+    check("no secret stored for the forged instance",
+          pg.fetchone("SELECT 1 AS ok FROM bot_secrets WHERE instance_id = ?", (forged,)) is None)
+    pg.execute("DELETE FROM bot_instances WHERE id = ?", (forged,))
+
+    print("== stale sweep cleans pending instances ==")
+    sw = redemption.create_code("basic", 30, 2, 7, created_by=OWNER)
+    u2 = 9800
+    rs = redemption.redeem_code(u2, sw["code"])
+    check("sweep-test reservation ok", rs.get("ok") is True)
+    pg.execute(
+        "UPDATE redemption_log SET created_at = CURRENT_TIMESTAMP - INTERVAL '61 minutes' "
+        "WHERE code_id = ? AND action = 'reserved' AND user_id = ?",
+        (sw["code_id"], u2),
+    )
+    redemption.redeem_code(9801, sw["code"])  # any redemption runs the sweep
+    check("sweep returned the stale use",
+          int(redemption.get_code(sw["code_id"])["uses_consumed"]) == 1)
+    check("sweep DELETED the abandoned pending instance",
+          pg.fetchone("SELECT * FROM bot_instances WHERE id = ?", (rs["instance_id"],)) is None)
+    ok5, _ = redemption.trial_eligible(u2)
+    check("swept user not blocked by an orphan pending row", ok5 is True)
+
 
 # ---- run the full flow once, HERE (import time) --------------------------------
 # Same contract as test_clone_plans: the dedicated-database pin and the
