@@ -235,11 +235,42 @@ def init_referral_schema() -> None:
             details TEXT DEFAULT '',
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )""",
+        # Owner-issued redemption codes ("أكواد التفعيل"). One row per code;
+        # uses_consumed counts RESERVED+CONFIRMED activations and is guarded
+        # atomically (UPDATE ... WHERE uses_consumed < max_uses) so a code can
+        # never be over-used, even by simultaneous redemptions.
+        f"""CREATE TABLE IF NOT EXISTS redemption_codes (
+            id {pk},
+            code TEXT NOT NULL UNIQUE,
+            plan TEXT DEFAULT 'basic',
+            runtime_days INTEGER DEFAULT 30,
+            max_uses INTEGER DEFAULT 1,
+            uses_consumed INTEGER DEFAULT 0,
+            valid_days INTEGER DEFAULT 7,
+            status TEXT DEFAULT 'active',
+            note TEXT DEFAULT '',
+            created_by {bi},
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            expires_at TIMESTAMP
+        )""",
+        # Append-only audit trail for codes: created / reserved / used /
+        # released / revoked / exhausted. Full code text and bot tokens are
+        # NEVER written here — only ids, prefixes and safe metadata.
+        f"""CREATE TABLE IF NOT EXISTS redemption_log (
+            id {pk},
+            code_id {bi} NOT NULL,
+            action TEXT DEFAULT '',
+            user_id {bi},
+            instance_id {bi},
+            details TEXT DEFAULT '',
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )""",
     ]
     indexes = [
         "CREATE INDEX IF NOT EXISTS idx_referrals_referrer ON referrals (referrer_id, status)",
         "CREATE INDEX IF NOT EXISTS idx_instances_owner ON bot_instances (owner_id)",
         "CREATE INDEX IF NOT EXISTS idx_instances_status ON bot_instances (status)",
+        "CREATE INDEX IF NOT EXISTS idx_redemption_log_code ON redemption_log (code_id, action)",
     ]
     with ref_cursor() as c:
         for stmt in ddl:

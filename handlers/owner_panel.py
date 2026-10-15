@@ -222,6 +222,7 @@ def _build_home() -> tuple[str, InlineKeyboardMarkup]:
          inline_button("🛟 الدعم الفني", callback_data="own_sup")],
         [inline_button("📈 التقارير", callback_data="own_rep"),
          inline_button("⚙️ الإعدادات", callback_data="own_set")],
+        [inline_button("🎟️ أكواد التفعيل", callback_data="own_codes")],
         [inline_button("🔄 تحديث الأرقام", callback_data="own_home")],
     ])
     return text, keyboard
@@ -1157,6 +1158,72 @@ async def owner_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif data == "own_refs_top":
         await _refs_top(query)
 
+    # ---- redemption codes (owner-only, rides the existing plan system) ----
+    elif data == "own_codes":
+        OWNER_STATES.pop(uid, None)
+        text, kb = _codes_screen()
+        await _edit(query, text, parse_mode="HTML", reply_markup=kb)
+    elif data in ("own_codes_new_basic", "own_codes_new_pro"):
+        plan = "pro" if data.endswith("pro") else "basic"
+        OWNER_STATES[uid] = f"code_create:{plan}"
+        badge = "👑 Pro" if plan == "pro" else "🆓 Basic"
+        await _edit(query,
+            f"➕ <b>إنشاء كود {badge}</b>\n\n"
+            "أرسل القيم في رسالة واحدة بالترتيب:\n"
+            "<code>مدة_التشغيل_بالأيام عدد_الاستخدامات صلاحية_الكود_بالأيام [ملاحظة]</code>\n\n"
+            "أمثلة:\n"
+            "• <code>30 1 7</code> — تشغيل 30 يومًا، استخدام واحد، الكود صالح 7 أيام\n"
+            "• <code>40 2 14 هدية المسابقة</code> — Pro تشغيل 40 يومًا لمستخدمين مختلفين\n\n"
+            "📌 عدد الاستخدامات = عدد <b>النسخ</b> التي يمكن تفعيلها (مستخدمون مختلفون)، "
+            "ولا يُستهلك الاستخدام إلا بعد نجاح إنشاء النسخة.",
+            parse_mode="HTML", reply_markup=_kb(_back("own_codes", "🔙 إلغاء")))
+    elif data == "own_codes_do":
+        pending = OWNER_PENDING.pop(uid, {})
+        if not pending.get("code_plan"):
+            await _edit(query, "⚠️ انتهت صلاحية جلسة الإنشاء. أعد المحاولة من قائمة الأكواد.",
+                        parse_mode="HTML", reply_markup=_kb(_back("own_codes", "🔙 الأكواد")))
+            return
+        from services import redemption
+        res = redemption.create_code(
+            pending["code_plan"], pending["code_days"], pending["code_uses"],
+            pending["code_valid"], note=pending.get("code_note", ""), created_by=uid,
+        )
+        if not res.get("ok"):
+            await _edit(query, f"⚠️ تعذر إنشاء الكود: <code>{escape(str(res.get('reason')))}</code>",
+                        parse_mode="HTML", reply_markup=_kb(_back("own_codes", "🔙 الأكواد")))
+            return
+        log_admin_action(uid, "owner_code_create", res["code_id"],
+                         detail=f"plan={res['plan']} days={res['runtime_days']} "
+                                f"uses={res['max_uses']} valid={res['valid_days']} "
+                                f"prefix={redemption.code_prefix(res['code'])}")
+        badge = "👑 Pro" if res["plan"] == "pro" else "🆓 Basic"
+        await _edit(query,
+            "✅ <b>تم إنشاء الكود</b>\n\n"
+            f"🎟️ الكود: <code>{res['code']}</code>\n"
+            f"• الخطة: {badge} • مدة التشغيل: <b>{res['runtime_days']} يومًا</b>\n"
+            f"• عدد الاستخدامات: <b>{res['max_uses']}</b> (مستخدمون مختلفون)\n"
+            f"• صالح للإدخال حتى: <b>{str(res['expires_at'])[:10]}</b>\n\n"
+            "⚠️ <b>هذا هو العرض الوحيد للكود كاملًا</b> — انسخه الآن وأرسله "
+            "للمستفيد. بعدها يظهر مقنعًا في القائمة.\n"
+            "• سُجل الإنشاء في سجل التدقيق.",
+            parse_mode="HTML",
+            reply_markup=_kb([
+                [inline_button("🎫 تفاصيل الكود", callback_data=f"own_codes_detail_{res['code_id']}")],
+                *_back("own_codes", "🔙 الأكواد"),
+            ]))
+    elif data.startswith("own_codes_revdo_"):
+        code_id = _suffix_int(data)
+        if code_id:
+            await _code_revoke_do(query, code_id)
+    elif data.startswith("own_codes_revoke_"):
+        code_id = _suffix_int(data)
+        if code_id:
+            await _code_revoke_confirm(query, code_id)
+    elif data.startswith("own_codes_detail_"):
+        code_id = _suffix_int(data)
+        if code_id:
+            await _code_detail(query, code_id)
+
     # ---- instances ----
     elif data == "own_inst":
         OWNER_STATES.pop(uid, None)
@@ -1450,6 +1517,47 @@ async def owner_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
             f"─────────────\n{escape(text[:900])}\n─────────────\n\n"
             f"👥 عدد المستلمين: <b>{recipients}</b>",
             parse_mode="HTML", reply_markup=_kb(rows))
+        return True
+
+    if state.startswith("code_create:"):
+        plan = state.split(":", 1)[1]
+        parts = text.split(None, 3)
+        nums = parts[:3]
+        if len(nums) < 3 or not all(p.isdigit() for p in nums):
+            await update.message.reply_text(
+                "⚠️ الصيغة غير صحيحة. أرسل ثلاثة أرقام بالترتيب:\n"
+                "<code>مدة_التشغيل عدد_الاستخدامات صلاحية_الكود [ملاحظة]</code>\n"
+                "مثال: <code>30 1 7</code>",
+                parse_mode="HTML",
+                reply_markup=_kb(_back("own_codes", "🔙 الأكواد")))
+            return True
+        days, uses, valid = int(nums[0]), int(nums[1]), int(nums[2])
+        note = parts[3][:200] if len(parts) > 3 else ""
+        if not (1 <= days <= 365 and 1 <= uses <= 50 and 1 <= valid <= 365):
+            await update.message.reply_text(
+                "⚠️ القيم خارج النطاق المسموح:\n"
+                "• مدة التشغيل: 1–365 يومًا\n"
+                "• عدد الاستخدامات: 1–50\n"
+                "• صلاحية الكود: 1–365 يومًا",
+                parse_mode="HTML",
+                reply_markup=_kb(_back("own_codes", "🔙 الأكواد")))
+            return True
+        OWNER_PENDING[uid] = {"code_plan": plan, "code_days": days, "code_uses": uses,
+                              "code_valid": valid, "code_note": note}
+        badge = "👑 Pro" if plan == "pro" else "🆓 Basic"
+        await update.message.reply_text(
+            "⚠️ <b>تأكيد إنشاء الكود — قبل التنفيذ</b>\n\n"
+            f"• الخطة: {badge}\n"
+            f"• مدة تشغيل النسخة: <b>{days} يومًا</b>\n"
+            f"• عدد الاستخدامات: <b>{uses}</b> (مستخدمون مختلفون)\n"
+            f"• صلاحية الكود قبل الاستخدام: <b>{valid} يومًا</b>\n"
+            + (f"• ملاحظة: {escape(note)}\n" if note else "")
+            + "\nبعد التنفيذ: يولَّد كود فريد ويُعرض مرة واحدة فقط، ويُسجل في سجل التدقيق.",
+            parse_mode="HTML",
+            reply_markup=_kb([
+                [inline_button("✅ تأكيد الإنشاء", callback_data="own_codes_do"),
+                 inline_button("↩️ إلغاء", callback_data="own_codes")],
+            ]))
         return True
 
     if state.startswith("sup_reply:"):

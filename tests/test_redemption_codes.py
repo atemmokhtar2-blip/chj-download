@@ -1,0 +1,293 @@
+"""🎟️ Redemption-code system — full lifecycle on real PostgreSQL.
+
+Runs as a pytest module (dedicated database via tests/pgtest.py, pinned
+through pg.PG_DSN like the other referral modules) AND as a plain script
+(`python3 tests/test_redemption_codes.py`).
+
+Covers the contract from the spec:
+  * owner creates codes with per-code values (plan / runtime days / uses /
+    pre-use validity);
+  * atomic use-limit — a code can never exceed max_uses even when several
+    users redeem simultaneously (single guarded UPDATE);
+  * a FAILED or cancelled activation NEVER consumes a use (release path);
+  * the use is confirmed only after the clone is fully created + activated;
+  * revoked / expired / already-used / active-instance blocks;
+  * stale reservations are swept automatically;
+  * audit trail records created/reserved/used/released/revoked with user id
+    and instance id — and NEVER the full code text or a bot token.
+"""
+
+from __future__ import annotations
+
+import os
+import sys
+from datetime import datetime, timedelta
+
+REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if REPO not in sys.path:
+    sys.path.insert(0, REPO)
+sys.path.insert(0, os.path.join(REPO, "tests"))
+
+# --- stub dotenv so importing config.settings never loads a real .env -------
+import types  # noqa: E402
+
+if "dotenv" not in sys.modules:
+    dotenv = types.ModuleType("dotenv")
+    dotenv.load_dotenv = lambda *a, **k: None
+    dotenv.find_dotenv = lambda *a, **k: ""
+    sys.modules["dotenv"] = dotenv
+
+# --- cryptography (Fernet): prefer the REAL package; deterministic stub only
+# when it is not installed (same contract as the other referral test modules).
+try:
+    from cryptography.fernet import Fernet as _RealFernet  # noqa: F401
+except Exception:
+    crypto = types.ModuleType("cryptography")
+    fernet_mod = types.ModuleType("cryptography.fernet")
+
+    class Fernet:  # deterministic round-trip stand-in
+        def __init__(self, key):
+            self.key = key
+
+        def encrypt(self, data):
+            return b"enc:" + data
+
+        def decrypt(self, data):
+            return data[4:] if data.startswith(b"enc:") else data
+
+    fernet_mod.Fernet = Fernet
+    fernet_mod.InvalidToken = Exception
+    crypto.fernet = fernet_mod
+    sys.modules["cryptography"] = crypto
+    sys.modules["cryptography.fernet"] = fernet_mod
+
+import pgtest  # noqa: E402
+
+# PostgreSQL is the ONLY backend. Under pytest, tests/conftest.py already
+# booted the test server; a plain-script run bootstraps its own here.
+if "pytest" not in sys.modules:
+    pgtest.bootstrap()
+
+from database import pg  # noqa: E402
+
+# Dedicated database — plan/code rows must never mix with other modules.
+_ORIGINAL_PG_DSN = pg.PG_DSN
+_DB_NAME = "xd_redemption_codes"
+pg.PG_DSN = pgtest.create_test_database(_DB_NAME)
+
+pg.init_referral_schema()
+
+import config.settings as cs  # noqa: E402
+from services import redemption  # noqa: E402
+from services import referral  # noqa: E402
+
+OWNER = 7631249810
+_failures: list[str] = []
+
+
+def check(label: str, cond: bool) -> None:
+    if cond:
+        print(f"  PASS  {label}")
+    else:
+        print(f"  FAIL  {label}")
+        _failures.append(label)
+
+
+def _log_rows(code_id: int, action: str | None = None) -> list[dict]:
+    sql = "SELECT * FROM redemption_log WHERE code_id = ?"
+    params: tuple = (code_id,)
+    if action:
+        sql += " AND action = ?"
+        params += (action,)
+    return pg.fetchall(sql + " ORDER BY id ASC", params)
+
+
+def _setup_module_checks() -> None:
+    print("== create + validation ==")
+    bad = redemption.create_code("basic", 0, 1, 7)
+    check("runtime_days=0 rejected", not bad.get("ok"))
+    bad = redemption.create_code("basic", 30, 999, 7)
+    check("max_uses=999 rejected", not bad.get("ok"))
+    bad = redemption.create_code("pro", 40, 2, 0)
+    check("valid_days=0 rejected", not bad.get("ok"))
+
+    res = redemption.create_code("basic", 30, 1, 7, note="هدية", created_by=OWNER)
+    check("basic code created", res.get("ok") is True)
+    code_basic = res["code"]
+    cid_basic = res["code_id"]
+    check("code format CHJ-XXXX-XXXX", code_basic.startswith("CHJ-") and len(code_basic) == 13)
+    row = redemption.get_code(cid_basic)
+    check("expires_at = created + valid_days",
+          row["expires_at"] is not None and
+          abs((row["expires_at"] - datetime.utcnow()).total_seconds() - 7 * 86400) < 120)
+    created_logs = _log_rows(cid_basic, "created")
+    check("audit 'created' logged with owner id",
+          len(created_logs) == 1 and int(created_logs[0]["user_id"]) == OWNER)
+    check("full code NOT in audit details",
+          all(code_basic not in (l.get("details") or "") for l in created_logs))
+
+    pro = redemption.create_code("pro", 40, 2, 14, created_by=OWNER)
+    check("pro code created", pro.get("ok") is True)
+    code_pro = pro["code"]
+    cid_pro = pro["code_id"]
+
+    print("== redeem guards ==")
+    r = redemption.redeem_code(5001, "GARBAGE")
+    check("garbage code -> shape/not_found", r.get("reason") in ("shape", "not_found"))
+    r = redemption.redeem_code(5001, code_basic)
+    check("valid redeem ok", r.get("ok") is True and r.get("plan") == "basic"
+          and r.get("runtime_days") == 30 and r.get("instance_id"))
+    inst_id = r["instance_id"]
+    row = redemption.get_code(cid_basic)
+    check("use reserved (uses_consumed=1)", int(row["uses_consumed"]) == 1)
+    check("audit 'reserved' with user+instance",
+          any(int(l["user_id"]) == 5001 and int(l["instance_id"]) == inst_id
+              for l in _log_rows(cid_basic, "reserved")))
+    inst = pg.fetchone("SELECT * FROM bot_instances WHERE id = ?", (inst_id,))
+    check("instance pending_token with plan", inst["status"] == "pending_token" and inst["plan"] == "basic")
+
+    r = redemption.redeem_code(5001, code_basic)
+    check("second redeem while reserved -> has_active_instance/pending",
+          r.get("ok") is False)
+
+    print("== failed activation never consumes ==")
+    released = redemption.release_reservation(5001, cid_basic, "token_attempts_exhausted")
+    check("release ok", released is True)
+    row = redemption.get_code(cid_basic)
+    check("uses_consumed back to 0", int(row["uses_consumed"]) == 0)
+    check("audit 'released' logged", len(_log_rows(cid_basic, "released")) >= 1)
+    check("release again is a no-op", redemption.release_reservation(5001, cid_basic) is False)
+    # The abandoned pending instance must not block a fresh redeem.
+    pg.execute("DELETE FROM bot_instances WHERE id = ?", (inst_id,))
+
+    r = redemption.redeem_code(5001, code_basic)
+    check("re-redeem after release ok", r.get("ok") is True)
+    inst_id = r["instance_id"]
+
+    print("== atomic use limit ==")
+    r2 = redemption.redeem_code(5002, code_basic)
+    check("max_uses=1 blocks second user", r2.get("ok") is False
+          and r2.get("reason") in ("limit_reached", "exhausted"))
+
+    print("== full activation consumes exactly one use ==")
+    # Fake Telegram getMe so no network is touched.
+    referral._tg_get_me = lambda token: {"id": 990001, "username": "gift_clone_bot"}
+    fake_token = "123456789:AAH4fakeRedemptionTokenForTest_xyz"
+    result = referral.verify_and_link_token(
+        5001, fake_token, instance_id=inst_id, plan="basic", days=30)
+    check("activation ok", result.get("ok") is True)
+    inst = pg.fetchone("SELECT * FROM bot_instances WHERE id = ?", (inst_id,))
+    check("instance active", inst["status"] == "active")
+    exp_delta = (inst["expires_at"] - inst["activated_at"]).total_seconds() / 86400
+    check("expiry = activation + runtime_days(30)", abs(exp_delta - 30) < 0.01)
+    redemption.confirm_use(5001, cid_basic, inst_id, "gift_clone_bot")
+    check("audit 'used' with instance id",
+          any(int(l["instance_id"]) == inst_id for l in _log_rows(cid_basic, "used")))
+    row = redemption.get_code(cid_basic)
+    check("code exhausted after max uses confirmed", row["status"] == "exhausted")
+    check("token NOT in any audit details",
+          all(fake_token not in (l.get("details") or "")
+              for l in pg.fetchall("SELECT details FROM redemption_log WHERE code_id = ?", (cid_basic,))))
+    check("token NOT in activation_log details",
+          all(fake_token not in (l.get("details") or "")
+              for l in pg.fetchall("SELECT details FROM activation_log")))
+    r3 = redemption.redeem_code(5003, code_basic)
+    check("exhausted code rejected", r3.get("ok") is False)
+    r4 = redemption.redeem_code(5001, code_basic)
+    check("already_used enforced even if slots existed", r4.get("reason") in ("already_used", "has_active_instance"))
+
+    print("== pro code: two different users ==")
+    pa = redemption.redeem_code(6001, code_pro)
+    check("pro use 1 reserved", pa.get("ok") is True and pa.get("plan") == "pro")
+    pb = redemption.redeem_code(6002, code_pro)
+    check("pro use 2 reserved (different user)", pb.get("ok") is True)
+    pc = redemption.redeem_code(6003, code_pro)
+    check("pro use 3 blocked (max_uses=2)",
+          pc.get("ok") is False and pc.get("reason") in ("exhausted", "limit_reached"))
+    referral._tg_get_me = lambda token: {"id": 990002, "username": "pro_user_one_bot"}
+    ra = referral.verify_and_link_token(6001, "111111111:AAProOneToken_fake_padpadpad_pad12",
+                                        instance_id=pa["instance_id"], plan="pro", days=40)
+    check("pro activation 1 ok", ra.get("ok") is True)
+    inst_a = pg.fetchone("SELECT * FROM bot_instances WHERE id = ?", (pa["instance_id"],))
+    exp_delta = (inst_a["expires_at"] - inst_a["activated_at"]).total_seconds() / 86400
+    check("pro expiry = 40 days", abs(exp_delta - 40) < 0.01)
+    redemption.confirm_use(6001, cid_pro, pa["instance_id"], "pro_user_one_bot")
+    row = redemption.get_code(cid_pro)
+    check("pro code still active after 1/2 confirmed", row["status"] == "active")
+    # user 6001 now has an ACTIVE instance -> blocked from redeeming again
+    r = redemption.redeem_code(6001, code_pro)
+    check("active-instance holder blocked",
+          r.get("ok") is False and r.get("reason") in ("has_active_instance", "already_used"))
+
+    print("== revoke ==")
+    ok, reason = redemption.revoke_code(cid_pro, by_owner=OWNER)
+    check("revoke ok", ok is True)
+    ok2, reason2 = redemption.revoke_code(cid_pro, by_owner=OWNER)
+    check("double revoke idempotent", ok2 is False and reason2.startswith("already_"))
+    check("audit 'revoked' logged once", len(_log_rows(cid_pro, "revoked")) == 1)
+    r = redemption.redeem_code(6009, code_pro)
+    check("revoked code rejected", r.get("ok") is False and r.get("reason") == "revoked")
+    # user 6002's reservation survives the revoke (release still works)
+    check("release after revoke works",
+          redemption.release_reservation(6002, cid_pro, "user_cancelled") is True)
+
+    print("== expired code ==")
+    exp_res = redemption.create_code("basic", 30, 1, 1, created_by=OWNER)
+    cid_exp = exp_res["code_id"]
+    pg.execute("UPDATE redemption_codes SET expires_at = ? WHERE id = ?",
+               ((datetime.utcnow() - timedelta(hours=1)).strftime("%Y-%m-%d %H:%M:%S"), cid_exp))
+    r = redemption.redeem_code(7001, exp_res["code"])
+    check("expired code rejected", r.get("ok") is False and r.get("reason") == "expired")
+
+    print("== stale reservation sweep ==")
+    sweep_res = redemption.create_code("basic", 30, 1, 30, created_by=OWNER)
+    cid_sw = sweep_res["code_id"]
+    rs = redemption.redeem_code(8001, sweep_res["code"])
+    check("sweep-test redeem ok", rs.get("ok") is True)
+    # Backdate the reservation beyond the TTL and clear its pending instance.
+    pg.execute("UPDATE redemption_log SET created_at = CURRENT_TIMESTAMP - INTERVAL '120 minutes' "
+               "WHERE code_id = ? AND action = 'reserved'", (cid_sw,))
+    pg.execute("DELETE FROM bot_instances WHERE id = ?", (rs["instance_id"],))
+    r = redemption.redeem_code(8002, sweep_res["code"])
+    check("stale slot swept -> new user can redeem", r.get("ok") is True)
+    check("sweep logged 'released'",
+          any("stale" in (l.get("details") or "") for l in _log_rows(cid_sw, "released")))
+    row = redemption.get_code(cid_sw)
+    check("uses_consumed = 1 after sweep + new reserve", int(row["uses_consumed"]) == 1)
+
+    print("== normalization & masking ==")
+    norm_res = redemption.create_code("basic", 30, 1, 30, created_by=OWNER)
+    lowered = norm_res["code"].lower().replace("-", " ")
+    check("lowercase/spaceless input still found",
+          redemption.find_code(lowered) is not None)
+    check("mask hides the tail", norm_res["code"] not in redemption.mask_code(norm_res["code"]))
+    check("code_prefix never exposes full code",
+          len(redemption.code_prefix(norm_res["code"])) < len(norm_res["code"]))
+
+
+# ---- run the full flow once, HERE (import time) --------------------------------
+# Same contract as test_clone_plans: the dedicated-database pin and the
+# referral._tg_get_me fake are restored IMMEDIATELY after the checks, so
+# nothing leaks into other modules' tests under a shared pytest session.
+
+_ORIGINAL_TG_GET_ME = referral._tg_get_me
+try:
+    _setup_module_checks()
+finally:
+    referral._tg_get_me = _ORIGINAL_TG_GET_ME
+    pg.PG_DSN = _ORIGINAL_PG_DSN
+    pgtest.drop_test_database(_DB_NAME)
+
+
+def test_redemption_code_lifecycle():
+    """Full lifecycle: create → reserve → fail/release → re-redeem → atomic
+    limit → activate → confirm → exhaust — with audit-trail secrecy."""
+    assert not _failures, f"redemption code failures: {_failures}"
+
+
+if __name__ == "__main__":
+    print()
+    if _failures:
+        print(f"{len(_failures)} FAILURES: {_failures}")
+        sys.exit(1)
+    print("ALL REDEMPTION CODE TESTS PASSED")

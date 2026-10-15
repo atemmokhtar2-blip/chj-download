@@ -664,11 +664,22 @@ def _tg_get_me(token: str) -> dict:
     return data["result"]
 
 
-def verify_and_link_token(owner_id: int, token_text: str) -> dict:
+def verify_and_link_token(owner_id: int, token_text: str, *,
+                          instance_id: int | None = None,
+                          plan: str | None = None,
+                          days: int | None = None) -> dict:
     """Full verification pipeline. Returns a dict:
     {ok: True, instance_id, bot_username, bot_id} or {ok: False, reason}.
     Reasons: invalid_token | network_error | already_linked | not_claimed |
              main_bot_token | shape
+
+    Two entry paths share this ONE pipeline:
+      * referral reward (default): the instance comes from the user's
+        awaiting_token reward row and the plan is computed from qualified
+        referrals at activation time;
+      * redemption code: the caller passes the pre-created ``instance_id``
+        plus the code's ``plan``/``days`` — the reward state is untouched
+        (the rewards UPDATE below is scoped to the referral instance only).
     """
     uid = int(owner_id)
     token_text = (token_text or "").strip()
@@ -677,12 +688,14 @@ def verify_and_link_token(owner_id: int, token_text: str) -> dict:
     if BOT_TOKEN and token_text == BOT_TOKEN.strip():
         return {"ok": False, "reason": "main_bot_token"}
 
-    reward = pg.fetchone("SELECT status, instance_id FROM referral_rewards WHERE user_id = ?", (uid,)) or {}
-    if reward.get("status") not in ("awaiting_token", "claimed"):
-        return {"ok": False, "reason": "not_claimed"}
-    instance_id = reward.get("instance_id")
-    if not instance_id:
-        return {"ok": False, "reason": "not_claimed"}
+    code_flow = instance_id is not None
+    if not code_flow:
+        reward = pg.fetchone("SELECT status, instance_id FROM referral_rewards WHERE user_id = ?", (uid,)) or {}
+        if reward.get("status") not in ("awaiting_token", "claimed"):
+            return {"ok": False, "reason": "not_claimed"}
+        instance_id = reward.get("instance_id")
+        if not instance_id:
+            return {"ok": False, "reason": "not_claimed"}
 
     try:
         me = _tg_get_me(token_text)
@@ -715,15 +728,18 @@ def verify_and_link_token(owner_id: int, token_text: str) -> dict:
     except Exception:
         return {"ok": False, "reason": "already_linked"}
 
-    # Plan assignment at activation: reaching the Pro threshold in QUALIFIED
-    # referrals earns the longer Pro validity window; everyone else gets Basic.
-    qualified_now = pg.fetchone(
-        "SELECT COUNT(*) AS cnt FROM referrals WHERE referrer_id = ? AND status = 'qualified'",
-        (uid,),
-    )["cnt"]
-    plan = "pro" if int(qualified_now or 0) >= pro_target() else "basic"
+    # Plan assignment at activation. Redemption codes carry an explicit
+    # plan + runtime window; referral rewards compute the plan from the
+    # qualified-referral count (Pro threshold ⇒ longer Pro window).
+    if plan not in ("basic", "pro"):
+        qualified_now = pg.fetchone(
+            "SELECT COUNT(*) AS cnt FROM referrals WHERE referrer_id = ? AND status = 'qualified'",
+            (uid,),
+        )["cnt"]
+        plan = "pro" if int(qualified_now or 0) >= pro_target() else "basic"
+    plan_days = int(days) if days else clone_plan_days(plan)
     activated = _utcnow()
-    expires = activated + timedelta(days=clone_plan_days(plan))
+    expires = activated + timedelta(days=plan_days)
     activated_ts = activated.strftime("%Y-%m-%d %H:%M:%S")
     expires_ts = expires.strftime("%Y-%m-%d %H:%M:%S")
     pg.execute(
@@ -741,12 +757,16 @@ def verify_and_link_token(owner_id: int, token_text: str) -> dict:
             "ON CONFLICT (instance_id, key) DO UPDATE SET value = EXCLUDED.value",
             (instance_id, key, value),
         )
+    # Scoped by instance_id so the code-activation path (which has no
+    # matching reward row) is a natural no-op.
     pg.execute(
-        "UPDATE referral_rewards SET status = 'claimed', claimed_at = CURRENT_TIMESTAMP WHERE user_id = ?",
-        (uid,),
+        "UPDATE referral_rewards SET status = 'claimed', claimed_at = CURRENT_TIMESTAMP "
+        "WHERE user_id = ? AND instance_id = ?",
+        (uid, instance_id),
     )
     log_activation(uid, instance_id, "instance_activated",
-                   f"bot=@{bot_username} bot_id={bot_id} plan={plan} days={clone_plan_days(plan)} expires={expires_ts}")
+                   f"bot=@{bot_username} bot_id={bot_id} plan={plan} days={plan_days} "
+                   f"expires={expires_ts} source={'code' if code_flow else 'referral'}")
     return {"ok": True, "instance_id": instance_id, "bot_username": bot_username,
             "bot_id": bot_id, "plan": plan, "expires_at": expires_ts}
 

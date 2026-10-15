@@ -69,7 +69,10 @@ async def message_router(update: Update, context):
 
     # Secure clone-token capture runs FIRST: while a user is in the
     # awaiting-token state, any text they send is treated as the token,
-    # deleted immediately, and never routed anywhere else.
+    # deleted immediately, and never routed anywhere else. The redemption
+    # code capture (awaiting-code state) is checked just before it.
+    if await try_handle_code_message(update, context):
+        return
     if await try_handle_token_message(update, context):
         return
 

@@ -24,6 +24,7 @@ from telegram.ext import ContextTypes
 
 from config.settings import MAIN_BOT_USERNAME, REFERRAL_TARGET
 from services import referral
+from services import redemption
 from services.instance_manager import is_clone_bot, spawn_instance, running_instance_ids
 from database import support
 
@@ -177,6 +178,11 @@ def _rows_for(stats: dict, bot_username: str | None) -> list[list[InlineKeyboard
     else:
         remaining = max(0, int(stats.get("target", 0)) - int(stats.get("qualified", 0)))
         rows.append([InlineKeyboardButton(f"🎁 نسختي الخاصة ({remaining} متبقي)", callback_data="ref:claim")])
+
+    # «🔑 تفعيل كود» — redemption-code entry for every user WITHOUT an
+    # active clone (one clone per user; codes grant the same plan system).
+    if stage != "active":
+        rows.append([InlineKeyboardButton("🔑 تفعيل كود", callback_data="ref:code")])
 
     # «📜 قواعد الإحالات» appears exactly once — in this fixed bottom row.
     # «📦 الخطط والباقات» gives EVERY user full visibility into the plan
@@ -715,12 +721,61 @@ async def referral_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         return
 
     if data == "ref:cancel_token":
+        cr = context.user_data.pop("code_redeem", None)
+        if cr:
+            # A cancelled code activation must NEVER consume a use.
+            try:
+                redemption.release_reservation(uid, int(cr["code_id"]), "user_cancelled")
+            except Exception:
+                logger.exception("code reservation release failed")
         context.user_data.pop("awaiting_token", None)
         context.user_data.pop("token_attempts", None)
         await q.edit_message_text(
-            "❌ تم إلغاء ربط التوكن. مكافأتك محفوظة — تقدر ترجع تبدأ الربط في أي وقت.",
+            "❌ تم إلغاء ربط التوكن."
+            + (" الكود محفوظ ولم يُستهلك — تقدر ترجع تبدأ التفعيل في أي وقت." if cr
+               else " مكافأتك محفوظة — تقدر ترجع تبدأ الربط في أي وقت."),
             parse_mode="HTML",
             reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 رجوع", callback_data="ref:home")]]),
+        )
+        return
+
+    if data == "ref:code":
+        stats = referral.get_stats(uid)
+        inst = stats.get("instance")
+        if inst and inst.get("status") == "active" and inst.get("bot_username"):
+            await q.edit_message_text(
+                "🤖 <b>لديك نسخة نشطة بالفعل!</b>\n\n"
+                f"بوتك: <a href=\"https://t.me/{inst['bot_username']}\">@{inst['bot_username']}</a>\n"
+                "الكود مخصص لمن لا يملك نسخة عاملة — لو نسختك منتهية المدة، "
+                "التجديد يتم بقرار المالك عبر تذكرة دعم.",
+                parse_mode="HTML",
+                reply_markup=InlineKeyboardMarkup([[_back_home_row()[0]]]),
+            )
+            return
+        if q.message.chat.type != "private":
+            await q.answer("⚠️ تفعيل الأكواد يتم في المحادثة الخاصة فقط.", show_alert=True)
+            return
+        context.user_data["awaiting_code"] = True
+        await q.edit_message_text(
+            "🔑 <b>تفعيل كود</b>\n\n"
+            "أرسل الآن <b>كود التفعيل</b> الذي استلمته من المالك مباشرة هنا "
+            "في هذه المحادثة الخاصة.\n\n"
+            "• الكود يُستخدم مرة واحدة فقط لكل مستخدم.\n"
+            "• بعد التحقق من الكود ستُطلب منك ربط توكن بوتك الجديد.\n"
+            "• <b>لا يُستهلك الكود إلا بعد نجاح إنشاء نسختك وتفعيلها كاملًا.</b>",
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("❌ إلغاء", callback_data="ref:code:cancel")],
+            ]),
+        )
+        return
+
+    if data == "ref:code:cancel":
+        context.user_data.pop("awaiting_code", None)
+        await q.edit_message_text(
+            "❌ تم إلغاء تفعيل الكود.",
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup([[_back_home_row()[0]]]),
         )
         return
 
@@ -794,6 +849,79 @@ async def referral_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     await _render_home(update, context, edit=True)
 
 
+_CODE_REASON_AR = {
+    "shape": "🔤 ده مش شكل كود تفعيل صحيح.\nالكود شكله: <code>CHJ-XXXX-XXXX</code> — انسخه كاملًا كما أرسله لك المالك.",
+    "not_found": "❌ الكود غير صحيح أو غير موجود.\nتأكد من نسخه كاملًا بدون مسافات زائدة، ولو المشكلة مستمرة تواصل مع المالك.",
+    "revoked": "⛔ هذا الكود <b>ملغى</b> بقرار المالك ولا يمكن استخدامه.",
+    "expired": "⌛ <b>انتهت صلاحية هذا الكود</b> ولم يعد قابلًا للتفعيل.",
+    "exhausted": "🈳 <b>تم استنفاد عدد استخدامات هذا الكود.</b>",
+    "limit_reached": "🈳 عذرًا، تم استخدام آخر إتاحة من هذا الكود أثناء محاولتك.\nتواصل مع المالك للحصول على كود جديد.",
+    "already_used": "⚠️ <b>لقد استخدمت هذا الكود من قبل.</b> كل كود يُستخدم مرة واحدة فقط لكل مستخدم.",
+    "has_active_instance": "🤖 لديك نسخة نشطة بالفعل — الكود مخصص لمن لا يملك نسخة عاملة.",
+}
+
+
+async def try_handle_code_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
+    """Secure redemption-code capture (mirrors the token capture pattern).
+
+    Returns True when the message was consumed. The message is deleted
+    first; the code text never appears in any log row. A successful check
+    atomically RESERVES one use — it is only confirmed as consumed after
+    the clone is fully activated (see try_handle_token_message).
+    """
+    if not context.user_data.get("awaiting_code"):
+        return False
+    msg = update.message
+    if not msg or not msg.text:
+        return False
+    if msg.chat.type != "private":
+        return False
+
+    try:
+        await msg.delete()
+    except Exception:
+        pass
+
+    context.user_data.pop("awaiting_code", None)
+    uid = msg.from_user.id
+    code_text = msg.text.strip()
+
+    await msg.reply_text("⏳ جارٍ التحقق من الكود…")
+    result = redemption.redeem_code(uid, code_text)
+    if not result.get("ok"):
+        reason = result.get("reason", "")
+        text = _CODE_REASON_AR.get(reason, "❌ تعذر تفعيل هذا الكود. تواصل مع المالك للتأكد من صلاحيته.")
+        await msg.reply_text(text, parse_mode="HTML")
+        return True
+
+    # Slot reserved + pending instance created → straight into the SAME
+    # secure token-linking flow used by referral rewards.
+    plan = result.get("plan") or "basic"
+    plan_badge = "👑 Pro" if plan == "pro" else "🆓 Basic"
+    context.user_data["code_redeem"] = {
+        "code_id": result["code_id"],
+        "plan": plan,
+        "runtime_days": int(result.get("runtime_days") or 30),
+        "instance_id": result["instance_id"],
+    }
+    context.user_data["awaiting_token"] = True
+    context.user_data["token_attempts"] = 0
+    await msg.reply_text(
+        "✅ <b>الكود صحيح وتم قبوله!</b>\n\n"
+        f"📦 خطتك: <b>{plan_badge}</b> — مدة التشغيل <b>{int(result.get('runtime_days') or 30)} يومًا</b> من لحظة التفعيل.\n\n"
+        "🔑 <b>الخطوة الأخيرة: ربط توكن بوتك الجديد.</b>\n"
+        "1️⃣ افتح @BotFather وأنشئ بوتًا بـ <code>/newbot</code>\n"
+        "2️⃣ أرسل التوكن هنا مباشرة — رسالتك هتتمسح فورًا والتوكن بيتخزن مشفرًا.\n\n"
+        "⚠️ <b>لا يُستهلك الكود إلا بعد نجاح إنشاء نسختك وتفعيلها كاملًا.</b>",
+        parse_mode="HTML",
+        disable_web_page_preview=True,
+        reply_markup=InlineKeyboardMarkup([
+            [InlineKeyboardButton("❌ إلغاء التفعيل", callback_data="ref:cancel_token")],
+        ]),
+    )
+    return True
+
+
 async def try_handle_token_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
     """Secure token capture. Returns True when the message was consumed.
 
@@ -838,7 +966,17 @@ async def try_handle_token_message(update: Update, context: ContextTypes.DEFAULT
         return True
 
     await msg.reply_text("⏳ جارٍ التحقق من التوكن وهوية البوت…")
-    result = referral.verify_and_link_token(uid, token_text)
+    cr = context.user_data.get("code_redeem")
+    if cr:
+        # Code activation: pre-created instance + the code's plan/window.
+        result = referral.verify_and_link_token(
+            uid, token_text,
+            instance_id=int(cr["instance_id"]),
+            plan=cr.get("plan"),
+            days=int(cr.get("runtime_days") or 0) or None,
+        )
+    else:
+        result = referral.verify_and_link_token(uid, token_text)
     if not result.get("ok"):
         reason = result.get("reason", "")
         if reason == "already_linked":
@@ -854,14 +992,28 @@ async def try_handle_token_message(update: Update, context: ContextTypes.DEFAULT
         if attempts >= _MAX_TOKEN_ATTEMPTS:
             context.user_data.pop("awaiting_token", None)
             context.user_data.pop("token_attempts", None)
+            failed_cr = context.user_data.pop("code_redeem", None)
+            if failed_cr:
+                # A FAILED activation must never consume the code's use.
+                try:
+                    redemption.release_reservation(uid, int(failed_cr["code_id"]), "token_attempts_exhausted")
+                except Exception:
+                    logger.exception("code reservation release failed")
             text += "\n\n⛔ تم إيقاف المحاولات بعد 5 مرات — تقدر تبدأ الربط مجددًا من صفحة 🎁."
         await msg.reply_text(text, parse_mode="HTML")
         return True
 
     # Verified + stored. Spawn the clone instance live inside this process.
     bot_username = result.get("bot_username", "")
+    cr = context.user_data.pop("code_redeem", None)
     context.user_data.pop("awaiting_token", None)
     context.user_data.pop("token_attempts", None)
+    if cr:
+        # NOW — and only now — the code's use is confirmed as consumed.
+        try:
+            redemption.confirm_use(uid, int(cr["code_id"]), int(result["instance_id"]), bot_username)
+        except Exception:
+            logger.exception("code confirm_use failed")
 
     from database import pg
     inst = pg.fetchone("SELECT * FROM bot_instances WHERE id = ?", (result["instance_id"],))
@@ -876,14 +1028,25 @@ async def try_handle_token_message(update: Update, context: ContextTypes.DEFAULT
         "🟢 <b>النسخة شغالة الآن!</b>" if started
         else "🟡 <b>تم الربط بنجاح.</b> النسخة ستعمل تلقائيًا خلال دقائق (أو مع أول إعادة تشغيل للنظام)."
     )
+    plan_line = ""
+    closing = f"شكرًا إنك كبرت المجتمع — {referral.get_stats(uid)['qualified']} مستخدمًا مؤهلًا بفضلك! 💪"
+    if cr:
+        plan_badge = "👑 Pro" if result.get("plan") == "pro" else "🆓 Basic"
+        exp = str(result.get("expires_at") or "")[:10]
+        plan_line = (
+            f"📦 خطتك: <b>{plan_badge}</b> — مدة التشغيل تبدأ الآن"
+            + (f" وتنتهي في <b>{exp}</b>.\n" if exp else ".\n")
+        )
+        closing = "✅ تم احتساب استخدام واحد من الكود بعد نجاح إنشاء نسختك وتفعيلها كاملًا. 🚀"
     await msg.reply_text(
         f"🎉 <b>مبروك! نسختك الخاصة اتفعلت.</b>\n\n"
         f"{status_line}\n"
         f"🤖 بوتك: <a href=\"https://t.me/{bot_username}\">@{bot_username}</a>\n\n"
+        f"{plan_line}"
         f"✅ تم التحقق من ملكية البوت وصحة التوكن.\n"
         f"🔐 التوكن مخزن مشفرًا ومحذوف من المحادثة.\n"
         f"👥 نسختك فيها زر «العودة إلى البوت الأساسي»، وكل مستخدم جديد بيبدأ منها يتسجل في شبكة الإحالات.\n\n"
-        f"شكرًا إنك كبرت المجتمع — {referral.get_stats(uid)['qualified']} مستخدمًا مؤهلًا بفضلك! 💪",
+        f"{closing}",
         parse_mode="HTML",
         disable_web_page_preview=True,
         reply_markup=InlineKeyboardMarkup([

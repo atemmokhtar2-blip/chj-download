@@ -58,7 +58,9 @@ import pgtest  # noqa: E402
 # suite database before any project module was imported; a plain-script run
 # (python3 tests/test_referral_extras.py) bootstraps its own server here.
 # Rows are scrubbed by ID range below, so no dedicated database is needed.
-if "pytest" not in sys.modules:
+# NOTE: this module imports pytest at the top (it defines test functions),
+# so the guard keys off the ENV VAR conftest sets — not sys.modules.
+if not os.environ.get("NEON_DATABASE_URL"):
     pgtest.bootstrap()
 
 from database import pg  # noqa: E402
