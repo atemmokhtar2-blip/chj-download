@@ -5,7 +5,7 @@ from telegram.ext import ContextTypes
 
 from config.settings import MAIN_BOT_USERNAME
 from database.users import get_user, create_user, update_user
-from middlewares.auth import is_admin
+from middlewares.auth import is_admin, is_owner
 from locales import t
 from services.instance_manager import is_clone_bot
 

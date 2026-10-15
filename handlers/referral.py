@@ -642,9 +642,34 @@ async def referral_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 
         ok, status = referral.claim_reward(uid)
         if not ok:
-            await q.answer(
-                f"لسه محتاج {max(0, stats['target'] - stats['qualified'])} مستخدمًا مؤهلًا كمان 💪",
-                show_alert=True,
+            # Show a FULL progress screen instead of a fleeting toast — the
+            # user must see exactly where they stand toward their own clone:
+            # the dynamic target ("توصل لـ N مستخدم نشط"), what they reached
+            # so far, what remains, and how a user becomes qualified.
+            remaining = max(0, int(stats.get("target", 0)) - int(stats.get("qualified", 0)))
+            percent = int(stats.get("percent", 0))
+            bar_len = 14
+            filled = int(percent / 100 * bar_len)
+            bar = "█" * filled + "░" * (bar_len - filled)
+            await q.answer()
+            await q.edit_message_text(
+                "🎁 <b>نسختك الخاصة — حالة التقدم</b>\n\n"
+                f"🎯 الهدف: أن تصل إلى <b>{stats.get('target', 0)} مستخدمًا نشطًا (مؤهلًا)</b>\n"
+                f"✅ أنت وصلت لـ: <b>{stats.get('qualified', 0)} مستخدمًا مؤهلًا</b>\n"
+                f"🚀 باقي لك: <b>{remaining}</b> مستخدمًا\n"
+                f"📊 نسبة الإنجاز: <b>{percent}%</b>  <code>{bar}</code>\n"
+                f"⏳ بانتظار النشاط: <b>{stats.get('pending', 0)}</b>"
+                " (سجلوا عبر رابطك ولم يكتمل تأهيلهم بعد)\n\n"
+                "📌 <b>كيف يُحتسب المستخدم مؤهلًا؟</b>\n"
+                "• يقوم بأول تحميل ناجح عبر البوت — أو\n"
+                "• يستخدم البوت في يومين مختلفين.\n\n"
+                "💡 شارك رابط دعوتك الآن — كل مستخدم مؤهل يقربك خطوة من امتلاك نسختك الخاصة!",
+                parse_mode="HTML",
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("📋 نسخ رابط الإحالة", callback_data="ref:copy")],
+                    [InlineKeyboardButton("📊 إحصائيات الإحالات", callback_data="ref:stats")],
+                    [InlineKeyboardButton("🔙 رجوع", callback_data="ref:home")],
+                ]),
             )
             return
 
