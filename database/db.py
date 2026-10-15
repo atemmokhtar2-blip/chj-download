@@ -376,8 +376,10 @@ def ensure_owner_schema():
       and a timestamp (shown in the owner's banned list and audit trail).
     * ``extra_admins`` — admins granted at runtime BY THE OWNER (never owners).
     """
+    # SQLite's PRAGMA is not valid SQL on PostgreSQL; use the shared,
+    # backend-aware information_schema/PRAGMA helper instead.
+    cols = table_columns("users")
     with db_cursor() as c:
-        cols = {row[1] for row in c.execute("PRAGMA table_info(users)").fetchall()}
         if "ban_reason" not in cols:
             c.execute("ALTER TABLE users ADD COLUMN ban_reason TEXT DEFAULT ''")
         if "banned_at" not in cols:
@@ -429,4 +431,3 @@ def ensure_cache_schema():
         c.execute(
             "CREATE INDEX IF NOT EXISTS idx_fp_updated ON media_fingerprint_index(updated_at)"
         )
-
