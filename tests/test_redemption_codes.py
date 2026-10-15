@@ -418,6 +418,48 @@ def _setup_module_checks() -> None:
     ok5, _ = redemption.trial_eligible(u2)
     check("swept user not blocked by an orphan pending row", ok5 is True)
 
+    print("== orphan pending-instance self-heal ==")
+    # A crashed flow can leave a pending shell with NO reservation log row —
+    # nothing else ever cleans it, and the one-clone-per-user gate would
+    # block that user from EVERY flow forever. Self-heal must remove it.
+    orph = pg.insert_returning_id(
+        "INSERT INTO bot_instances (owner_id, status, plan, created_at) "
+        "VALUES (?, 'pending_token', 'basic', CURRENT_TIMESTAMP - INTERVAL '120 minutes')",
+        (9900,))
+    fresh_id = pg.insert_returning_id(
+        "INSERT INTO bot_instances (owner_id, status, plan) VALUES (?, 'pending_token', 'basic')",
+        (9901,))
+    redemption.cleanup_orphan_pending_instances()
+    check("stale orphan pending deleted",
+          pg.fetchone("SELECT id FROM bot_instances WHERE id = ?", (orph,)) is None)
+    check("fresh pending untouched",
+          pg.fetchone("SELECT id FROM bot_instances WHERE id = ?", (fresh_id,)) is not None)
+    pg.execute("DELETE FROM bot_instances WHERE id = ?", (fresh_id,))
+    # A referral-reward shell may legitimately wait for a token for ages —
+    # it must survive the sweep.
+    rew = pg.insert_returning_id(
+        "INSERT INTO bot_instances (owner_id, status, plan, created_at) "
+        "VALUES (?, 'pending_token', 'basic', CURRENT_TIMESTAMP - INTERVAL '200 minutes')",
+        (9902,))
+    pg.execute(
+        "INSERT INTO referral_rewards (user_id, status, instance_id) "
+        "VALUES (?, 'awaiting_token', ?) "
+        "ON CONFLICT (user_id) DO UPDATE SET instance_id = EXCLUDED.instance_id",
+        (9902, rew))
+    redemption.cleanup_orphan_pending_instances()
+    check("reward-flow pending survives",
+          pg.fetchone("SELECT id FROM bot_instances WHERE id = ?", (rew,)) is not None)
+    # redeem_code self-heals: a user blocked ONLY by an orphan shell can redeem.
+    pg.insert_returning_id(
+        "INSERT INTO bot_instances (owner_id, status, plan, created_at) "
+        "VALUES (?, 'pending_token', 'basic', CURRENT_TIMESTAMP - INTERVAL '120 minutes')",
+        (9903,))
+    heal = redemption.create_code("basic", 30, 1, 7, created_by=OWNER)
+    rh = redemption.redeem_code(9903, heal["code"])
+    check("redeem self-heals the orphan block", rh.get("ok") is True)
+    ok6, _ = redemption.trial_eligible(9904)
+    check("trial eligibility self-heals too", ok6 is True)
+
 
 # ---- run the full flow once, HERE (import time) --------------------------------
 # Same contract as test_clone_plans: the dedicated-database pin and the

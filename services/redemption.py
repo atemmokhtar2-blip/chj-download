@@ -261,6 +261,51 @@ def revoke_code(code_id: int, by_owner: int | None = None) -> tuple[bool, str]:
 
 # ---- reservation lifecycle ------------------------------------------------------
 
+def cleanup_orphan_pending_instances() -> int:
+    """Self-heal pending_token shells that NO flow owns anymore.
+
+    A crash between the slot reservation and the audit-row write (or a
+    transient audit failure) can leave a pending instance no reservation
+    log covers. With the one-clone-per-user gate such an orphan would block
+    that user from EVERY flow forever. This deletes pending instances older
+    than the reservation TTL that are:
+      * not referenced by a referral reward (reward-flow instances may
+        legitimately wait for a token far longer than the TTL), and
+      * not covered by a live 'reserved'/'trial_reserved' audit row.
+    Abandoned trial shells give the one-ever chance back (the registry row
+    goes with the instance); activated trials are untouched — their
+    instances left pending_token status long ago.
+    """
+    try:
+        removed = pg.execute(
+            "DELETE FROM bot_instances "
+            "WHERE status = 'pending_token' "
+            "AND created_at < CURRENT_TIMESTAMP - (? * INTERVAL '1 minute') "
+            "AND id NOT IN (SELECT COALESCE(instance_id, 0) FROM referral_rewards) "
+            "AND NOT EXISTS ("
+            "  SELECT 1 FROM redemption_log x "
+            "  WHERE x.instance_id = bot_instances.id "
+            "  AND x.action IN ('reserved', 'trial_reserved') "
+            "  AND NOT EXISTS ("
+            "    SELECT 1 FROM redemption_log y "
+            "    WHERE y.code_id = x.code_id AND y.user_id = x.user_id "
+            "    AND y.id > x.id AND y.action IN ('used', 'released')))",
+            (RESERVATION_TTL_MINUTES,),
+        )
+        if removed:
+            logger.info("orphan pending-instance cleanup removed %s row(s)", removed)
+        # Trials whose shell just got orphan-deleted: return the chance.
+        pg.execute(
+            "DELETE FROM clone_trials t "
+            "WHERE t.instance_id IS NOT NULL "
+            "AND NOT EXISTS (SELECT 1 FROM bot_instances b WHERE b.id = t.instance_id)",
+        )
+        return int(removed or 0)
+    except Exception:
+        logger.exception("orphan pending-instance cleanup failed")
+        return 0
+
+
 def _sweep_stale_reservations(code_id: int) -> None:
     """Release 'reserved' slots older than the TTL whose owner never
     completed (no later 'used'/'released' row for the same user+code)."""
@@ -379,6 +424,9 @@ def redeem_code(user_id: int, code_text: str) -> dict:
     # somewhere else (another code, the trial, or the referral reward). The
     # same-code resume already returned above, so anything pending here is a
     # DIFFERENT flow — starting a second one could end in two clones.
+    # Self-heal first: an orphaned shell from a crashed flow must not block
+    # this user forever.
+    cleanup_orphan_pending_instances()
     pending_other = pg.fetchone(
         "SELECT id FROM bot_instances WHERE owner_id = ? AND status = 'pending_token' LIMIT 1",
         (uid,),
