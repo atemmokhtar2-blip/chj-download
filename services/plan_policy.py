@@ -411,7 +411,40 @@ def is_user_banned(instance_id: int, user_id: int) -> bool:
         return False
 
 
+def ban_guard(instance_id: int, target_id: int, actor_id: int) -> str:
+    """Why a ban must be refused ("" = allowed). Server-side, on EVERY ban.
+
+    Clone admins with ``can_ban`` manage regular users — they must never be
+    able to lock the instance OWNER out of their own clone (bans are
+    enforced at /start and download time), nor sabotage a fellow admin, nor
+    ban themselves (removal is the owner's job). The guard lives in the
+    policy layer, not the handler, so a ban can never be applied from any
+    call site without passing it.
+    """
+    try:
+        owner_row = pg.fetchone(
+            "SELECT owner_id FROM bot_instances WHERE id = ?", (int(instance_id),))
+    except Exception:
+        logger.exception("ban guard owner lookup failed inst=%s", instance_id)
+        return "error"
+    if not owner_row:
+        return "error"
+    try:
+        if int(owner_row.get("owner_id") or 0) == int(target_id):
+            return "owner"
+        if int(target_id) == int(actor_id):
+            return "self"
+        if get_clone_admin(int(instance_id), int(target_id)):
+            return "admin"
+    except Exception:
+        logger.exception("ban guard check failed inst=%s target=%s", instance_id, target_id)
+        return "error"
+    return ""
+
+
 def ban_user(instance_id: int, user_id: int, banned_by: int, reason: str = "") -> bool:
+    if ban_guard(instance_id, user_id, banned_by):
+        return False
     try:
         pg.execute(
             "INSERT INTO clone_bans (instance_id, user_id, banned_by, reason) "

@@ -94,6 +94,27 @@ def clone_plan_days(plan) -> int:
     return CLONE_PLAN_PRO_DAYS if (plan or "basic") == "pro" else CLONE_PLAN_BASIC_DAYS
 
 
+# Hard bound on how far into the future a clone can ever be activated. Codes
+# are validated 1..365 at creation; this is defense-in-depth so a forged or
+# corrupted ``days`` value can never produce a negative or decades-long expiry.
+_MAX_PLAN_DAYS = 365
+
+
+def bounded_plan_days(days, plan) -> int:
+    """Clamp a caller-supplied validity window to ``[1, _MAX_PLAN_DAYS]``.
+
+    ``days=None/0`` fall back to the plan's default window; non-numeric and
+    out-of-range values are corrected instead of silently producing a bad
+    ``expires_at`` (a negative window would activate a clone that is already
+    expired; a huge one would grant a near-permanent instance).
+    """
+    try:
+        base = int(days) if days else clone_plan_days(plan)
+    except (TypeError, ValueError):
+        base = clone_plan_days(plan)
+    return max(1, min(base, _MAX_PLAN_DAYS))
+
+
 def pro_target() -> int:
     """Qualified referrals required at activation time to earn the Pro plan."""
     return max(1, int(get_effective_target() * CLONE_PRO_TARGET_MULTIPLIER))
@@ -160,7 +181,12 @@ def hash_token(plaintext: str) -> str:
 
 
 def looks_like_token(text: str) -> bool:
-    return bool(_TOKEN_RE.match((text or "").strip()))
+    stripped = (text or "").strip()
+    # Telegram bot tokens are ~46 chars; anything far longer is junk that
+    # should never reach a getMe round-trip.
+    if len(stripped) > 200:
+        return False
+    return bool(_TOKEN_RE.match(stripped))
 
 
 # ---- codes & links ------------------------------------------------------------
@@ -825,7 +851,7 @@ def verify_and_link_token(owner_id: int, token_text: str, *,
             (uid,),
         )["cnt"]
         plan = "pro" if int(qualified_now or 0) >= pro_target() else "basic"
-    plan_days = int(days) if days else clone_plan_days(plan)
+    plan_days = bounded_plan_days(days, plan)
     activated = _utcnow()
     expires = activated + timedelta(days=plan_days)
     activated_ts = activated.strftime("%Y-%m-%d %H:%M:%S")

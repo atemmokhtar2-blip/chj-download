@@ -13,6 +13,33 @@ _downloads_day: dict[int, deque[float]] = defaultdict(deque)
 # Check and record requests atomically: Telegram updates may be handled concurrently.
 _lock = threading.RLock()
 
+# Per-user deques only trim on that user's NEXT access; a one-time user would
+# otherwise linger in memory forever. Once the tracker grows past this cap,
+# entries whose windows have fully expired are evicted — dropping them is a
+# no-op for enforcement (they can never be "counted" again outside their
+# window) but keeps the three dicts bounded on a long-running bot.
+_MAX_TRACKED_USERS = 100_000
+
+
+def _evict_stale_entries(now: float | None = None) -> int:
+    """Drop idle, fully-expired user entries when the dicts are oversized.
+
+    MUST be called with ``_lock`` held. Returns the number of user ids evicted
+    from the burst window (the other two buckets are swept alongside it).
+    """
+    if len(_recent) <= _MAX_TRACKED_USERS:
+        return 0
+    current = time.monotonic() if now is None else now
+    stale: set[int] = set()
+    for uid, q in _recent.items():
+        if not q or current - q[-1] >= 86400:
+            stale.add(uid)
+    for uid in stale:
+        _recent.pop(uid, None)
+        _downloads_hour.pop(uid, None)
+        _downloads_day.pop(uid, None)
+    return len(stale)
+
 
 @dataclass
 class RateLimitResult:
@@ -28,6 +55,7 @@ def _trim(q: deque[float], window: int, now: float | None = None) -> None:
 
 
 def _check_rate_limit_locked(user_id: int, now: float) -> RateLimitResult:
+    _evict_stale_entries(now)
     recent = _recent[user_id]
     hour = _downloads_hour[user_id]
     day = _downloads_day[user_id]

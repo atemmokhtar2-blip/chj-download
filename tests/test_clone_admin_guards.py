@@ -92,6 +92,9 @@ check("broadcast text capture re-checks can_broadcast",
 print("== users/ban/log/stats: per-action permission re-checks ==")
 check("ban/unban ACTION re-checks can_ban",
       "can_ban" in branch('elif data.startswith("ca:user:")'))
+_branch_user = branch('elif data.startswith("ca:user:")')
+check("ban ACTION consults ban_guard BEFORE applying (owner/admins protected)",
+      "pp.ban_guard(inst_id, uid, user.id)" in _branch_user)
 check("users browse gated (can_stats|can_ban)",
       "_allows_users" in branch('elif data.startswith("ca:users:")'))
 check("user detail gated",

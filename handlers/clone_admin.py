@@ -504,6 +504,16 @@ async def clone_admin_callback(update: Update, context: ContextTypes.DEFAULT_TYP
                     await _deny(query, "⛔ صلاحية الحظر (can_ban) مطلوبة.")
                     return
                 if action == "ban":
+                    guard = pp.ban_guard(inst_id, uid, user.id)
+                    if guard:
+                        _BAN_GUARD_TEXT = {
+                            "owner": "⛔ لا يمكنك حظر صاحب النسخة.",
+                            "admin": "⛔ لا يمكنك حظر إداري آخر — لإزالة صلاحياته استخدم «إزالة».",
+                            "self": "⛔ لا يمكنك حظر نفسك.",
+                        }
+                        await _deny(query, _BAN_GUARD_TEXT.get(
+                            guard, "⛔ هذا الحظر محظور."))
+                        return
                     pp.ban_user(inst_id, uid, user.id)
                     pp.log_admin_action(inst_id, user.id, "ban_user", str(uid))
                 else:

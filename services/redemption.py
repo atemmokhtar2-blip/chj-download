@@ -363,7 +363,9 @@ def redeem_code(user_id: int, code_text: str) -> dict:
     """
     uid = int(user_id)
     norm = normalize_code(code_text)
-    if not norm or len(norm) < 6:
+    # Canonical codes are exactly 11 chars (BASIC/PRO/CHJ prefix + 8 body);
+    # a far longer string is garbage that should never hit the code index.
+    if not norm or len(norm) < 6 or len(norm) > 64:
         return {"ok": False, "reason": "shape"}
 
     row = find_code(norm)
