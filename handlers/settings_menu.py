@@ -111,8 +111,12 @@ def _parse_size_mb(raw: str) -> float | None:
 def _mk(rows: list[list[tuple[str, str]]]) -> InlineKeyboardMarkup:
     # Telegram inline buttons have no style/color option — the colored dots
     # (🟢/🔵/🔴/🟡) inside the labels themselves carry the visual semantics.
+    # A row value starting with https:// renders as a URL button — used by
+    # the clone menu's "اصنع بوتك الخاص" door that jumps to the MAIN bot.
     return InlineKeyboardMarkup([
-        [inline_button(label, callback_data=data) for label, data in row]
+        [inline_button(label, url=data) if str(data).startswith("https://")
+         else inline_button(label, callback_data=data)
+         for label, data in row]
         for row in rows
     ])
 
@@ -121,7 +125,27 @@ def _edit_cb(rows: list[list[tuple[str, str]]]) -> InlineKeyboardMarkup:
     return _mk(rows)
 
 
-def build_home(settings: dict) -> tuple[str, list]:
+def _main_bot_username() -> str:
+    """The main bot's @username — the product's front door (@K_J7Bot)."""
+    from config.settings import MAIN_BOT_USERNAME
+    return str(MAIN_BOT_USERNAME or "").strip().lstrip("@") or "K_J7Bot"
+
+
+def _main_bot_url() -> str:
+    """Direct t.me link to the MAIN bot (the clone menu's URL door)."""
+    return f"https://t.me/{_main_bot_username()}"
+
+
+def _is_clone_bot(context) -> bool:
+    """Which bot is RUNNING decides the menu — never user input."""
+    try:
+        from services import plan_policy
+        return bool(plan_policy.plan_context(context.bot).get("is_clone"))
+    except Exception:
+        return False
+
+
+def build_home(settings: dict, is_clone: bool = False) -> tuple[str, list]:
     s = settings
     text = (
         "⚙️ <b>إعدادات حسابك</b>\n"
@@ -133,9 +157,18 @@ def build_home(settings: dict) -> tuple[str, list]:
         f"🔔 إشعارات الاكتمال: <b>{_onoff(s['notify_complete'])}</b>\n\n"
         "اختار القسم اللي عايز تعدّله:"
     )
-    rows = [
-        [("🟢 🎁 اكسب نسختك من البوت", "settings:referral")],
-        [("🔵 📊 الخطط والحدود", "settings:plan")],
+    if is_clone:
+        # Inside a PRIVATE CLONE the referral center and the plans card are
+        # MAIN-bot product pages — clone users get ONE direct door to the
+        # main bot instead ("اصنع بوتك الخاص"), and "الخطط والحدود" is not
+        # offered here at all. The MAIN bot's menu below stays untouched.
+        head = [[("🟢 🤖 اصنع بوتك الخاص", _main_bot_url())]]
+    else:
+        head = [
+            [("🟢 🎁 اكسب نسختك من البوت", "settings:referral")],
+            [("🔵 📊 الخطط والحدود", "settings:plan")],
+        ]
+    rows = head + [
         [("🔵 🎯 الجودة والحجم", "settings:quality")],
         [("🔵 📦 طريقة الاستلام", "settings:delivery")],
         [("🔵 ⚡ مدير التحميلات", "settings:queue")],
@@ -419,7 +452,7 @@ async def settings_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if getattr(context, "user_data", None) is not None:
         context.user_data.pop("settings_input", None)
     settings = get_user_settings(uid)
-    text, rows = build_home(settings)
+    text, rows = build_home(settings, is_clone=_is_clone_bot(context))
     await update.message.reply_text(text, parse_mode="HTML", reply_markup=_mk(rows))
 
 
@@ -507,6 +540,24 @@ async def settings_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # 🎁 Referral center — its own async module (pages, reward claim, and the
     # secure token-linking flow live in handlers/referral.py).
     if data == "settings:referral":
+        # Server-side gate (hiding the button is cosmetics, this is the
+        # protection): inside a PRIVATE CLONE the referral center does not
+        # exist — the user gets the one direct door to the MAIN bot instead.
+        # Which bot is running decides, never the callback data.
+        if _is_clone_bot(context):
+            await safe_edit(
+                query.edit_message_text,
+                "🤖 <b>اصنع بوتك الخاص</b>\n\n"
+                "نسخة التحميل الخاصة بتُصنع من البوت الأساسي — "
+                "افتحه من الزر بالأسفل وكمل من هناك.\n\n"
+                f"البوت الأساسي: <b>@{_main_bot_username()}</b>",
+                parse_mode="HTML",
+                reply_markup=_mk([
+                    [("🟢 🤖 اصنع بوتك الخاص", _main_bot_url())],
+                    [("🔵 ↩️ رجوع", "settings:home")],
+                ]),
+            )
+            return
         from handlers.referral import referral_page
         await referral_page(update, context, edit=True)
         return
@@ -515,6 +566,15 @@ async def settings_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # doesn't) and which plan THIS bot runs under. Visible to every user.
     if data == "settings:plan":
         from services import plan_policy
+        if _is_clone_bot(context):
+            # The plans card is a MAIN-bot page — removed from the clone's
+            # menu. A stale/forged callback inside a clone simply lands back
+            # on the clone's home menu (server-side, decided by the RUNNING
+            # bot, not by the callback data).
+            text, rows = build_home(get_user_settings(uid), is_clone=True)
+            await safe_edit(query.edit_message_text, text, parse_mode="HTML",
+                            reply_markup=_mk(rows))
+            return
         await safe_edit(
             query.edit_message_text,
             plan_policy.plan_summary_text(plan_policy.plan_context(context.bot)),
@@ -578,7 +638,7 @@ def _dispatch(uid: int, data: str, context) -> tuple[str, list]:
     settings = get_user_settings(uid)
 
     if data == "settings:home":
-        return build_home(settings)
+        return build_home(settings, is_clone=_is_clone_bot(context))
     if data == "settings:close":
         return "✅ تم إغلاق الإعدادات.", []
     if data == "settings:quality":
@@ -739,4 +799,4 @@ def _dispatch(uid: int, data: str, context) -> tuple[str, list]:
             [[("🟢 ⚙️ فتح الإعدادات", "settings:home")]],
         )
 
-    return build_home(settings)
+    return build_home(settings, is_clone=_is_clone_bot(context))

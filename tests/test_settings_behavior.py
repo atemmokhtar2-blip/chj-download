@@ -16,6 +16,42 @@ import pytest
 
 # ---- lifetime persistence --------------------------------------------------
 
+def test_clone_menu_hides_referral_and_plans_but_links_main_bot():
+    """Inside a PRIVATE CLONE the settings menu must NOT show the referral
+    center ("اكسب نسختك من البوت") nor the plans card ("الخطط والحدود") —
+    those belong to the MAIN bot. Instead the clone shows ONE direct URL
+    door: "اصنع بوتك الخاص" -> t.me/<main bot>. The MAIN bot's menu keeps
+    both entries exactly as before (nothing removed there)."""
+    from handlers.settings_menu import build_home, _main_bot_username
+
+    s = {"video_quality": "auto", "delivery_mode": "video",
+         "max_file_size_mb": 100, "notify_complete": 1}
+
+    # MAIN bot menu — unchanged: referral + plans both present, no URL door.
+    _t_main, rows_main = build_home(s)
+    flat_main = [cb for row in rows_main for _label, cb in row]
+    assert "settings:referral" in flat_main
+    assert "settings:plan" in flat_main
+    assert not any(str(cb).startswith("https://") for cb in flat_main)
+
+    # CLONE menu — both entries gone, one URL door to the main bot instead.
+    _t_clone, rows_clone = build_home(s, is_clone=True)
+    flat_clone = [cb for row in rows_clone for _label, cb in row]
+    assert "settings:referral" not in flat_clone
+    assert "settings:plan" not in flat_clone
+    doors = [cb for cb in flat_clone if str(cb).startswith("https://t.me/")]
+    assert doors == [f"https://t.me/{_main_bot_username()}"]
+    door_labels = [label for row in rows_clone for label, cb in row
+                   if str(cb).startswith("https://")]
+    assert any("اصنع بوتك الخاص" in label for label in door_labels)
+
+    # Every other section survives identically in both menus.
+    for cb in ("settings:quality", "settings:delivery", "settings:queue",
+               "settings:history", "settings:privacy", "settings:notify",
+               "settings:reset", "settings:close"):
+        assert cb in flat_main and cb in flat_clone
+
+
 def test_settings_are_committed_to_disk_not_kept_in_memory(isolated_db):
     from database.user_settings import save_settings
 
