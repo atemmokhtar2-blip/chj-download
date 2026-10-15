@@ -263,7 +263,7 @@ async def admin_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     db_user = get_user(user.id)
     lang = db_user.get("language", "en") if db_user else "en"
 
-    text, keyboard = _build_admin_panel(lang)
+    text, keyboard = _build_admin_panel(lang, user.id)
     await update.message.reply_text(text, reply_markup=keyboard, parse_mode="HTML")
 
 async def admin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -275,6 +275,10 @@ async def admin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     db_user = get_user(user.id)
     lang = db_user.get("language", "en") if db_user else "en"
     data = query.data
+    owner_only_callbacks = {"admin_owner_overview", "admin_referral_network", "admin_clone_instances"}
+    if data in owner_only_callbacks and not is_owner(user.id):
+        await query.answer("🔒 القسم ده متاح لصاحب البوت الأساسي فقط.", show_alert=True)
+        return
     if _invalid_admin_callback(data):
         await query.answer(t(lang, "session_expired"), show_alert=True)
         return
@@ -283,6 +287,15 @@ async def admin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if data == "admin_panel":
         _clear_admin_state(user.id)
         await _show_admin_panel(query, lang)
+    elif data == "admin_owner_overview":
+        _clear_admin_state(user.id)
+        await _show_owner_overview(query)
+    elif data == "admin_referral_network":
+        _clear_admin_state(user.id)
+        await _show_referral_network(query)
+    elif data == "admin_clone_instances":
+        _clear_admin_state(user.id)
+        await _show_clone_instances(query)
     elif data == "admin_users":
         _clear_admin_state(user.id)
         await _show_users_page(query, lang, page=0)
@@ -557,7 +570,198 @@ def _temp_dir_size() -> int:
         return 0
 
 
-def _build_admin_panel(lang: str):
+
+
+async def _show_owner_overview(query) -> None:
+    """Owner-only cross-system summary using live persisted records."""
+    from database.pg import backend_name, fetchone
+    from config.settings import OWNER_ID, MAIN_BOT_USERNAME, ENABLE_CLONE_INSTANCES
+
+    def scalar(sql: str, default=0):
+        try:
+            row = fetchone(sql)
+            return row.get("cnt", default) if row else default
+        except Exception:
+            logger.exception("Owner overview query failed")
+            return default
+
+    ref_total = scalar("SELECT COUNT(*) AS cnt FROM referrals")
+    ref_qualified = scalar("SELECT COUNT(*) AS cnt FROM referrals WHERE status = 'qualified'")
+    ref_pending = scalar("SELECT COUNT(*) AS cnt FROM referrals WHERE status = 'pending'")
+    ref_suspicious = scalar("SELECT COUNT(*) AS cnt FROM referrals WHERE status = 'suspicious'")
+    clone_total = scalar("SELECT COUNT(*) AS cnt FROM bot_instances")
+    clone_active = scalar("SELECT COUNT(*) AS cnt FROM bot_instances WHERE status = 'active'")
+    clone_pending = scalar("SELECT COUNT(*) AS cnt FROM bot_instances WHERE status IN ('pending_token', 'claimed')")
+    clone_errors = scalar("SELECT COUNT(*) AS cnt FROM bot_instances WHERE COALESCE(last_error, '') <> ''")
+    try:
+        from services.instance_manager import running_instance_ids
+        running_count = len(running_instance_ids())
+    except Exception:
+        running_count = 0
+    try:
+        from database.users import get_total_users, get_new_users_today, get_active_24h, get_banned_users_count
+        from database.downloads import get_total_downloads, get_downloads_today
+        users = get_total_users()
+        new_today = get_new_users_today()
+        active_24h = get_active_24h()
+        banned = get_banned_users_count()
+        downloads = get_total_downloads()
+        downloads_today = get_downloads_today()
+    except Exception:
+        logger.exception("Owner overview main DB query failed")
+        users = new_today = active_24h = banned = downloads = downloads_today = 0
+
+    text = (
+        "👑 <b>مركز المالك الأساسي</b>\\n\\n"
+        f"🆔 مالك النظام: <code>{OWNER_ID}</code>\\n"
+        f"🤖 البوت الأساسي: <code>@{escape(MAIN_BOT_USERNAME or 'غير مضبوط')}</code>\\n"
+        f"🗄 قاعدة الإحالات: <b>{escape(backend_name())}</b>\\n"
+        f"🧩 تشغيل النسخ: <b>{'مفعّل' if ENABLE_CLONE_INSTANCES else 'متوقف من الإعدادات'}</b>\\n\\n"
+        "👥 <b>المستخدمون والتحميلات</b>\\n"
+        f"• إجمالي المستخدمين: <b>{users}</b>\\n"
+        f"• مستخدمون جدد اليوم: <b>{new_today}</b>\\n"
+        f"• نشطون آخر 24 ساعة: <b>{active_24h}</b>\\n"
+        f"• محظورون: <b>{banned}</b>\\n"
+        f"• إجمالي التحميلات: <b>{downloads}</b> (اليوم: <b>{downloads_today}</b>)\\n\\n"
+        "🤝 <b>شبكة الإحالات</b>\\n"
+        f"• كل الإحالات: <b>{ref_total}</b>\\n"
+        f"• مؤهلة: <b>{ref_qualified}</b>\\n"
+        f"• بانتظار النشاط: <b>{ref_pending}</b>\\n"
+        f"• تحت المراجعة: <b>{ref_suspicious}</b>\\n\\n"
+        "🤖 <b>نسخ المستخدمين</b>\\n"
+        f"• كل النسخ المسجلة: <b>{clone_total}</b>\\n"
+        f"• حالتها Active: <b>{clone_active}</b>\\n"
+        f"• بانتظار ربط التوكن: <b>{clone_pending}</b>\\n"
+        f"• بها خطأ مسجل: <b>{clone_errors}</b>\\n"
+        f"• تعمل داخل العملية الحالية: <b>{running_count}</b>\\n\\n"
+        "ملاحظة: حالة Active من قاعدة البيانات لا تضمن وحدها أن البوت يرد حاليًا؛ "
+        "عدد التشغيل أعلاه يوضح النسخ التي يديرها هذا العامل الحالي."
+    )
+    rows = [
+        [inline_button("🤝 تفاصيل الإحالات", callback_data="admin_referral_network")],
+        [inline_button("🤖 تفاصيل النسخ", callback_data="admin_clone_instances")],
+        [inline_button("🔙 لوحة التحكم", callback_data="admin_panel")],
+    ]
+    await _edit(query, text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(rows))
+
+
+async def _show_referral_network(query) -> None:
+    """Owner-only referral health, top referrers and suspicious activity."""
+    from database.pg import fetchall, fetchone
+
+    def scalar(sql: str) -> int:
+        try:
+            row = fetchone(sql)
+            return int((row or {}).get("cnt", 0) or 0)
+        except Exception:
+            logger.exception("Referral dashboard query failed")
+            return 0
+
+    total = scalar("SELECT COUNT(*) AS cnt FROM referrals")
+    qualified = scalar("SELECT COUNT(*) AS cnt FROM referrals WHERE status = 'qualified'")
+    pending = scalar("SELECT COUNT(*) AS cnt FROM referrals WHERE status = 'pending'")
+    suspicious = scalar("SELECT COUNT(*) AS cnt FROM referrals WHERE status = 'suspicious'")
+    try:
+        leaders = fetchall(
+            "SELECT r.referrer_id, COUNT(*) AS total, "
+            "SUM(CASE WHEN r.status = 'qualified' THEN 1 ELSE 0 END) AS qualified "
+            "FROM referrals r GROUP BY r.referrer_id "
+            "ORDER BY qualified DESC, total DESC LIMIT 10"
+        )
+        recent = fetchall(
+            "SELECT referrer_id, referred_id, status, bound_at, qualified_at "
+            "FROM referrals ORDER BY id DESC LIMIT 10"
+        )
+    except Exception:
+        logger.exception("Referral lists query failed")
+        leaders, recent = [], []
+
+    leader_lines = "\\n".join(
+        f"{i}. <code>{int(row.get('referrer_id') or 0)}</code> — "
+        f"<b>{int(row.get('qualified') or 0)}</b> مؤهل / {int(row.get('total') or 0)} إجمالي"
+        for i, row in enumerate(leaders, 1)
+    ) or "لا توجد إحالات مسجلة."
+    recent_lines = "\\n".join(
+        f"• محيل <code>{int(row.get('referrer_id') or 0)}</code> → "
+        f"مستخدم <code>{int(row.get('referred_id') or 0)}</code> — "
+        f"<b>{escape(str(row.get('status') or 'unknown'))}</b> "
+        f"({escape(str(row.get('bound_at') or '—')[:16])})"
+        for row in recent
+    ) or "لا توجد إحالات حديثة."
+
+    text = (
+        "🤝 <b>مراقبة شبكة الإحالات</b>\\n\\n"
+        f"• الإجمالي: <b>{total}</b>\\n"
+        f"• مؤهلة: <b>{qualified}</b>\\n"
+        f"• معلقة: <b>{pending}</b>\\n"
+        f"• مشبوهة: <b>{suspicious}</b>\\n\\n"
+        f"<b>أكثر 10 محيلين</b>\\n{leader_lines}\\n\\n"
+        f"<b>آخر 10 إحالات</b>\\n{recent_lines}"
+    )
+    rows = [
+        [inline_button("🔄 تحديث", callback_data="admin_referral_network")],
+        [inline_button("👑 ملخص المالك", callback_data="admin_owner_overview")],
+        [inline_button("🔙 لوحة التحكم", callback_data="admin_panel")],
+    ]
+    await _edit(query, text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(rows))
+
+
+async def _show_clone_instances(query) -> None:
+    """Owner-only inventory of clone bots; never expose token material."""
+    from database.pg import fetchall, fetchone
+    from services.instance_manager import running_instance_ids
+
+    def scalar(sql: str) -> int:
+        try:
+            row = fetchone(sql)
+            return int((row or {}).get("cnt", 0) or 0)
+        except Exception:
+            logger.exception("Clone dashboard count query failed")
+            return 0
+
+    total = scalar("SELECT COUNT(*) AS cnt FROM bot_instances")
+    try:
+        rows_data = fetchall(
+            "SELECT id, owner_id, bot_username, status, created_at, activated_at, last_error "
+            "FROM bot_instances ORDER BY id DESC LIMIT 20"
+        )
+        running = set(running_instance_ids())
+    except Exception:
+        logger.exception("Clone dashboard list query failed")
+        rows_data, running = [], set()
+
+    lines = []
+    for item in rows_data:
+        iid = int(item.get("id") or 0)
+        username = str(item.get("bot_username") or "").strip()
+        status = str(item.get("status") or "unknown")
+        last_error = str(item.get("last_error") or "").strip()
+        process_status = "يعمل داخل العامل الحالي" if iid in running else "غير موجود في العامل الحالي"
+        line = (
+            f"#{iid} • المالك <code>{int(item.get('owner_id') or 0)}</code> • "
+            f"<b>{escape('@' + username if username else 'بدون username')}</b>\\n"
+            f"الحالة: <b>{escape(status)}</b> • {process_status}\\n"
+            f"تفعيل: <code>{escape(str(item.get('activated_at') or '—')[:16])}</code>"
+        )
+        if last_error:
+            line += f"\\nآخر خطأ مسجل: <code>{escape(last_error[:100])}</code>"
+        lines.append(line)
+
+    text = (
+        "🤖 <b>سجل النسخ الخاصة</b>\\n\\n"
+        f"عدد النسخ المسجلة: <b>{total}</b>\\n"
+        "المعروض: آخر 20 نسخة. التوكنات لا تظهر في اللوحة.\\n\\n"
+        + ("\\n\\n".join(lines) if lines else "لا توجد نسخ مسجلة.")
+    )
+    rows = [
+        [inline_button("🔄 تحديث", callback_data="admin_clone_instances")],
+        [inline_button("👑 ملخص المالك", callback_data="admin_owner_overview")],
+        [inline_button("🔙 لوحة التحكم", callback_data="admin_panel")],
+    ]
+    await _edit(query, text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(rows))
+
+
+def _build_admin_panel(lang: str, user_id: int | None = None):
     """Assemble the live, professional admin dashboard from real DB data."""
     total_users = get_total_users()
     new_today = get_new_users_today()
@@ -656,6 +860,12 @@ def _build_admin_panel(lang: str):
     )
 
     keyboard = [
+        *([[
+            inline_button("👑 ملخص المالك", callback_data="admin_owner_overview"),
+            inline_button("🤝 شبكة الإحالات", callback_data="admin_referral_network"),
+        ], [
+            inline_button("🤖 نسخ المستخدمين", callback_data="admin_clone_instances"),
+        ]] if user_id is not None and is_owner(user_id) else []),
         [
             inline_button("👥 المستخدمون", callback_data="admin_users"),
             inline_button("🔍 بحث عن مستخدم", callback_data="admin_search"),
@@ -681,7 +891,7 @@ def _build_admin_panel(lang: str):
 
 
 async def _show_admin_panel(query, lang: str):
-    text, keyboard = _build_admin_panel(lang)
+    text, keyboard = _build_admin_panel(lang, query.from_user.id)
     await _edit(query, text, reply_markup=keyboard, parse_mode="HTML")
 
 
@@ -957,6 +1167,7 @@ def _invalid_admin_callback(data: str) -> bool:
         "admin_health", "admin_audit", "admin_security",
         "admin_users_active", "admin_users_banned",
         "admin_support", "admin_support_answered", "admin_support_closed",
+        "admin_owner_overview", "admin_referral_network", "admin_clone_instances",
     }
     return data not in known
 
