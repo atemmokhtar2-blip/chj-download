@@ -391,8 +391,10 @@ def ensure_owner_schema():
 
 def ensure_cache_schema():
     """Additive migrations for fingerprint + vault columns (safe on existing DBs)."""
+    # Same PRAGMA-on-Postgres hazard as ensure_owner_schema — use the
+    # dual-backend table_columns() helper instead.
+    cols = table_columns("file_cache")
     with db_cursor() as c:
-        cols = {row[1] for row in c.execute("PRAGMA table_info(file_cache)").fetchall()}
         if "fingerprint" not in cols:
             c.execute("ALTER TABLE file_cache ADD COLUMN fingerprint TEXT DEFAULT ''")
         if "vault_chat_id" not in cols:
