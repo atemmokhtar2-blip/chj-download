@@ -84,6 +84,15 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception:
         logger.exception("Referral registration failed uid=%s", user.id)
 
+    # Panels appear ONLY for privileged accounts — regular users never see
+    # any panel button or screen, anywhere in the bot.
+    #   * OWNER (you)      → the Owner Control Center opens immediately on /start.
+    #   * regular admin    → the admin panel opens immediately on /start.
+    if is_owner(user.id):
+        from handlers.owner_panel import owner_command  # local import: avoids a circular dependency
+        await owner_command(update, context)
+        return
+
     if is_admin(user.id):
         from handlers.admin import admin_command  # local import: avoids a circular dependency
         await admin_command(update, context)

@@ -101,6 +101,10 @@ async def message_router(update: Update, context):
             await settings_command(update, context)
         return
 
+    # Owner-panel text states run first (owner-gated in code inside the handler).
+    if await owner_text_handler(update, context):
+        return
+
     from handlers.admin import admin_text_handler
     if await admin_text_handler(update, context):
         return
@@ -187,6 +191,9 @@ def build_application(token: str | None = None, clone: bool = False) -> Applicat
     app.add_handler(CommandHandler("settings", settings_command))
     app.add_handler(CommandHandler("ping", ping_command))
 
+    # 👑 Owner Control Center — owner-only, protected in code (see owner_panel).
+    app.add_handler(CommandHandler("owner", owner_command))
+
     app.add_handler(CommandHandler("admin", admin_command))
     app.add_handler(CommandHandler("stats", admin_command))
     app.add_handler(CommandHandler("broadcast", admin_command))
@@ -205,6 +212,9 @@ def build_application(token: str | None = None, clone: bool = False) -> Applicat
     app.add_handler(CommandHandler("find", search_command))
 
     app.add_handler(CallbackQueryHandler(noop_callback, pattern="^noop$"))
+    # Owner callbacks are matched BEFORE admin ones and re-verify is_owner
+    # in code on every single press (never trust a hidden button).
+    app.add_handler(CallbackQueryHandler(owner_callback, pattern="^own_"))
     app.add_handler(CallbackQueryHandler(admin_callback, pattern="^admin_"))
     app.add_handler(CallbackQueryHandler(referral_callback, pattern="^ref:"))
     # Legacy buttons are handled without allowing a language switch.
