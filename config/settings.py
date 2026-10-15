@@ -58,7 +58,12 @@ CACHE_MAX_SIZE = int(os.getenv("CACHE_MAX_SIZE", "1000"))
 # ---- Referral network & clone instances ------------------------------------
 # MAIN_BOT_USERNAME: the official bot's @username (no @). Used for referral
 # deep links and the "العودة إلى البوت الأساسي" button inside every clone.
-MAIN_BOT_USERNAME = os.getenv("MAIN_BOT_USERNAME", "").strip().lstrip("@")
+# HARD FALLBACK "K_J7Bot" (the product's real main bot) — this value must
+# NEVER be empty: is_clone_bot() returns False for an empty main username,
+# which silently turns EVERY clone into "the main bot" (clone users get the
+# main settings menu, plan caps stop enforcing, the back-to-main button
+# disappears). The env var still overrides for any other deployment.
+MAIN_BOT_USERNAME = os.getenv("MAIN_BOT_USERNAME", "").strip().lstrip("@") or "K_J7Bot"
 # Qualified referrals required to earn a clone instance.
 REFERRAL_TARGET = int(os.getenv("REFERRAL_TARGET", "70"))
 # Encryption key for stored clone bot tokens (any long random string).

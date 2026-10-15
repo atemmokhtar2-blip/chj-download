@@ -137,10 +137,27 @@ def _main_bot_url() -> str:
 
 
 def _is_clone_bot(context) -> bool:
-    """Which bot is RUNNING decides the menu — never user input."""
+    """Which bot is RUNNING decides the menu — never user input.
+
+    Two independent signals, either one is proof:
+      1. username != the main bot's username (config-level, always on now
+         that MAIN_BOT_USERNAME has a hard "K_J7Bot" fallback);
+      2. rare username-less contexts: a registered clone instance keyed by
+         THIS bot's id (the main bot never appears in bot_instances).
+    """
     try:
-        from services import plan_policy
-        return bool(plan_policy.plan_context(context.bot).get("is_clone"))
+        bot = getattr(context, "bot", None)
+        username = getattr(bot, "username", None) or ""
+        if username:
+            from services.instance_manager import is_clone_bot
+            if is_clone_bot(username):
+                return True
+        bot_id = getattr(bot, "id", None)
+        if bot_id:
+            from services import plan_policy
+            if plan_policy.instance_for_bot_id(bot_id):
+                return True
+        return False
     except Exception:
         return False
 

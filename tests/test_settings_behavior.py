@@ -331,3 +331,55 @@ def test_validate_clamps_every_field():
     assert _validate("history_retention_days", 999999) == 3650
     assert _validate("quiet_mode", "off") == 0
     assert _validate("quiet_mode", "1") == 1
+
+
+# ---- main-bot identity: the flag that decides the whole clone menu ----------
+
+def test_main_bot_username_has_hard_fallback():
+    """MAIN_BOT_USERNAME must NEVER default to empty — an empty main username
+    makes is_clone_bot() return False everywhere, which silently serves the
+    MAIN settings menu inside clones (the exact regression the owner hit:
+    "اكسب نسختك من البوت" + "الخطط والحدود" still showing on private copies)."""
+    from pathlib import Path
+    src = (Path(__file__).resolve().parents[1] / "config" / "settings.py").read_text(
+        encoding="utf-8")
+    lines = [ln for ln in src.splitlines() if ln.startswith("MAIN_BOT_USERNAME =")]
+    assert len(lines) == 1
+    assert 'or "K_J7Bot"' in lines[0]
+
+
+def test_is_clone_bot_with_hardcoded_main_username(monkeypatch):
+    """With the main bot fixed to K_J7Bot: the main bot is NOT a clone, every
+    other username IS — this single flag decides the clone-vs-main menu."""
+    import config.settings as cs
+    from services.instance_manager import is_clone_bot
+    monkeypatch.setattr(cs, "MAIN_BOT_USERNAME", "K_J7Bot")
+    assert is_clone_bot("K_J7Bot") is False
+    assert is_clone_bot("@K_J7Bot") is False
+    assert is_clone_bot("k_j7bot") is False          # case-insensitive
+    assert is_clone_bot("my_private_clone_bot") is True
+
+
+def test_settings_is_clone_bot_db_fallback(monkeypatch):
+    """Username-less contexts still resolve correctly: a registered clone
+    instance keyed by the bot's id proves we are inside a clone; the main
+    bot's id never appears in bot_instances."""
+    from types import SimpleNamespace
+    import config.settings as cs
+    import services.plan_policy as pp
+    import handlers.settings_menu as sm
+
+    monkeypatch.setattr(cs, "MAIN_BOT_USERNAME", "K_J7Bot")
+    monkeypatch.setattr(pp, "instance_for_bot_id",
+                        lambda bot_id: {"id": 7} if bot_id == 880011 else None)
+
+    # username present → username decides
+    assert sm._is_clone_bot(SimpleNamespace(
+        bot=SimpleNamespace(username="my_clone", id=5))) is True
+    assert sm._is_clone_bot(SimpleNamespace(
+        bot=SimpleNamespace(username="K_J7Bot", id=1))) is False
+    # username missing → the instance registry decides
+    assert sm._is_clone_bot(SimpleNamespace(
+        bot=SimpleNamespace(username=None, id=880011))) is True
+    assert sm._is_clone_bot(SimpleNamespace(
+        bot=SimpleNamespace(username=None, id=111))) is False
