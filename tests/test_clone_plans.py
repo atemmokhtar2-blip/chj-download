@@ -1,4 +1,4 @@
-"""Clone plans & validity tests (SQLite fallback path).
+"""Clone plans & validity tests (PostgreSQL).
 
 Covers the full plan lifecycle exactly as production would:
   plan-day mapping -> Pro threshold -> plan assignment at activation
@@ -16,19 +16,11 @@ import types
 from datetime import datetime, timedelta
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-DB = os.path.join(REPO, "temp", "test_clone_plans.db")
 
-os.environ["DATABASE_PATH"] = DB
-os.environ.pop("NEON_DATABASE_URL", None)
-os.environ.pop("POSTGRES_URL", None)
-os.environ.pop("DATABASE_URL", None)
 os.environ["REFERRAL_TARGET"] = "2"                 # basic target = 2 qualified
 os.environ["CLONE_PRO_TARGET_MULTIPLIER"] = "1.5"   # pro target  = 3 qualified
 os.environ["CLONE_PLAN_BASIC_DAYS"] = "30"
 os.environ["CLONE_PLAN_PRO_DAYS"] = "40"
-os.makedirs(os.path.dirname(DB), exist_ok=True)
-if os.path.exists(DB):
-    os.remove(DB)
 
 # --- stub dotenv if the real package is unavailable ---
 try:
@@ -61,17 +53,22 @@ except ImportError:
     sys.modules["cryptography.fernet"] = fernet
 
 sys.path.insert(0, REPO)
+sys.path.insert(0, os.path.join(REPO, "tests"))
+import pgtest  # noqa: E402
+
+# PostgreSQL is the ONLY backend. Under pytest, tests/conftest.py has already
+# booted the disposable test server; a plain-script run bootstraps its own.
+if "pytest" not in sys.modules:
+    pgtest.bootstrap()
 
 from database import pg  # noqa: E402
-from database import db as main_db  # noqa: E402
 from services import referral  # noqa: E402
 
-# These modules may already have been imported by pytest collection before this
-# script changes the environment. Pin both backend paths and plan constants so
-# the smoke test remains isolated and order-independent.
-_original_database_paths = (main_db.DATABASE_PATH, pg.DATABASE_PATH)
-main_db.DATABASE_PATH = DB
-pg.DATABASE_PATH = DB
+# Dedicated PostgreSQL database for the plan-lifecycle rows so they never mix
+# with other modules (under pytest everything shares one suite database).
+# The original DSN is restored at the end of this module.
+_original_pg_dsn = pg.PG_DSN
+pg.PG_DSN = pgtest.create_test_database("xd_clone_plans")
 _original_plan_settings = (
     referral.REFERRAL_TARGET,
     referral.CLONE_PRO_TARGET_MULTIPLIER,
@@ -241,7 +238,8 @@ check("rules point to plans page", "الخطط والباقات" in _RULES_TEXT)
     referral.CLONE_PLAN_BASIC_DAYS,
     referral.CLONE_PLAN_PRO_DAYS,
 ) = _original_plan_settings
-main_db.DATABASE_PATH, pg.DATABASE_PATH = _original_database_paths
+pg.PG_DSN = _original_pg_dsn
+pgtest.drop_test_database("xd_clone_plans")
 
 print()
 if failures:

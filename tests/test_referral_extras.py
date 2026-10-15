@@ -16,19 +16,8 @@ import types
 import pytest
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-DB = os.path.join(REPO, "temp", "test_referral_extras.db")
 
-os.environ["DATABASE_PATH"] = DB
-os.environ.pop("NEON_DATABASE_URL", None)
-os.environ.pop("POSTGRES_URL", None)
-os.environ.pop("DATABASE_URL", None)
 os.environ["REFERRAL_TARGET"] = "70"
-os.makedirs(os.path.dirname(DB), exist_ok=True)
-if os.path.exists(DB):
-    try:
-        os.remove(DB)
-    except OSError:
-        pass
 
 # --- stub dotenv if unavailable (plain-script parity with the smoke test) ---
 try:
@@ -61,23 +50,22 @@ except ImportError:
     sys.modules["cryptography.fernet"] = fernet
 
 sys.path.insert(0, REPO)
+sys.path.insert(0, os.path.join(REPO, "tests"))
+import pgtest  # noqa: E402
 
-import sqlite3  # noqa: E402
+# PostgreSQL is the ONLY backend. Under pytest, tests/conftest.py has already
+# booted the disposable test server and pointed NEON_DATABASE_URL at the
+# suite database before any project module was imported; a plain-script run
+# (python3 tests/test_referral_extras.py) bootstraps its own server here.
+# Rows are scrubbed by ID range below, so no dedicated database is needed.
+if "pytest" not in sys.modules:
+    pgtest.bootstrap()
 
 from database import pg  # noqa: E402
 from database import db as dbm  # noqa: E402
 
-# Under pytest, tests/conftest.py pins DATABASE_PATH (a disposable
-# temp/test_suite.db) BEFORE any module imports config.settings, so every
-# backend already points at the suite DB — module constants must NOT be
-# re-pinned here (that would leak this file's DB into later test modules).
-# In a plain-script run (python3 tests/test_referral_extras.py) conftest is
-# not loaded, but the env var above was set before the first settings import
-# in this process, so settings resolved to DB anyway. Either way: no pinning.
-
 pg.init_referral_schema()
-if pg.backend_name() == "sqlite":
-    dbm.init_db()
+dbm.init_db()
 
 
 def _scrub_test_rows() -> None:

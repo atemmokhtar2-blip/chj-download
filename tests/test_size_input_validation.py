@@ -10,15 +10,8 @@ import asyncio
 
 import pytest
 
-from database import db as db_module
-
-
-@pytest.fixture()
-def isolated_db(tmp_path, monkeypatch):
-    db_path = tmp_path / "test_size_validation.db"
-    monkeypatch.setattr(db_module, "DATABASE_PATH", str(db_path))
-    db_module.init_db()
-    return db_path
+# The ``isolated_db`` fixture (tests/conftest.py) provides a dedicated
+# PostgreSQL database per test.
 
 
 class _Msg:

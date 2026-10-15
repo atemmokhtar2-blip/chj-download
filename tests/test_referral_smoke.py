@@ -1,4 +1,4 @@
-"""Smoke test of the referral + clone-instance engine (SQLite fallback path).
+"""Smoke test of the referral + clone-instance engine (PostgreSQL).
 
 Runs the FULL business flow exactly as production would:
   code creation -> binding rules -> qualification rules -> reward counting
@@ -14,16 +14,8 @@ import sys
 import types
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-DB = os.path.join(REPO, "temp", "test_referral_smoke.db")
 
-os.environ["DATABASE_PATH"] = DB
-os.environ.pop("NEON_DATABASE_URL", None)
-os.environ.pop("POSTGRES_URL", None)
-os.environ.pop("DATABASE_URL", None)
 os.environ["REFERRAL_TARGET"] = "3"  # small target for the test
-os.makedirs(os.path.dirname(DB), exist_ok=True)
-if os.path.exists(DB):
-    os.remove(DB)
 
 # --- stub dotenv if the real package is unavailable ---
 try:
@@ -56,11 +48,20 @@ except ImportError:
     sys.modules["cryptography.fernet"] = fernet
 
 sys.path.insert(0, REPO)
+sys.path.insert(0, os.path.join(REPO, "tests"))
+import pgtest  # noqa: E402
+
+# PostgreSQL is the ONLY backend. Under pytest, tests/conftest.py has already
+# booted the disposable test server and pointed NEON_DATABASE_URL at the
+# suite database before any project module was imported; a plain-script run
+# (python3 tests/test_referral_smoke.py) bootstraps its own server here.
+if "pytest" not in sys.modules:
+    pgtest.bootstrap()
 
 from database import pg  # noqa: E402
 
 pg.init_referral_schema()
-assert pg.backend_name() == "sqlite", pg.backend_name()
+assert pg.backend_name() == "postgres", pg.backend_name()
 
 import config.settings as cs  # noqa: E402
 
@@ -85,6 +86,12 @@ def check(name, cond):
 
 
 def main():
+    # Under pytest, other modules' fixtures may have reset the shared target
+    # constants after this module was imported — re-pin them right here so the
+    # flow always runs with target=3 regardless of execution order.
+    cs.REFERRAL_TARGET = 3
+    R.REFERRAL_TARGET = 3
+
     # ---- codes ----
     code_a = R.get_or_create_code(1001)
     check("code created", code_a.startswith("ref_") and len(code_a) == 10)
@@ -200,6 +207,11 @@ def main():
         return 1
     print("ALL REFERRAL SMOKE TESTS PASSED")
     return 0
+
+
+def test_referral_smoke_flow():
+    """Pytest entry point: run the FULL production flow on real PostgreSQL."""
+    assert main() == 0
 
 
 if __name__ == "__main__":

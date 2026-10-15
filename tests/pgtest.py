@@ -62,7 +62,7 @@ def server_uri() -> str:
         return _SERVER_URI
 
     try:
-        from embedded_postgres import EmbeddedPostgres
+        from embedded_postgres import PostgresServer
     except ImportError as exc:  # pragma: no cover
         raise RuntimeError(
             "PostgreSQL-only test suite: set TEST_PG_DSN to a PostgreSQL "
@@ -70,20 +70,18 @@ def server_uri() -> str:
             "boot a throwaway server automatically."
         ) from exc
 
-    bin_dir = os.path.join(ROOT, "temp", "test_pg_bin")
+    from pathlib import Path
+
     data_dir = os.path.join(ROOT, "temp", "test_pg_data")
     shutil.rmtree(data_dir, ignore_errors=True)
-    os.makedirs(bin_dir, exist_ok=True)
 
-    _EMBEDDED = EmbeddedPostgres(
-        postgresql_bin_dir=bin_dir,
-        data_dir=data_dir,
-        starting_port="auto",
-        cleanup_mode="full",
-        verbose=False,
-    )
-    _EMBEDDED.start()
-    _SERVER_URI = _EMBEDDED.psql_uri
+    # PostgresServer runs initdb + starts the postmaster on a unix socket
+    # under the data dir (no TCP port needed — psycopg2 connects via the
+    # ?host= query parameter embedded in get_uri()).
+    _EMBEDDED = PostgresServer(Path(data_dir), cleanup_mode="stop")
+    _EMBEDDED.ensure_pgdata_inited()
+    _EMBEDDED.ensure_postgres_running()
+    _SERVER_URI = _EMBEDDED.get_uri()
     return _SERVER_URI
 
 
@@ -92,7 +90,7 @@ def stop() -> None:
     global _EMBEDDED, _SERVER_URI
     if _EMBEDDED is not None:
         try:
-            _EMBEDDED.stop()
+            _EMBEDDED.cleanup()
         except Exception:
             pass
         _EMBEDDED = None

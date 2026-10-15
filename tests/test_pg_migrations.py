@@ -21,8 +21,9 @@ def test_owner_schema_uses_backend_aware_column_lookup(monkeypatch):
     def fake_db_cursor():
         yield FakeCursor()
 
-    # Force the PostgreSQL branch without requiring a live database or DSN.
-    monkeypatch.setattr(db, "_pg_dsn", lambda: "postgresql://test.invalid/db")
+    # Fake cursor so the schema check needs no live database connection
+    # (PostgreSQL is the only backend — table_columns always uses
+    # information_schema through db_cursor).
     monkeypatch.setattr(db, "db_cursor", fake_db_cursor)
 
     db.ensure_owner_schema()

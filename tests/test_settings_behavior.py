@@ -2,25 +2,16 @@
 
 Two goals:
   1. Isolation — preferences/history/account data must never leak between users.
-  2. Durability & real effect — saved values must be committed to disk and must
-     actually change the download engine's decisions.
+  2. Durability & real effect — saved values must be committed to PostgreSQL
+     and must actually change the download engine's decisions.
 """
 
 from __future__ import annotations
 
-import sqlite3
-
 import pytest
 
-from database import db as db_module
-
-
-@pytest.fixture()
-def isolated_db(tmp_path, monkeypatch):
-    db_path = tmp_path / "test_settings_behavior.db"
-    monkeypatch.setattr(db_module, "DATABASE_PATH", str(db_path))
-    db_module.init_db()
-    return db_path
+# The ``isolated_db`` fixture (tests/conftest.py) gives every test its own
+# freshly-created PostgreSQL database and yields its DSN.
 
 
 # ---- lifetime persistence --------------------------------------------------
@@ -33,19 +24,23 @@ def test_settings_are_committed_to_disk_not_kept_in_memory(isolated_db):
                   history_retention_days=365, notify_complete=0,
                   quiet_mode=1)
 
-    # Open the SQLite file directly (fresh connection, no module state) and
-    # verify every field landed on disk with the exact value we saved.
-    con = sqlite3.connect(str(isolated_db))
+    # Open PostgreSQL directly (fresh connection, no module state) and
+    # verify every field was really persisted with the exact value we saved.
+    import psycopg2
+
+    con = psycopg2.connect(isolated_db)
     try:
-        row = con.execute(
-            "SELECT video_quality, audio_quality, max_file_size_mb, "
-            "delivery_mode, history_retention_days, notify_complete, quiet_mode "
-            "FROM user_settings WHERE user_id = 2001"
-        ).fetchone()
+        with con.cursor() as cur:
+            cur.execute(
+                "SELECT video_quality, audio_quality, max_file_size_mb, "
+                "delivery_mode, history_retention_days, notify_complete, quiet_mode "
+                "FROM user_settings WHERE user_id = 2001"
+            )
+            row = cur.fetchone()
     finally:
         con.close()
 
-    assert row == ("1080p", "high", 175, "file", 365, 0, 1)
+    assert tuple(row) == ("1080p", "high", 175, "file", 365, 0, 1)
 
 
 def test_settings_survive_many_separate_write_transactions(isolated_db):
@@ -63,9 +58,12 @@ def test_reset_reverts_to_factory_defaults_on_disk(isolated_db):
     uid = 2003
     save_settings(uid, video_quality="720p", delivery_mode="audio")
 
-    con = sqlite3.connect(str(isolated_db))
+    import psycopg2
+
+    con = psycopg2.connect(isolated_db)
     try:
-        con.execute("DELETE FROM user_settings WHERE user_id = ?", (uid,))
+        with con.cursor() as cur:
+            cur.execute("DELETE FROM user_settings WHERE user_id = %s", (uid,))
         con.commit()
     finally:
         con.close()

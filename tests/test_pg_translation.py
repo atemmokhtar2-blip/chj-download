@@ -21,10 +21,6 @@ import sys
 import types
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-os.environ.setdefault("DATABASE_PATH", os.path.join(REPO, "temp", "test_pg_translation.db"))
-os.environ.pop("NEON_DATABASE_URL", None)
-os.environ.pop("POSTGRES_URL", None)
-os.environ.pop("DATABASE_URL", None)
 
 # --- stub dotenv if unavailable ---
 try:
@@ -114,13 +110,20 @@ stmts = [s.strip() for s in script_sql.split(";") if s.strip()]
 check("executescript splits into statements", len(stmts) == 2)
 check("each statement translates", all("%s" not in T(s) and "SERIAL" in T(s) or "INDEX" in T(s) for s in stmts))
 
-# 12) backend switch: no DSN -> sqlite, DSN present -> postgres -------------------------
-check("no DSN -> sqlite backend", db.backend_name() == "sqlite")
+# 12) PostgreSQL is the ONLY backend ------------------------------------------------------
+check("backend_name is always postgres", db.backend_name() == "postgres")
 import database.pg as pgmod  # noqa: E402
+check("pg backend constant is postgres", pgmod.BACKEND == "postgres" and pgmod.backend_name() == "postgres")
 old = pgmod.PG_DSN
-pgmod.PG_DSN = "postgresql://user:pass@host/db"
+pgmod.PG_DSN = ""
 try:
-    check("DSN present -> postgres backend", db.backend_name() == "postgres")
+    failed_loudly = False
+    try:
+        with db.db_cursor():
+            pass
+    except RuntimeError as exc:
+        failed_loudly = "NEON_DATABASE_URL" in str(exc)
+    check("missing DSN fails loudly (no silent fallback)", failed_loudly)
 finally:
     pgmod.PG_DSN = old
 

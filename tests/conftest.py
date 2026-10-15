@@ -43,3 +43,33 @@ atexit.register(pgtest.stop)
 
 def pytest_sessionfinish(session, exitstatus):  # noqa: ARG001
     pgtest.stop()
+
+
+import pytest  # noqa: E402
+
+
+@pytest.fixture()
+def isolated_db(request):
+    """A dedicated, freshly-created PostgreSQL database for ONE test.
+
+    Pins ``database.pg.PG_DSN`` (which ``database.db`` also re-reads on every
+    call), initialises the main schema, and yields the DSN so tests can open
+    their own direct psycopg2 connections to prove real persistence — the
+    PostgreSQL equivalent of the old per-test SQLite file.
+    """
+    import re as _re
+
+    from database import pg as pg_module
+    from database.db import init_db
+
+    suffix = _re.sub(r"[^a-z0-9]+", "_", request.node.name)[:32].strip("_")
+    name = f"xd_iso_{abs(hash(request.node.nodeid)) % 10**8}_{suffix}"[:60]
+    dsn = pgtest.create_test_database(name)
+    old_dsn = pg_module.PG_DSN
+    pg_module.PG_DSN = dsn
+    try:
+        init_db()
+        yield dsn
+    finally:
+        pg_module.PG_DSN = old_dsn
+        pgtest.drop_test_database(name)

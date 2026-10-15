@@ -1,14 +1,13 @@
 """Settings menu tests — every button callback, per-user isolation, input flows.
 
-These tests run against an isolated temporary SQLite DB so they never touch
-the real ``database/bot.db`` or any Telegram API.
+These tests run against an isolated per-test PostgreSQL database (the
+``isolated_db`` fixture in tests/conftest.py) so they never touch any real
+database or Telegram API.
 """
 
 from __future__ import annotations
 
 import pytest
-
-from database import db as db_module
 
 
 class _Msg:
@@ -33,15 +32,6 @@ class _Update:
 class _Context:
     def __init__(self):
         self.user_data: dict = {}
-
-
-@pytest.fixture()
-def isolated_db(tmp_path, monkeypatch):
-    """Point database.db at a fresh temp file and initialise the schema."""
-    db_path = tmp_path / "test_settings.db"
-    monkeypatch.setattr(db_module, "DATABASE_PATH", str(db_path))
-    db_module.init_db()
-    return db_path
 
 
 def test_defaults_and_save_validation(isolated_db):
