@@ -90,11 +90,38 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await admin_command(update, context)
         return
 
+    # 📦 Clone plan enforcement touches /start too: a user banned from THIS
+    # clone instance gets a clear notice instead of the normal welcome.
+    try:
+        if is_clone_bot(context.bot.username or ""):
+            from services import plan_policy
+            pctx = plan_policy.plan_context(context.bot)
+            if pctx.get("is_clone") and pctx.get("instance_id") and \
+                    plan_policy.is_user_banned(pctx["instance_id"], user.id):
+                await update.message.reply_text(
+                    "\U0001F6AB تم تعطيل حسابك في هذه النسخة. تواصل مع صاحب النسخة."
+                )
+                return
+    except Exception:
+        logger.exception("clone start gate failed uid=%s", user.id)
+
     await update.message.reply_text(
         t("ar", "welcome_back") + ref_note,
         parse_mode="HTML",
         reply_markup=get_main_keyboard("ar", user.id),
     )
+
+    # A Pro clone can show its OWN welcome message (set from its admin panel).
+    try:
+        if is_clone_bot(context.bot.username or ""):
+            from services import plan_policy
+            pctx = plan_policy.plan_context(context.bot)
+            if pctx.get("instance_id"):
+                custom = plan_policy.get_clone_setting(pctx["instance_id"], "welcome_text", "")
+                if custom:
+                    await update.message.reply_text(custom[:1500])
+    except Exception:
+        logger.debug("clone custom welcome failed", exc_info=True)
 
     # Inside a clone instance, new users always see the way back to the
     # main bot (sent once per process session so it never becomes spam).

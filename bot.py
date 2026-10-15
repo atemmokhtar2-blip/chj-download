@@ -226,6 +226,10 @@ def build_application(token: str | None = None, clone: bool = False) -> Applicat
     # in code on every single press (never trust a hidden button).
     app.add_handler(CallbackQueryHandler(owner_callback, pattern="^own_"))
     app.add_handler(CallbackQueryHandler(admin_callback, pattern="^admin_"))
+    # 👑 Clone-admin panel (Pro clones): scoped to the RUNNING instance and
+    # re-verified server-side on every press (see handlers/clone_admin.py).
+    from handlers.clone_admin import clone_admin_callback
+    app.add_handler(CallbackQueryHandler(clone_admin_callback, pattern="^ca:"))
     app.add_handler(CallbackQueryHandler(referral_callback, pattern="^ref:"))
     # Legacy buttons are handled without allowing a language switch.
     app.add_handler(CallbackQueryHandler(language_callback, pattern="^lang_"))

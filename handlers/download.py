@@ -17,6 +17,7 @@ from telegram.error import TelegramError, NetworkError
 
 from database.users import get_user, increment_downloads
 from database.downloads import log_download
+from services import plan_policy
 from database.user_settings import get_user_settings, AUDIO_QUALITY_BITRATE
 from database.cache import (
     get_cached, set_cache, invalidate_cache, get_cached_album, set_cache_album,
@@ -203,16 +204,21 @@ async def process_url(update: Update, context: ContextTypes.DEFAULT_TYPE, user, 
         info = await analyze_url(url)
     except Exception as exc:
         logger.exception("URL analysis crashed for %s: %s", url[:120], exc)
+        _log_clone_failure(context, user.id, url, summarize_error(exc))
         await _quiet_edit(status_msg.edit_text, 
             t(lang, "analysis_failed_reason", reason=escape(summarize_error(exc))),
             parse_mode="HTML",
         )
         return
     if not info:
+        _log_clone_failure(context, user.id, url, "analysis_failed")
         await _quiet_edit(status_msg.edit_text, t(lang, "analysis_failed"), parse_mode="HTML")
         return
 
     if info.get("error_reason") and not (info.get("downloadable", True) or info.get("album_items")):
+        _log_clone_failure(context, user.id, url,
+                           str(info.get("user_message_key") or info.get("error_reason")),
+                           platform=str(info.get("platform") or ""))
         await _quiet_edit(status_msg.edit_text, _friendly_error(lang, info), parse_mode="HTML")
         return
 
@@ -293,6 +299,31 @@ async def handle_batch_urls(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             continue
         await process_url(update, context, user, url, update.message)
+
+def _log_clone_failure(context, user_id: int, url: str, reason: str,
+                       platform: str = "") -> None:
+    """Record a failed attempt for the Pro panel's failure stats.
+
+    Clone instances ONLY (instance_id-scoped); the main bot is skipped so the
+    table can't grow unbounded there. Stores the platform + a short safe
+    reason — NEVER the full URL, tokens, or user content.
+    """
+    try:
+        pctx = plan_policy.plan_context(context.bot)
+        if not pctx.get("is_clone"):
+            return
+        plat = (platform or "").strip()
+        if not plat:
+            try:
+                plat = url.split("/")[2][:40] if "//" in url else ""
+            except Exception:
+                plat = ""
+        plan_policy.log_download_failure(
+            int(user_id), int(pctx.get("instance_id") or 0), plat,
+            str(reason or "unknown")[:160])
+    except Exception:
+        logger.debug("clone failure logging skipped", exc_info=True)
+
 
 def _friendly_error(lang: str, info: dict) -> str:
     reason = info.get("user_message_key") or info.get("error_reason") or "analysis_failed"
@@ -552,6 +583,26 @@ async def download_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.answer(t(lang, "rate_limit", seconds=rl.wait_seconds), show_alert=True)
         release_user_download(user.id)
         return
+
+    # 📦 Plan enforcement on EVERY button press — ban + DB-backed daily
+    # counter, resolved from the running bot's instance row.
+    pctx = plan_policy.plan_context(context.bot)
+    if pctx.get("is_clone"):
+        if plan_policy.is_user_banned(pctx["instance_id"], user.id):
+            await query.answer("\U0001F6AB تم تعطيل حسابك في هذه النسخة.", show_alert=True)
+            release_user_download(user.id)
+            return
+        cap = plan_policy.daily_cap(pctx)
+        if cap is not None and plan_policy.count_downloads_today(pctx["instance_id"], user.id) >= cap:
+            await query.answer(f"⏳ وصلت للحد اليومي لخطتك ({cap} تحميلًا).", show_alert=True)
+            release_user_download(user.id)
+            return
+        # Clone-level default quality (set by the Pro owner) applies only
+        # when the user hasn't chosen their own preference.
+        cdq = plan_policy.get_clone_setting(pctx["instance_id"], "default_quality", "")
+        if cdq and cdq != "auto" and str(settings.get("video_quality") or "auto") == "auto":
+            settings = dict(settings)
+            settings["video_quality"] = cdq
 
     allowed_prefixes = ("dl_video_",)
     allowed_exact = {"dl_smart", "dl_audio", "dl_audio_320", "dl_image", "dl_album", "dl_unavailable"}

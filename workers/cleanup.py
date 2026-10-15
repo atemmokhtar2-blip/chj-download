@@ -36,6 +36,18 @@ async def cleanup_old_history():
                 logging.getLogger(__name__).info("Pruned %s expired history rows", removed)
         except Exception:
             pass
+        try:
+            # 📦 Plan retention: Basic clone history lives 7 days, Pro 90 —
+            # enforced per instance from its stored plan (server-side).
+            from services import plan_policy
+            removed_clones = plan_policy.purge_all_clone_history()
+            if removed_clones:
+                import logging
+                logging.getLogger(__name__).info(
+                    "Pruned %s clone history rows (plan retention)", removed_clones)
+        except Exception:
+            import logging
+            logging.getLogger(__name__).exception("clone history retention sweep failed")
         await asyncio.sleep(3600)
 
 

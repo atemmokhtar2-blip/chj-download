@@ -1,12 +1,15 @@
 from .db import db_cursor
 
 def log_download(user_id: int, url: str, title: str, platform: str,
-                 quality: str, media_type: str, file_size: int = 0) -> int:
+                 quality: str, media_type: str, file_size: int = 0,
+                 instance_id: int = 0) -> int:
     with db_cursor() as c:
         c.execute("""
-            INSERT INTO downloads (user_id, url, title, platform, quality, media_type, file_size)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-        """, (user_id, url, title, platform, quality, media_type, file_size))
+            INSERT INTO downloads (user_id, url, title, platform, quality, media_type,
+                                   file_size, instance_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """, (user_id, url, title, platform, quality, media_type, file_size,
+              int(instance_id or 0)))
         row_id = c.lastrowid
 
     # Referral rule (a): a user's FIRST successful download qualifies their

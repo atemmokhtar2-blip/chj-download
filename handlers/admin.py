@@ -268,6 +268,13 @@ async def admin_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def admin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
+    # The main-system admin panel is only operable from the MAIN bot. Inside
+    # a clone, admin_* callbacks are dead ends by design (the clone panel
+    # lives under ca:* and is gated by instance ownership + Pro plan).
+    from services.instance_manager import is_clone_bot
+    if is_clone_bot(context.bot.username or ""):
+        await query.answer("⛔ لوحة النظام الأساسي تُستخدم من البوت الأساسي فقط.", show_alert=True)
+        return
     user = query.from_user
     if not is_admin(user.id):
         await query.answer("⛔ هذا الأمر متاح للمسؤولين فقط.", show_alert=True)

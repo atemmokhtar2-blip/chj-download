@@ -585,6 +585,18 @@ def _dispatch(uid: int, data: str, context) -> tuple[str, list]:
         value = data.rsplit(":", 1)[-1]
         if value not in VIDEO_QUALITY_OPTIONS:
             return build_quality_video(settings)
+        # 📦 Plan enforcement — server-side, so a hand-crafted callback can
+        # never select a quality above the clone's plan ceiling (Basic: 720p).
+        # getattr: a minimal/test context without .bot resolves to the main
+        # plan (plan_context(None) -> is_clone False), never crashes.
+        from services import plan_policy
+        pctx = plan_policy.plan_context(getattr(context, "bot", None))
+        if pctx.get("is_clone") and not plan_policy.quality_option_allowed(value, pctx["plan"]):
+            return (
+                "🔒 خطتك (Basic) تسمح بجودة حتى 720p فقط.\n"
+                "اختر جودة من المسموح لخطتك، أو رقِّ نسختك إلى 👑 Pro.",
+                _mk([[("🔵 ↩️ رجوع", "settings:quality")]]),
+            )
         save_settings(uid, video_quality=value)
         return build_saved("جودة الفيديو الافتراضية", _vq(value), "settings:quality")
 

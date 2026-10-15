@@ -294,7 +294,77 @@ def init_referral_schema() -> None:
     ensure_instance_plan_columns()
     ensure_redemption_targeted_user_column()
     ensure_clone_settings_migration()
+    ensure_plan_schema()
     logger.info("Referral schema ready on backend=%s", BACKEND)
+
+
+def ensure_plan_schema() -> None:
+    """Plan-enforcement tables + ``downloads.instance_id`` (idempotent).
+
+    Basic vs Pro is enforced server-side per clone instance (see
+    services/plan_policy.py), so:
+      * every download must be attributable to the instance that served it
+        (``downloads.instance_id`` — 0 = the main bot);
+      * each clone needs its OWN admins / bans / audit log / broadcast
+        history — scoped by ``instance_id``, never the global ADMIN_IDS.
+    ``CREATE TABLE IF NOT EXISTS`` never evolves an existing table, hence
+    the additive ALTER for the downloads column.
+    """
+    bi = _bigint()
+    pk = _pk_col()
+    try:
+        execute("ALTER TABLE downloads ADD COLUMN IF NOT EXISTS instance_id BIGINT DEFAULT 0")
+        execute("CREATE INDEX IF NOT EXISTS idx_downloads_instance_user "
+                "ON downloads(instance_id, user_id)")
+        execute(f"""CREATE TABLE IF NOT EXISTS clone_admins (
+            instance_id {bi} NOT NULL,
+            user_id {bi} NOT NULL,
+            can_ban BOOLEAN DEFAULT FALSE,
+            can_broadcast BOOLEAN DEFAULT FALSE,
+            can_stats BOOLEAN DEFAULT TRUE,
+            added_by {bi},
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (instance_id, user_id)
+        )""")
+        execute(f"""CREATE TABLE IF NOT EXISTS clone_bans (
+            instance_id {bi} NOT NULL,
+            user_id {bi} NOT NULL,
+            banned_by {bi},
+            reason TEXT DEFAULT '',
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (instance_id, user_id)
+        )""")
+        execute(f"""CREATE TABLE IF NOT EXISTS clone_admin_log (
+            id {pk},
+            instance_id {bi} NOT NULL,
+            actor_id {bi} NOT NULL,
+            action TEXT NOT NULL DEFAULT '',
+            detail TEXT DEFAULT '',
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )""")
+        execute("CREATE INDEX IF NOT EXISTS idx_clone_admin_log "
+                "ON clone_admin_log(instance_id, id)")
+        execute(f"""CREATE TABLE IF NOT EXISTS clone_broadcasts (
+            id {pk},
+            instance_id {bi} NOT NULL,
+            actor_id {bi} NOT NULL,
+            recipients INTEGER DEFAULT 0,
+            sent INTEGER DEFAULT 0,
+            failed INTEGER DEFAULT 0,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )""")
+        execute(f"""CREATE TABLE IF NOT EXISTS download_failures (
+            id {pk},
+            instance_id {bi} DEFAULT 0,
+            user_id {bi} NOT NULL,
+            platform TEXT DEFAULT '',
+            reason TEXT DEFAULT '',
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )""")
+        execute("CREATE INDEX IF NOT EXISTS idx_dl_failures_inst "
+                "ON download_failures(instance_id, created_at)")
+    except Exception:
+        logger.exception("plan schema init failed")
 
 
 def ensure_clone_settings_migration() -> None:

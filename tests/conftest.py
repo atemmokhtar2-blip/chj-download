@@ -69,6 +69,11 @@ def isolated_db(request):
     pg_module.PG_DSN = dsn
     try:
         init_db()
+        # Production parity: bot.py boots init_db() THEN init_referral_schema()
+        # (which runs ensure_plan_schema — downloads.instance_id + the clone
+        # plan tables). Without it, log_download's instance_id column is
+        # missing and every download-writing test would fail.
+        pg_module.ensure_plan_schema()
         yield dsn
     finally:
         pg_module.PG_DSN = old_dsn
