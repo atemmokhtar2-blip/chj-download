@@ -81,7 +81,9 @@ _RULES_TEXT = (
     "   • يستخدم البوت في <b>يومين مختلفين</b>.\n"
     "4️⃣ أي مستخدم محظور لا يُحتسب.\n"
     "5️⃣ لو حصل ربط بعدد كبير في وقت قصير جدًا، الإحالات تتعلم «🚩 تحت المراجعة» ولا تُحتسب تلقائيًا.\n"
-    "6️⃣ المكافأة: <b>70 مستخدمًا مؤهلًا</b> = نسخة بوت خاصة بك.\n\n"
+    "6️⃣ المكافأة: عدد المستخدمين المؤهلين = نسخة بوت خاصة بك على خطة زمنية:\n"
+    "   🆓 <b>Basic</b> (الهدف الأساسي → 30 يومًا) • 👑 <b>Pro</b> (ضعف الهدف → 40 يومًا).\n"
+    "   التفاصيل الكاملة في صفحة «📦 الخطط والباقات».\n\n"
     "⚠️ أي غش أو حسابات وهمية ممكن توقف الأهلية نهائيًا."
 )
 
@@ -177,6 +179,9 @@ def _rows_for(stats: dict, bot_username: str | None) -> list[list[InlineKeyboard
         rows.append([InlineKeyboardButton(f"🎁 نسختي الخاصة ({remaining} متبقي)", callback_data="ref:claim")])
 
     # «📜 قواعد الإحالات» appears exactly once — in this fixed bottom row.
+    # «📦 الخطط والباقات» gives EVERY user full visibility into the plan
+    # system (basic/pro, targets, validity, expiry, renewal) — always shown.
+    rows.append([InlineKeyboardButton("📦 الخطط والباقات", callback_data="ref:plans")])
     rows.append([
         InlineKeyboardButton("🧾 سجل العمليات", callback_data="ref:activity"),
         InlineKeyboardButton("🛟 الدعم الفني", callback_data="ref:support"),
@@ -323,6 +328,83 @@ async def _show_rules(q) -> None:
         _back_home_row(),
     ])
     await _edit_ref(q, _RULES_TEXT, markup)
+
+
+def _plans_text(stats: dict) -> str:
+    """Full plan-system page: what exists, what it costs, how time works,
+    and where THIS user currently stands — one screen, everything visible."""
+    from services.referral import clone_plan_days, pro_target
+
+    target = int(stats.get("target") or 0)
+    pro_tgt = pro_target()
+    basic_days = clone_plan_days("basic")
+    pro_days = clone_plan_days("pro")
+    qualified = int(stats.get("qualified") or 0)
+    inst = stats.get("instance") or {}
+
+    text = (
+        "📦 <b>الخطط والباقات — كل التفاصيل</b>\n\n"
+        "كل نسخة بوت خاصة تعمل بنظام خطة زمنية محددة. الخطط المتاحة:\n\n"
+        "━━━━━━━━━━━━━━\n"
+        f"🆓 <b>خطة Basic</b>\n"
+        f"• المطلوب: <b>{target} مستخدمًا مؤهلًا</b>\n"
+        f"• المدة: <b>{basic_days} يومًا</b> من يوم التفعيل\n"
+        f"• نسخة كاملة الصلاحيات بنفس قوة البوت الأساسي\n\n"
+        f"👑 <b>خطة Pro</b>\n"
+        f"• المطلوب: <b>{pro_tgt} مستخدمًا مؤهلًا</b>\n"
+        f"• المدة: <b>{pro_days} يومًا</b> من يوم التفعيل\n"
+        "• تُمنح تلقائيًا لحظة التفعيل لو كنت وصلت للعدد المطلوب\n"
+        "━━━━━━━━━━━━━━\n\n"
+        "⚙️ <b>إزاي بيتم تحديد خطتك؟</b>\n"
+        f"وقت ما تفعّل نسختك، النظام يفحص عدد مؤهلكينك: لو <b>{pro_tgt}+</b> تاخد "
+        f"👑 Pro ({pro_days} يومًا)، غير كده تاخد 🆓 Basic ({basic_days} يومًا).\n\n"
+        "⏳ <b>نظام المدة والانتهاء:</b>\n"
+        "• المدة تُحسب من <b>يوم التفعيل</b> وتظهر لك في صفحة 🎁 الرئيسية.\n"
+        "• لما المدة تنتهي، النسخة <b>بتتوقف تلقائيًا</b> من النظام.\n"
+        "• التجديد أو التمديد أو ترقية الخطة يتم <b>بقرار المالك</b> — من هنا:\n"
+        "   «⌛ طلب تجديد مدة نسختي» (تذكرة دعم).\n\n"
+        "📌 <b>حالتك أنت الآن:</b>\n"
+    )
+
+    if inst and inst.get("plan"):
+        plan_badge = "👑 Pro" if inst.get("plan") == "pro" else "🆓 Basic"
+        exp = str(inst.get("expires_at") or "—")[:10]
+        days_left = inst.get("days_left")
+        if inst.get("status") == "active":
+            text += (
+                f"• خطتك الحالية: <b>{plan_badge}</b>\n"
+                f"• تاريخ الانتهاء: <b>{exp}</b>"
+                + (f" — باقي <b>{days_left}</b> يومًا\n" if days_left is not None else "\n")
+            )
+        else:
+            text += f"• خطتك: <b>{plan_badge}</b> — <b>منتهية</b> منذ {exp}\n"
+            text += "• للتجديد: افتح تذكرة «⌛ طلب تجديد مدة نسختي» من صفحة 🎁.\n"
+    else:
+        remaining_basic = max(0, target - qualified)
+        remaining_pro = max(0, pro_tgt - qualified)
+        text += (
+            f"• المستخدمون المؤهلون لديك: <b>{qualified}</b>\n"
+            f"• للوصول إلى 🆓 Basic: باقي <b>{remaining_basic}</b> مستخدمًا مؤهلًا\n"
+            f"• للوصول إلى 👑 Pro: باقي <b>{remaining_pro}</b> مستخدمًا مؤهلًا\n"
+        )
+
+    text += (
+        "\n💡 <b>ملاحظة:</b> المستخدم المؤهل = بدأ من رابطك وأكمل أول تحميل ناجح، "
+        "أو استخدم البوت في يومين مختلفين."
+    )
+    return text
+
+
+async def _show_plans(q) -> None:
+    """📦 Full plan-system overview for any user (ref:plans)."""
+    stats = referral.get_stats(q.from_user.id)
+    rows = [_back_home_row()]
+    inst = stats.get("instance") or {}
+    if inst and inst.get("status") == "expired":
+        rows.insert(0, [InlineKeyboardButton("⌛ طلب تجديد مدة نسختي", callback_data="ref:support:open:clone")])
+    elif not inst:
+        rows.insert(0, [InlineKeyboardButton("📋 نسخ رابط الإحالة", callback_data="ref:copy")])
+    await _edit_ref(q, _plans_text(stats), InlineKeyboardMarkup(rows))
 
 
 async def _show_activity(q) -> None:
@@ -586,6 +668,10 @@ async def referral_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 
     if data == "ref:rules":
         await _show_rules(q)
+        return
+
+    if data == "ref:plans":
+        await _show_plans(q)
         return
 
     if data == "ref:activity":

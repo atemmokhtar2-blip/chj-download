@@ -160,6 +160,62 @@ check("no duplicate reward", ok2 is True and reason2 in ("claimed", "awaiting_to
 cnt = pg.fetchone("SELECT COUNT(*) AS c FROM bot_instances WHERE owner_id=?", (UID,))["c"]
 check("exactly one instance per owner", int(cnt) == 1)
 
+# 8) user-facing plans page renders the full system ---------------------------
+# The 📦 page must expose BOTH plans, both targets, both validity windows,
+# the expiry/renewal policy, and the user's own standing — for every state.
+from handlers.referral import _plans_text  # noqa: E402
+
+# a) user WITHOUT an instance: shows both plans + remaining counts
+stats_no_inst = {"target": 2, "qualified": 1, "instance": None}
+txt = _plans_text(stats_no_inst)
+check("plans page shows Basic plan", "🆓" in txt and "Basic" in txt)
+check("plans page shows Pro plan", "👑" in txt and "Pro" in txt)
+check("plans page shows basic target", "<b>2 مستخدمًا مؤهلًا</b>" in txt)
+check("plans page shows pro target (3)", "<b>3 مستخدمًا مؤهلًا</b>" in txt)
+check("plans page shows basic window (30)", "30 يومًا" in txt)
+check("plans page shows pro window (40)", "40 يومًا" in txt)
+check("plans page explains expiry policy", "بتتوقف تلقائيًا" in txt)
+check("plans page explains renewal via owner ticket", "طلب تجديد مدة نسختي" in txt)
+check("plans page shows remaining-to-basic (1)", "باقي <b>1</b> مستخدمًا مؤهلًا" in txt)
+
+# b) ACTIVE instance owner: shows current plan badge + expiry + days_left
+active_inst = {
+    "id": 1, "bot_username": "basic_clone_bot", "status": "active",
+    "plan": "basic", "expires_at": "2030-01-15 00:00:00", "days_left": 30,
+}
+txt_active = _plans_text({"target": 2, "qualified": 2, "instance": active_inst})
+check("active owner sees current plan", "خطتك الحالية: <b>🆓 Basic</b>" in txt_active)
+check("active owner sees expiry date", "2030-01-15" in txt_active)
+check("active owner sees days left", "باقي <b>30</b> يومًا" in txt_active)
+
+# c) EXPIRED instance owner: shows expired state + renewal CTA
+expired_inst = dict(active_inst, status="expired", plan="pro")
+txt_exp = _plans_text({"target": 2, "qualified": 3, "instance": expired_inst})
+check("expired owner sees expired state", "منتهية" in txt_exp)
+check("expired owner sees renewal CTA", "طلب تجديد مدة نسختي" in txt_exp)
+
+# d) callback wiring: the 📦 button exists in every user's home menu
+from telegram import InlineKeyboardMarkup  # noqa: E402
+from handlers.referral import _rows_for  # noqa: E402
+
+for stage_stats in (
+    {"target": 2, "qualified": 0, "percent": 0, "pending": 0, "suspicious": 0,
+     "reward_status": "progress", "instance": None, "link": "https://x"},
+    {"target": 2, "qualified": 2, "percent": 100, "pending": 0, "suspicious": 0,
+     "reward_status": "eligible", "instance": None, "link": "https://x"},
+    {"target": 2, "qualified": 2, "percent": 100, "pending": 0, "suspicious": 0,
+     "reward_status": "claimed", "instance": active_inst, "link": "https://x"},
+):
+    rows = _rows_for(stage_stats, "main_bot")
+    datas = {b.callback_data for row in rows for b in row}
+    check(f"plans button visible (stage={stage_stats['reward_status']})", "ref:plans" in datas)
+
+# e) rules text mentions both plans so no screen contradicts the system
+from handlers.referral import _RULES_TEXT  # noqa: E402
+check("rules mention Basic", "Basic" in _RULES_TEXT)
+check("rules mention Pro", "Pro" in _RULES_TEXT)
+check("rules point to plans page", "الخطط والباقات" in _RULES_TEXT)
+
 print()
 if failures:
     print(f"{len(failures)} FAILURES: {failures}")
