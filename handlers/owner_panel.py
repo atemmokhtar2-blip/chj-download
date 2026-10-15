@@ -864,6 +864,9 @@ async def _inst_detail(query, inst_id: int):
                      inline_button("🔁 تبديل الخطة", callback_data=f"own_inst_plansw_{inst_id}")])
     elif status in ("disabled", "error"):
         rows.append([inline_button("▶️ إعادة التشغيل", callback_data=f"own_inst_start_{inst_id}")])
+    # PERMANENT delete — offered for EVERY status (an expired/disabled clone
+    # is exactly the one an owner wants gone for good). Confirm-gated below.
+    rows.append([inline_button("🗑️ حذف النسخة تمامًا", callback_data=f"own_inst_del_{inst_id}")])
     rows.append([inline_button("🔙 إدارة النسخ", callback_data="own_inst")])
     await _edit(query, text, parse_mode="HTML", reply_markup=_kb(rows))
 

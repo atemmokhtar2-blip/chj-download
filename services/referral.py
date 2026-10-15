@@ -607,6 +607,81 @@ def get_instance(instance_id: int) -> dict | None:
     )
 
 
+def delete_instance_hard(instance_id: int) -> dict[str, int]:
+    """PERMANENTLY erase a clone and every row that belongs to it.
+
+    Owner-panel "حذف النسخة تمامًا". Returns per-table affected counts so
+    the panel can report exactly what was erased. Children first, the
+    ``bot_instances`` row itself LAST.
+
+    Entitlement rows are deliberately NOT deleted: ``clone_trials`` and
+    ``referral_rewards`` keep their consumption record (one trial ever /
+    one reward claim ever) but get ``instance_id = NULL`` so no dangling
+    pointer survives AND a hard delete can never mint a free second trial
+    or a re-claimable reward. Everything else scoped to the instance —
+    downloads, failures, broadcasts, admin roles/bans/logs, settings, the
+    encrypted token, activation + redemption logs — is gone for good.
+
+    ``downloads`` lives in the main DB backend (database.db) while the
+    clone tables live in the referral backend (database.pg); production
+    points both at the same PostgreSQL, and each DELETE goes through the
+    cursor that owns its table.
+    """
+    instance_id = int(instance_id)
+    counts: dict[str, int] = {}
+
+    # 1) Download history attributed to this clone (main backend).
+    try:
+        from database.db import db_cursor
+        with db_cursor() as c:
+            c.execute("DELETE FROM downloads WHERE instance_id = ?", (instance_id,))
+            counts["downloads"] = int(getattr(c, "rowcount", 0) or 0)
+    except Exception:
+        logger.exception("hard delete: downloads wipe failed inst=%s", instance_id)
+        counts["downloads"] = -1
+
+    # 2) Everything else scoped to the instance (referral backend).
+    for table in (
+        "download_failures",
+        "clone_broadcasts",
+        "clone_admin_log",
+        "clone_bans",
+        "clone_admins",
+        "clone_settings",
+        "bot_secrets",       # encrypted token + hash — the clone's identity
+        "activation_log",
+        "redemption_log",
+    ):
+        try:
+            counts[table] = pg.execute(
+                f"DELETE FROM {table} WHERE instance_id = ?", (instance_id,))
+        except Exception:
+            logger.exception("hard delete: %s wipe failed inst=%s", table, instance_id)
+            counts[table] = -1
+
+    # 3) Entitlement rows survive with a NULL pointer (see docstring).
+    for table in ("clone_trials", "referral_rewards"):
+        try:
+            counts[table] = pg.execute(
+                f"UPDATE {table} SET instance_id = NULL WHERE instance_id = ?",
+                (instance_id,))
+        except Exception:
+            logger.exception("hard delete: %s detach failed inst=%s", table, instance_id)
+            counts[table] = -1
+
+    # 4) The instance row itself — LAST, so a mid-way failure can never
+    #    leave an instance record pointing at already-erased data.
+    try:
+        counts["bot_instances"] = pg.execute(
+            "DELETE FROM bot_instances WHERE id = ?", (instance_id,))
+    except Exception:
+        logger.exception("hard delete: bot_instances failed inst=%s", instance_id)
+        counts["bot_instances"] = -1
+
+    logger.info("instance #%s hard-deleted: %s", instance_id, counts)
+    return counts
+
+
 # ---- reward claim (atomic, single-shot) --------------------------------------------
 
 def claim_reward(user_id: int) -> tuple[bool, str]:
