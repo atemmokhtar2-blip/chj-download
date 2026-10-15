@@ -39,6 +39,7 @@ PLAN_LIMITS: dict[str, dict] = {
         "daily_downloads": 70,
         "batch_urls": 3,
         "max_video_height": 720,      # 720p ceiling when available
+        "audio_cap_kbps": 192,        # MP3 bitrate ceiling
         "history_days": 7,
         "admin_panel": False,
     },
@@ -46,6 +47,7 @@ PLAN_LIMITS: dict[str, dict] = {
         "daily_downloads": 150,
         "batch_urls": 10,
         "max_video_height": None,     # highest available
+        "audio_cap_kbps": None,       # full 320kbps, no ceiling
         "history_days": 90,
         "admin_panel": True,
     },
@@ -86,6 +88,7 @@ def plan_comparison_lines() -> list[str]:
         f"• تحميلات يومية لكل مستخدم: 🆓 <b>{b['daily_downloads']}</b> — 👑 <b>{p['daily_downloads']}</b>",
         f"• روابط في الدفعة الواحدة: 🆓 <b>{b['batch_urls']}</b> — 👑 <b>{p['batch_urls']}</b>",
         f"• جودة الفيديو: 🆓 <b>{b['max_video_height']}p كحد أقصى</b> — 👑 <b>أعلى جودة متاحة</b>",
+        f"• نقاء الصوت (MP3): 🆓 <b>{b['audio_cap_kbps']}kbps كحد أقصى</b> — 👑 <b>320kbps كامل</b>",
         f"• سجل التحميلات: 🆓 <b>{b['history_days']} أيام</b> — 👑 <b>{p['history_days']} يومًا</b>",
         "• لوحة إدارة خاصة: 🆓 ❌ غير موجودة — 👑 ✅ موجودة",
         "• إدارة مستخدمي النسخة: 🆓 ❌ — 👑 ✅",
@@ -231,6 +234,34 @@ def count_downloads_today(instance_id: int, user_id: int) -> int:
 
 def daily_limit_reached(instance_id: int, user_id: int, plan) -> bool:
     return count_downloads_today(instance_id, user_id) >= int(limits(plan)["daily_downloads"])
+
+
+def audio_cap(plan):
+    """MP3 bitrate ceiling (kbps) for a plan. None = no cap (main bot / Pro)."""
+    if not plan:
+        return None
+    row = PLAN_LIMITS.get(normalize_plan(plan))
+    if row is None:
+        return None
+    cap = row.get("audio_cap_kbps")
+    return int(cap) if cap else None
+
+
+def clamp_audio_bitrate(value, plan):
+    """Clamp an MP3 bitrate to the plan ceiling — server-side, on every press.
+
+    A preference saved anywhere (even 320kbps on the main bot) can never lift
+    a Basic clone above its cap, and the explicit "MP3 320" button is clamped
+    too. Non-numeric/None values pass through untouched.
+    """
+    try:
+        br = int(value)
+    except (TypeError, ValueError):
+        return value
+    cap = audio_cap(plan)
+    if cap is not None:
+        br = min(br, cap)
+    return str(br)
 
 
 def count_downloads_range(instance_id: int, days: int) -> int:

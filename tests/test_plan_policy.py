@@ -461,6 +461,37 @@ check("missing row is basic", pp.effective_plan(None) == pp.PLAN_BASIC)
 _INSTANCES = _setup_module_checks()
 
 
+print("== audio bitrate ceiling (Basic 192kbps) ==")
+from services.plan_policy import audio_cap, clamp_audio_bitrate
+from handlers.download import _resolve_download_choice
+
+check("basic audio cap = 192", audio_cap("basic") == 192)
+check("pro audio cap = None (full 320)", audio_cap("pro") is None)
+check("main/None audio cap = None", audio_cap(None) is None)
+check("clamp 320 -> 192 on basic", clamp_audio_bitrate("320", "basic") == "192")
+check("clamp 320 stays on pro", clamp_audio_bitrate("320", "pro") == "320")
+check("clamp 320 stays on main", clamp_audio_bitrate("320", None) == "320")
+
+# The explicit "MP3 320kbps" button delivers the plan ceiling on Basic —
+# both the bitrate AND the cache/history quality label follow the clamp.
+_lab_b, _br_b = _resolve_download_choice("dl_audio_320", {}, None, plan="basic")[3:5]
+check("dl_audio_320 on basic -> 192 + audio_192 label",
+      _br_b == "192" and _lab_b == "audio_192")
+_lab_p, _br_p = _resolve_download_choice("dl_audio_320", {}, None, plan="pro")[3:5]
+check("dl_audio_320 on pro -> full 320",
+      _br_p == "320" and _lab_p == "audio_320")
+
+# A 'high' (320) audio preference saved on the MAIN bot can never lift a
+# Basic clone above 192 — clamped at download time, not at save time only.
+_lab2, _br2 = _resolve_download_choice(
+    "dl_audio", {}, {"audio_quality": "high"}, plan="basic")[3:5]
+check("saved 'high' preference clamped inside basic clone",
+      _br2 == "192" and _lab2 == "audio_192")
+_br_main = _resolve_download_choice(
+    "dl_audio", {}, {"audio_quality": "high"}, plan=None)[4]
+check("same preference untouched on main bot", _br_main == "320")
+
+
 def test_plan_policy():
     assert not _failures, "FAILED CHECKS:\n" + "\n".join(_failures)
 

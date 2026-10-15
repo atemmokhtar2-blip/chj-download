@@ -251,7 +251,8 @@ async def process_url(update: Update, context: ContextTypes.DEFAULT_TYPE, user, 
     platform_emoji = get_platform_emoji(platform)
 
     album_count = len(info.get("album_items") or [])
-    keyboard = _build_action_keyboard(media_type, qualities, lang, album_count=album_count, info=info, token=token)
+    keyboard = _build_action_keyboard(media_type, qualities, lang, album_count=album_count, info=info, token=token,
+                                      plan=(pctx.get("plan") if pctx.get("is_clone") else None))
     caption = t(lang, "video_info",
                 title=escape(title), uploader=escape(uploader),
                 duration=escape(duration),
@@ -475,7 +476,7 @@ def _pick_smart_download(info: dict, settings: dict | None = None,
     return False, False, False, _cap_label
 
 
-def _resolve_download_choice(data: str, info: dict, settings: dict | None) -> tuple[bool, bool, bool, str, str, str]:
+def _resolve_download_choice(data: str, info: dict, settings: dict | None, plan=None) -> tuple[bool, bool, bool, str, str, str]:
     """Decide (is_audio, is_image, is_album, quality_label, audio_bitrate, delivery_mode).
 
     Pure of the Telegram query so every button mapping is unit-testable:
@@ -492,6 +493,9 @@ def _resolve_download_choice(data: str, info: dict, settings: dict | None) -> tu
     """
     settings = settings or {}
     user_audio_br = str(AUDIO_QUALITY_BITRATE.get(settings.get("audio_quality", "normal"), 192))
+    # 🔊 Plan audio ceiling (Basic = 192kbps): a preference saved anywhere —
+    # even "high" (320) set on the main bot — is clamped inside a Basic clone.
+    user_audio_br = str(plan_policy.clamp_audio_bitrate(user_audio_br, plan))
     preferred_delivery = str(settings.get("delivery_mode") or "video")
 
     if data == "dl_smart":
@@ -511,6 +515,10 @@ def _resolve_download_choice(data: str, info: dict, settings: dict | None) -> tu
     delivery_mode = "video" if preferred_delivery == "audio" else preferred_delivery
     if is_audio:
         audio_bitrate = AUDIO_BITRATE_HIGH if data == "dl_audio_320" else user_audio_br
+        # Plan ceiling applies to the EXPLICIT 320 button as well — a stale
+        # (pre-downgrade) or forged dl_audio_320 callback can't stream above
+        # the plan's cap; the visible button label is clamped to match.
+        audio_bitrate = str(plan_policy.clamp_audio_bitrate(audio_bitrate, plan))
         quality_label = f"audio_{audio_bitrate}"
     else:
         quality_label = "image" if is_image else data.replace("dl_video_", "")
@@ -537,7 +545,7 @@ def _callback_matches_media(data: str, info: dict) -> bool:
 
 def _build_action_keyboard(
     media_type: str, qualities: list, lang: str, album_count: int = 0, info: dict | None = None,
-    token: str | None = None,
+    token: str | None = None, plan=None,
 ) -> list:
     """Build clear download actions, including MP3/audio-only for videos."""
     suffix = f"|{token}" if token else ""
@@ -553,13 +561,25 @@ def _build_action_keyboard(
             inline_button(t(lang, "best_quality"), callback_data=f"dl_video_best{suffix}"),
             inline_button("🎧 MP3 / صوت فقط", callback_data=f"dl_audio{suffix}"),
         ])
+        _acap = plan_policy.audio_cap(plan)
+        _hi_label = (f"🎵 MP3 {_acap}kbps — أعلى نقاء لخطتك"
+                     if _acap else "🎵 MP3 320kbps — أعلى نقاء")
         keyboard.append([
-            inline_button("🎵 MP3 320kbps — أعلى نقاء", callback_data=f"dl_audio_320{suffix}"),
+            inline_button(_hi_label, callback_data=f"dl_audio_320{suffix}"),
         ])
         real_qualities = [
             q for q in (qualities or [])
             if _quality_height(q.get("label", "")) > 0
         ]
+        # Plan ceiling in the OFFERED list too: a Basic clone never sees a
+        # 1080p button it can't actually use (the final server-side clamp
+        # still guards stale/forged callbacks — this is honest UI on top).
+        _vcap = (plan_policy.limits(plan).get("max_video_height") or 0) if plan is not None else 0
+        if _vcap:
+            real_qualities = [
+                q for q in real_qualities
+                if _quality_height(q.get("label", "")) <= _vcap
+            ]
         for q in real_qualities:
             keyboard.append([
                 inline_button(f"📹 {q['label']}", callback_data=f"dl_video_{q['label']}{suffix}"),
@@ -686,7 +706,8 @@ async def download_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     #   * delivery_mode -> "file" sends documents, "audio" drives Smart MP3.
     #   * video_quality -> Smart Download's default quality.
     is_audio, is_image, is_album, quality_label, audio_bitrate, delivery_mode = (
-        _resolve_download_choice(data, info, settings)
+        _resolve_download_choice(data, info, settings,
+                                 plan=(pctx.get("plan") if pctx.get("is_clone") else None))
     )
 
     # Plan quality ceiling — ONE final server-side clamp covering every
