@@ -214,43 +214,50 @@ def _rows_for(stats: dict, bot_username: str | None) -> list[list[InlineKeyboard
 
 
 def _home_text(stats: dict) -> str:
+    """Readable Telegram HTML fallback matching the Rich Message dashboard layout."""
     bar_len = 14
-    filled = int(stats["percent"] / 100 * bar_len)
+    percent = max(0, min(100, int(stats.get("percent", 0))))
+    filled = percent * bar_len // 100
     bar = "█" * filled + "░" * (bar_len - filled)
-    link = stats.get("link", "")
+    link = escape(str(stats.get("link", "")))
+    target = int(stats["target"])
+    qualified = int(stats["qualified"])
+    remaining = max(0, target - qualified)
     stage = referral.referrer_stage(stats)
     stage_line = {
         "active": "🤖 <b>نسختك الخاصة مفعّلة وشغالة.</b>",
         "expired": "⌛ <b>انتهت مدة نسختك — تم إيقافها تلقائيًا. التجديد بقرار المالك عبر تذكرة دعم.</b>",
         "eligible": "🎉 <b>أنت مؤهل الآن لتفعيل نسختك — اضغط «فعّل الآن».</b>",
         "awaiting_token": "🔑 <b>الربط مفتوح — أرسل توكن البوت الجديد.</b>",
-        "progress": f"🚀 باقي <b>{max(0, int(stats['target']) - int(stats['qualified']))}</b> مستخدمًا مؤهلًا لتفعيل نسختك.",
+        "progress": f"🚀 باقي لك <b>{remaining}</b> مستخدمًا مؤهلًا لتفعيل نسختك.",
     }[stage]
-    # Plan & validity display — every clone runs on a time-limited plan
-    # (🆓 basic 30 يومًا / 👑 pro 40 يومًا) and users must see the window.
     inst = stats.get("instance") or {}
     plan_line = ""
     if inst.get("plan") and inst.get("status") in ("active", "expired"):
         plan_badge = "👑 Pro" if inst.get("plan") == "pro" else "🆓 Basic"
-        exp = str(inst.get("expires_at") or "")[:10]
+        exp = escape(str(inst.get("expires_at") or "")[:10])
         days_left = inst.get("days_left")
         if inst.get("status") == "active" and days_left is not None:
-            plan_line = f"📦 خطتك: <b>{plan_badge}</b> — تنتهي خلال <b>{days_left}</b> يومًا ({exp})\n"
+            plan_line = f"📦 <b>{plan_badge}</b> · متبقي {int(days_left)} يوم · {exp}\n"
         elif inst.get("status") == "expired":
-            plan_line = f"📦 خطتك: <b>{plan_badge}</b> — انتهت في {exp}\n"
+            plan_line = f"📦 <b>{plan_badge}</b> · انتهت {exp}\n"
     return (
-        "🎁 <b>اكسب نسختك من البوت</b>\n\n"
-        f"🎯 هدفك: <b>{stats['target']} مستخدمًا مؤهلًا</b>\n"
-        f"👥 المستخدمون المؤهلون: <b>{stats['qualified']} / {stats['target']}</b>\n"
-        f"📊 التقدم: <b>{stats['percent']}%</b>  <code>{bar}</code>\n"
-        f"⏳ بانتظار النشاط: {stats['pending']}\n"
-        f"🚩 تحت المراجعة: {stats['suspicious']}\n\n"
-        f"{plan_line}"
-        f"{stage_line}\n\n"
-        "🔗 <b>رابط الدعوة الخاص بك:</b>\n"
+        "🎁 <b>نسختك الخاصة — حالة التقدم</b>\n"
+        "━━━━━━━━━━━━━━━━━━\n"
+        f"🎯 الهدف: <b>{target}</b> مستخدمًا مؤهلًا\n"
+        f"✅ وصلت إلى: <b>{qualified}</b> مستخدمًا مؤهلًا\n"
+        f"🚀 المتبقي: <b>{remaining}</b> مستخدمًا\n"
+        f"📊 الإنجاز: <b>{percent}%</b>  <code>{bar}</code>\n"
+        f"⏳ بانتظار النشاط: <b>{int(stats['pending'])}</b>\n"
+        f"🚩 تحت المراجعة: <b>{int(stats['suspicious'])}</b>\n"
+        "━━━━━━━━━━━━━━━━━━\n"
+        f"{plan_line}{stage_line}\n\n"
+        "🔗 <b>رابط دعوتك</b>\n"
         f"<code>{link}</code>\n\n"
-        "كل مستخدم مؤهل يقربك خطوة من امتلاك نسختك الخاصة.\n"
-        "يُحتسب المستخدم مؤهلًا بعد أول تحميل ناجح — أو استخدام البوت في يومين مختلفين."
+        "<b>📌 كيف يُحتسب المستخدم مؤهلًا؟</b>\n"
+        "• يقوم بأول تحميل ناجح عبر البوت، أو\n"
+        "• يستخدم البوت في يومين مختلفين.\n\n"
+        "💡 شارك رابط دعوتك الآن — كل مستخدم مؤهل يقربك خطوة من امتلاك نسختك الخاصة."
     )
 
 
