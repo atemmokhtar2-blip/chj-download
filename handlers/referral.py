@@ -338,7 +338,7 @@ async def _render_home(update: Update, context: ContextTypes.DEFAULT_TYPE, edit:
             logger.exception("Could not edit referral home")
     try:
         await context.bot.do_api_request(
-            endpoint="sendMessage",
+            endpoint="sendRichMessage",
             api_kwargs={
                 "chat_id": update.effective_chat.id,
                 "rich_message": {"html": rich_html},
