@@ -89,6 +89,7 @@ def test_global_download_video_guard_falls_back_when_engine_returns_silent(tmp_p
 
 
 def test_direct_play_url_falls_back_to_page_url_for_audio(tmp_path: Path) -> None:
+    """Non-Facebook hosts still try the direct play_url first, then the page URL."""
     silent = tmp_path / "silent.mp4"
     silent.write_bytes(b"video-only")
     merged = tmp_path / "merged.mp4"
@@ -107,14 +108,39 @@ def test_direct_play_url_falls_back_to_page_url_for_audio(tmp_path: Path) -> Non
         patch("services.downloader._has_audio_stream", side_effect=fake_audio_probe),
     ):
         result = asyncio.run(_generic_download_video(
-            "https://www.facebook.com/watch/?v=123",
+            "https://vimeo.com/123456789",
             play_url="https://cdn.example/video-only.mp4",
         ))
 
     assert result == str(merged)
     assert calls[0] == "https://cdn.example/video-only.mp4"
-    assert "https://www.facebook.com/watch/?v=123" in calls
+    assert "https://vimeo.com/123456789" in calls
     assert not silent.exists()
+
+
+def test_facebook_never_trusts_direct_play_url(tmp_path: Path) -> None:
+    """Facebook direct CDN URLs are video-only DASH streams, so the generic
+    downloader must start from the canonical page URL and let yt-dlp merge
+    bestvideo+bestaudio — never from the caller-supplied play_url."""
+    merged = tmp_path / "merged.mp4"
+    merged.write_bytes(b"video+audio")
+    calls: list[str] = []
+
+    def fake_download_sync(target: str, _opts: dict) -> str:
+        calls.append(target)
+        return str(merged)
+
+    with (
+        patch("services.downloader._download_sync", side_effect=fake_download_sync),
+        patch("services.downloader._has_audio_stream", return_value=True),
+    ):
+        result = asyncio.run(_generic_download_video(
+            "https://www.facebook.com/watch/?v=123",
+            play_url="https://cdn.example/video-only.mp4",
+        ))
+
+    assert result == str(merged)
+    assert calls == ["https://www.facebook.com/watch/?v=123"]
 
 
 if __name__ == "__main__":

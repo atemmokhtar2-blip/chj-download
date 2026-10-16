@@ -507,7 +507,11 @@ class FacebookEngine(PlatformEngine):
         # CDN URL is trusted only when a provider explicitly verified that it
         # carries audio; otherwise force the yt-dlp page download so audio gets
         # merged instead of delivering a silent video.
-        if candidate and direct_has_audio and not prefer_page_download:
+        # Facebook splits video/audio into separate DASH streams. A direct CDN
+        # URL is trusted ONLY when a provider explicitly verified audio on that
+        # exact stream (yt-dlp progressive). HTML/OG URLs are video-only and
+        # must always go through the yt-dlp page download so audio is merged.
+        if candidate and direct_has_audio is True and prefer_page_download is not True:
             try:
                 direct_path = await loop.run_in_executor(
                     get_executor(),

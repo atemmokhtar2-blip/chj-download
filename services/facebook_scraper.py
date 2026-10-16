@@ -308,7 +308,7 @@ def _from_html(url: str, *, mobile: bool = False) -> dict | None:
         title, thumb = _extract_title_thumb(text)
         hd = next((u for q, u in candidates if q == "hd"), "")
         sd = next((u for q, u in candidates if q == "sd"), "") or candidates[0][1]
-        return _base_result(
+        result = _base_result(
             url=getattr(r, "url", "") or url,
             play_url=sd,
             source="mobile_html" if mobile else "html",
@@ -316,6 +316,12 @@ def _from_html(url: str, *, mobile: bool = False) -> dict | None:
             thumbnail=thumb,
             hd_url=hd,
         )
+        # HTML/OG keys (browser_native_hd_url / playable_url_quality_hd) are
+        # VIDEO-ONLY DASH streams. Never fetch them directly for a video
+        # download — force the yt-dlp page download so audio gets merged.
+        result["direct_has_audio"] = False
+        result["prefer_page_download"] = True
+        return result
     except Exception as exc:
         logger.info("Facebook HTML provider failed mobile=%s: %s", mobile, exc)
         return None
