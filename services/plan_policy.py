@@ -80,48 +80,69 @@ def limits(plan) -> dict:
 # --------------------------------------------------------------------------
 
 def plan_comparison_lines() -> list[str]:
-    """Arabic HTML lines comparing Basic vs Pro, rendered FROM PLAN_LIMITS so
-    what users SEE can never drift from what the server ENFORCES."""
+    """Mobile-first plan comparison rendered from the enforced policy."""
     b = PLAN_LIMITS[PLAN_BASIC]
     p = PLAN_LIMITS[PLAN_PRO]
-    return [
-        f"• تحميلات يومية لكل مستخدم: 🆓 <b>{b['daily_downloads']}</b> — 👑 <b>{p['daily_downloads']}</b>",
-        f"• روابط في الدفعة الواحدة: 🆓 <b>{b['batch_urls']}</b> — 👑 <b>{p['batch_urls']}</b>",
-        f"• جودة الفيديو: 🆓 <b>{b['max_video_height']}p كحد أقصى</b> — 👑 <b>أعلى جودة متاحة</b>",
-        f"• نقاء الصوت (MP3): 🆓 <b>{b['audio_cap_kbps']}kbps كحد أقصى</b> — 👑 <b>320kbps كامل</b>",
-        f"• سجل التحميلات: 🆓 <b>{b['history_days']} أيام</b> — 👑 <b>{p['history_days']} يومًا</b>",
-        "• لوحة إدارة خاصة: 🆓 ❌ غير موجودة — 👑 ✅ موجودة",
-        "• إدارة مستخدمي النسخة: 🆓 ❌ — 👑 ✅",
-        "• الإذاعة داخل النسخة: 🆓 ❌ — 👑 ✅",
-        "• إدارة الإداريين والصلاحيات: 🆓 ❌ — 👑 ✅",
+    rows = [
+        ("📥 التحميلات اليومية لكل مستخدم", f"{b['daily_downloads']} تحميل", f"{p['daily_downloads']} تحميل"),
+        ("🔗 روابط في الدفعة الواحدة", f"{b['batch_urls']} روابط", f"{p['batch_urls']} روابط"),
+        ("🎬 جودة الفيديو", f"حتى {b['max_video_height']}p", "أعلى جودة متاحة"),
+        ("🎵 صوت MP3", f"حتى {b['audio_cap_kbps']}kbps", "حتى 320kbps"),
+        ("📚 سجل التحميلات", f"{b['history_days']} أيام", f"{p['history_days']} يومًا"),
+        ("🛠️ لوحة إدارة خاصة", "❌ غير متاحة", "✅ متاحة"),
+        ("👥 إدارة مستخدمي النسخة", "❌", "✅"),
+        ("📣 الإذاعة داخل النسخة", "❌", "✅"),
+        ("🔐 إدارة الإداريين والصلاحيات", "❌", "✅"),
+        ("🧩 إدارة الأكواد والنسخ الأخرى", "❌", "❌ للمالك الرئيسي فقط"),
     ]
+    lines = [
+        "━━━━━━━━━━━━━━",
+        "🆓 <b>BASIC</b>                 👑 <b>PRO</b>",
+        "━━━━━━━━━━━━━━",
+    ]
+    for feature, basic, pro in rows:
+        lines.append(f"<b>{feature}</b>")
+        lines.append(f"🆓 {basic}  │  👑 {pro}")
+        lines.append("──────────────")
+    return lines
 
 
 def plan_summary_text(ctx: dict) -> str:
-    """The plan card any user can open (settings → 📊): full Basic-vs-Pro
-    comparison + which plan THIS bot runs under right now."""
-    compare = "\n".join(plan_comparison_lines())
+    """Compact, scannable plan comparison that remains readable on phones."""
+    from html import escape
+
+    compare = "\\n".join(plan_comparison_lines())
     text = (
-        "📦 <b>خطط النسخ الخاصة — Basic مقابل Pro</b>\n\n"
-        f"{compare}\n"
-        "• إدارة الأكواد والنسخ الأخرى: 🆓 ❌ — 👑 ❌ (للمالك الرئيسي فقط)\n\n"
-        "━━━━━━━━━━━━━━\n"
+        "📦 <b>الخطط والباقات</b>\\n"
+        "<i>مقارنة سريعة بين خطط النسخ الخاصة</i>\\n\\n"
+        f"{compare}\\n"
     )
     if ctx.get("is_clone"):
-        plan = normalize_plan(ctx.get("plan"))
-        badge = "👑 Pro" if plan == PLAN_PRO else "🆓 Basic"
-        text += f"🤖 <b>هذه النسخة تعمل حاليًا بخطة:</b> {badge}\n"
+        plan = effective_plan(ctx.get("instance")) if ctx.get("instance") else normalize_plan(ctx.get("plan"))
+        badge = "👑 <b>Pro</b>" if plan == PLAN_PRO else "🆓 <b>Basic</b>"
+        inst = ctx.get("instance") or {}
+        text += (
+            "━━━━━━━━━━━━━━\\n"
+            f"🤖 <b>خطة نسختك الحالية:</b> {badge}\\n"
+        )
+        try:
+            from services.referral import instance_days_left
+            days_left = instance_days_left(inst)
+            if days_left is not None:
+                text += f"⏳ <b>المدة المتبقية:</b> {days_left} يوم\\n"
+        except Exception:
+            pass
         if plan == PLAN_BASIC:
             text += (
-                "كل الحدود أعلاه تُطبَّق تلقائيًا داخل هذه النسخة.\n"
-                "الترقية إلى 👑 Pro تتم بقرار المالك — اطلب التجديد من صفحة 🎁."
+                "كل حدود Basic مطبّقة تلقائيًا على هذه النسخة.\\n"
+                "📩 الترقية أو طلب تمديد المدة يكون من المالك."
             )
         else:
-            text += "لوحة الإدارة الخاصة متاحة لمالك النسخة وإدارييها (/admin)."
+            text += "✅ مميزات Pro متاحة لمالك النسخة والإداريين المصرّح لهم."
     else:
         text += (
-            "🤖 <b>أنت الآن في البوت الأساسي — بلا حدود خطط.</b>\n"
-            "الخطط أعلاه تخص النسخ الخاصة التي يكسبها المستخدمون من 🎁 الإحالات."
+            "🤖 <b>أنت في البوت الأساسي</b> — لا تنطبق عليه حدود خطط النسخ.\\n"
+            "الخطط أعلاه تخص النسخ الخاصة."
         )
     return text
 
