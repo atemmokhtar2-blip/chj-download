@@ -1,6 +1,6 @@
 import logging
 from telegram import Update, ReplyKeyboardMarkup, InlineKeyboardButton, InlineKeyboardMarkup
-from utils.button_text import strip_button_emoji
+from utils.button_text import strip_button_emoji, reply_button
 from telegram.ext import ContextTypes
 
 from config.settings import MAIN_BOT_USERNAME
@@ -21,7 +21,7 @@ def get_main_keyboard(lang: str = "ar", user_id: int = None, bot_username: str =
     "العودة إلى البوت الأساسي" shortcut inside clones is delivered as a
     proper INLINE button with the /start message instead (see start_command).
     """
-    rows = [[t("ar", "menu_download"), t("ar", "menu_settings")]]
+    rows = [[reply_button(t("ar", "menu_download"), "primary"), reply_button(t("ar", "menu_settings"))]]
     return ReplyKeyboardMarkup(rows, resize_keyboard=True)
 
 
@@ -41,7 +41,7 @@ def build_main_keyboard(context, user_id: int) -> ReplyKeyboardMarkup:
         if ctx.get("is_clone") and ctx.get("plan") == plan_policy.PLAN_PRO \
                 and ctx.get("instance"):
             if plan_policy.clone_access(ctx["instance"], user_id) in ("owner", "admin"):
-                rows.append([t("ar", "menu_admin")])
+                rows.append([reply_button(t("ar", "menu_admin"))])
     except Exception:
         logger.debug("admin keyboard row failed", exc_info=True)
     return ReplyKeyboardMarkup(rows, resize_keyboard=True)
