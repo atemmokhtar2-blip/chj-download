@@ -256,12 +256,53 @@ def _home_text(stats: dict) -> str:
     )
 
 
+def _home_rich_html(stats: dict) -> str:
+    """Compact, mobile-first Telegram Rich Message with expandable conditions."""
+    link = escape(str(stats.get("link", "")))
+    stage = referral.referrer_stage(stats)
+    stage_line = {
+        "active": "🤖 <b>نسختك الخاصة مفعّلة وشغالة.</b>",
+        "expired": "⌛ <b>انتهت مدة نسختك.</b> التجديد عبر تذكرة دعم.",
+        "eligible": "🎉 <b>أنت مؤهل لتفعيل نسختك.</b>",
+        "awaiting_token": "🔑 <b>بانتظار توكن البوت الجديد.</b>",
+        "progress": f"🚀 باقي <b>{max(0, int(stats['target']) - int(stats['qualified']))}</b> مستخدمًا مؤهلًا.",
+    }[stage]
+    inst = stats.get("instance") or {}
+    plan_line = ""
+    if inst.get("plan") and inst.get("status") in ("active", "expired"):
+        plan_badge = "👑 Pro" if inst.get("plan") == "pro" else "🆓 Basic"
+        exp = escape(str(inst.get("expires_at") or "")[:10])
+        days_left = inst.get("days_left")
+        if inst.get("status") == "active" and days_left is not None:
+            plan_line = f"<p>📦 <b>{plan_badge}</b> · متبقي {int(days_left)} يوم · {exp}</p>"
+        elif inst.get("status") == "expired":
+            plan_line = f"<p>📦 <b>{plan_badge}</b> · انتهت {exp}</p>"
+    percent = max(0, min(100, int(stats.get("percent", 0))))
+    filled = min(14, percent * 14 // 100)
+    bar = "█" * filled + "░" * (14 - filled)
+    return (
+        "<h3>🎁 اكسب نسختك من XELVOR</h3>"
+        f"<p>🎯 الهدف: <b>{int(stats['target'])}</b> مستخدم مؤهل</p>"
+        f"<p>👥 المؤهلون: <b>{int(stats['qualified'])}/{int(stats['target'])}</b> · 📊 <b>{percent}%</b></p>"
+        f"<p><code>{bar}</code></p>"
+        f"<p>⏳ انتظار النشاط: {int(stats['pending'])} · 🚩 مراجعة: {int(stats['suspicious'])}</p>"
+        f"{plan_line}<p>{stage_line}</p><hr/>"
+        "<p><b>🔗 رابط دعوتك</b></p>"
+        f"<p><code>{link}</code></p>"
+        "<details><summary>📌 شروط التأهل وطريقة احتساب المستخدم</summary>"
+        "<p>كل مستخدم مؤهل يقرّبك من امتلاك نسختك الخاصة.</p>"
+        "<p>يُحتسب المستخدم مؤهلًا بعد أول تحميل ناجح، أو استخدام البوت في يومين مختلفين.</p>"
+        "</details>"
+    )
+
+
 async def _render_home(update: Update, context: ContextTypes.DEFAULT_TYPE, edit: bool = False) -> None:
     uid = update.effective_user.id
     stats = referral.get_stats(uid)
     stats["link"] = referral.referral_link(uid, context.bot.username or MAIN_BOT_USERNAME)
     markup = InlineKeyboardMarkup(_rows_for(stats, context.bot.username))
     text = _home_text(stats)
+    rich_html = _home_rich_html(stats)
     # Lazy milestone notifications (idempotent; the automatic path usually
     # already sent them — this only fills gaps on page opens).
     try:
@@ -275,14 +316,38 @@ async def _render_home(update: Update, context: ContextTypes.DEFAULT_TYPE, edit:
     if edit and update.callback_query and update.callback_query.message:
         q = update.callback_query
         try:
+            await context.bot.do_api_request(
+                endpoint="editMessageText",
+                api_kwargs={
+                    "chat_id": q.message.chat_id,
+                    "message_id": q.message.message_id,
+                    "rich_message": {"html": rich_html},
+                    "reply_markup": markup,
+                },
+            )
+            return
+        except Exception:
+            logger.info("Rich referral edit unavailable; falling back to HTML", exc_info=True)
+        try:
             if q.message.text:
                 await q.edit_message_text(text, parse_mode="HTML", reply_markup=markup)
             else:
                 await q.edit_message_caption(text, parse_mode="HTML", reply_markup=markup)
             return
         except Exception:
-            pass
-    await update.effective_message.reply_text(text, parse_mode="HTML", reply_markup=markup)
+            logger.exception("Could not edit referral home")
+    try:
+        await context.bot.do_api_request(
+            endpoint="sendMessage",
+            api_kwargs={
+                "chat_id": update.effective_chat.id,
+                "rich_message": {"html": rich_html},
+                "reply_markup": markup,
+            },
+        )
+    except Exception:
+        logger.info("Rich referral send unavailable; falling back to HTML", exc_info=True)
+        await update.effective_message.reply_text(text, parse_mode="HTML", reply_markup=markup)
 
 
 async def referral_page(update: Update, context: ContextTypes.DEFAULT_TYPE, edit: bool = False) -> None:
