@@ -356,6 +356,7 @@ class PinterestEngine(PlatformEngine):
         import asyncio
 
         loop = asyncio.get_running_loop()
+        cancel_check = getattr(progress_callback, "cancel_check", None)
         candidates: list[dict] = []
         seen: set[str] = set()
 
@@ -399,14 +400,27 @@ class PinterestEngine(PlatformEngine):
             try:
                 if ".m3u8" in target:
                     safe_name = sanitize_filename(f"pinterest_hls_{hash(target) % 100000}")
-                    path = await loop.run_in_executor(
-                        get_executor(),
-                        download_hls_video,
-                        target,
-                        os.path.join(TEMP_DIR, safe_name),
-                    )
+                    hls_out = os.path.join(TEMP_DIR, safe_name)
+                    if cancel_check is not None:
+                        path = await loop.run_in_executor(
+                            get_executor(),
+                            download_hls_video,
+                            target,
+                            hls_out,
+                            cancel_check,
+                        )
+                    else:
+                        path = await loop.run_in_executor(
+                            get_executor(),
+                            download_hls_video,
+                            target,
+                            hls_out,
+                        )
                     path = downloader._prepare_video_for_delivery(
-                        path, source=f"pinterest-hls:{candidate['provider']}")
+                        path,
+                        source=f"pinterest-hls:{candidate['provider']}",
+                        cancel_check=cancel_check,
+                    )
                 else:
                     path = await loop.run_in_executor(
                         get_executor(),
@@ -419,7 +433,10 @@ class PinterestEngine(PlatformEngine):
                         "xdl-pinterest",
                     )
                     path = downloader._prepare_video_for_delivery(
-                        path, source=f"pinterest-direct:{candidate['provider']}")
+                        path,
+                        source=f"pinterest-direct:{candidate['provider']}",
+                        cancel_check=cancel_check,
+                    )
                 if path:
                     return path
                 download_logger.info(

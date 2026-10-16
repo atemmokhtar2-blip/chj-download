@@ -18,6 +18,8 @@ import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any
 
+from middlewares.cancellation import DownloadCancelledError
+
 import requests
 
 logger = logging.getLogger(__name__)
@@ -429,6 +431,16 @@ def _result_from_pin_data(pin: dict, url: str) -> dict:
             image_url = upgraded  # try originals path; CDN often still serves it
 
     video_candidates_list = _video_candidates(pin.get("videos"))
+    # Story/idea pins keep their video under story_pin_data (pages -> blocks ->
+    # video -> video_list), not under `videos`. Merge those in so a story pin
+    # is resolved as a VIDEO (with audio) instead of silently degrading to the
+    # first poster image.
+    for story_cand in _video_candidates(pin.get("story_pin_data")):
+        if all(story_cand["url"] != c["url"] for c in video_candidates_list):
+            video_candidates_list.append(story_cand)
+    video_candidates_list.sort(
+        key=lambda c: (0 if c["kind"] == "mp4" else 1, -int(c["score"] or 0))
+    )
     video_url = video_candidates_list[0]["url"] if video_candidates_list else None
     # Story pins / idea pins carousel
     album_items: list[dict] = []
@@ -732,44 +744,93 @@ def _from_html(url: str, session: requests.Session) -> dict | None:
         return None
 
 
-def _walk_for_pin(obj: Any, depth: int = 0) -> dict | None:
+def _pin_block(obj: dict, image_url: str | None, video_url: str | None) -> dict | None:
+    """Build a normalized pin payload from an embedded HTML-JSON block.
+
+    A playable video always wins over the block's poster/cover image: a video
+    pin must never be served as a silent still.
+    """
+    if not video_url and not image_url:
+        return None
+    thumbnail = image_url or ""
+    return {
+        "title": (obj.get("title") or obj.get("grid_title") or "Pinterest Pin")[:200],
+        "uploader": "Pinterest User",
+        "duration": "Unknown",
+        "duration_secs": 0,
+        "thumbnail": thumbnail,
+        "platform": "Pinterest",
+        "media_type": "video" if video_url else "image",
+        "qualities": [{"label": "Best", "format_id": "best", "has_audio": True}] if video_url else [],
+        "audio_formats": [],
+        "image_url": None if video_url else (upgrade_to_originals(image_url) if image_url else None),
+        "album_items": [],
+        "url": "",
+        "webpage_url": "",
+        "ext": "mp4" if video_url else "jpg",
+        "media_id": str(obj.get("id") or ""),
+        "play_url": video_url,
+    }
+
+
+def _find_video_block(obj: Any, depth: int) -> dict | None:
+    """Depth-first search for any playable video inside embedded page JSON.
+
+    Story/idea pins keep their video under ``story_pin_data`` (pages -> blocks
+    -> video -> video_list), while classic pins use ``videos``. Both shapes are
+    recursively walked — first video wins.
+    """
+    if depth > 12:
+        return None
+    if isinstance(obj, dict):
+        video_url = (
+            _best_video_url(obj.get("videos"))
+            or _best_video_url(obj.get("story_pin_data"))
+        )
+        if video_url:
+            image_url = None
+            images = obj.get("images")
+            if isinstance(images, dict):
+                image_url = _best_image_from_images_dict(images)
+            return _pin_block(obj, image_url, video_url)
+        for v in obj.values():
+            found = _find_video_block(v, depth + 1)
+            if found:
+                return found
+    elif isinstance(obj, list):
+        for it in obj[:50]:
+            found = _find_video_block(it, depth + 1)
+            if found:
+                return found
+    return None
+
+
+def _find_image_block(obj: Any, depth: int) -> dict | None:
+    """Depth-first search for the first image block (used only when no video
+    block exists anywhere in the page JSON)."""
     if depth > 12:
         return None
     if isinstance(obj, dict):
         images = obj.get("images")
         if isinstance(images, dict) and ("orig" in images or "originals" in images or "736x" in images):
-            # looks like a pin image block
             image_url = _best_image_from_images_dict(images)
             if image_url:
-                video_url = _best_video_url(obj.get("videos"))
-                return {
-                    "title": (obj.get("title") or obj.get("grid_title") or "Pinterest Pin")[:200],
-                    "uploader": "Pinterest User",
-                    "duration": "Unknown",
-                    "duration_secs": 0,
-                    "thumbnail": image_url,
-                    "platform": "Pinterest",
-                    "media_type": "video" if video_url else "image",
-                    "qualities": [{"label": "Best", "format_id": "best", "has_audio": True}] if video_url else [],
-                    "audio_formats": [],
-                    "image_url": None if video_url else upgrade_to_originals(image_url),
-                    "album_items": [],
-                    "url": "",
-                    "webpage_url": "",
-                    "ext": "mp4" if video_url else "jpg",
-                    "media_id": str(obj.get("id") or ""),
-                    "play_url": video_url,
-                }
+                return _pin_block(obj, image_url, None)
         for v in obj.values():
-            found = _walk_for_pin(v, depth + 1)
+            found = _find_image_block(v, depth + 1)
             if found:
                 return found
     elif isinstance(obj, list):
         for it in obj[:50]:
-            found = _walk_for_pin(it, depth + 1)
+            found = _find_image_block(it, depth + 1)
             if found:
                 return found
     return None
+
+
+def _walk_for_pin(obj: Any, depth: int = 0) -> dict | None:
+    """Resolve an embedded HTML-JSON structure to a pin payload, video-first."""
+    return _find_video_block(obj, depth) or _find_image_block(obj, depth)
 
 
 
@@ -1006,19 +1067,22 @@ def scrape_pinterest(url: str) -> dict | None:
     return None
 
 
-def download_hls_video(play_url: str, out_path: str) -> str | None:
-    """Download an HLS video pin via ffmpeg -c copy into a faststart MP4.
+def download_hls_video(play_url: str, out_path: str, cancel_check=None) -> str | None:
+    """Download a Pinterest HLS (`.m3u8`) video pin into a faststart MP4 with audio.
 
-    Some Pinterest video pins only expose HLS (`.m3u8`) playlists; yt-dlp has no
-    reliable Pinterest extractor, so this is the dedicated unbreakable path for
-    those pins. Uses the same ffmpeg binary the rest of the downloader relies on.
+    Pinterest stores video and audio as SEPARATE streams: the progressive
+    ``.mp4`` renditions (V_720P/V_480P…) are VIDEO-ONLY, and the audio lives in
+    the HLS playlist. A single-input ``-c copy`` remux of the playlist can
+    therefore still produce a silent file, and a copy-only ffmpeg run frequently
+    chokes on Pinterest's ADTS AAC segments. This runs ffmpeg with a proper
+    browser UA + Referer, tries a stream-copy remux with the ``aac_adtstoasc``
+    bitstream filter first, and falls back to a full H.264/AAC re-encode when
+    the playlist carries codecs that copy cannot package. ``cancel_check`` is
+    polled every 50ms so the 🛑 button aborts an in-flight HLS fetch too.
     """
-    import subprocess
-
     if not play_url or not str(play_url).startswith("http"):
         return None
     from utils.url_safety import is_public_url
-    from config.settings import MAX_FILE_SIZE_BYTES
 
     safe, _reason = is_public_url(play_url)
     if not safe:
@@ -1033,40 +1097,72 @@ def download_hls_video(play_url: str, out_path: str) -> str | None:
         if not ffmpeg:
             logger.info("HLS pin skipped: no ffmpeg available")
             return None
-        for attempt in (1, 2):
+
+        header_args = [
+            "-headers",
+            (
+                "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36\r\n"
+                "Referer: https://www.pinterest.com/\r\n"
+            ),
+        ]
+        passes = (
+            # 1) Lossless remux: the ADTS→MP4 filter is what makes the audio
+            #    track actually land in the MP4 container.
+            [
+                "-c:v", "copy",
+                "-c:a", "copy",
+                "-bsf:a", "aac_adtstoasc",
+                "-movflags", "+faststart",
+            ],
+            # 2) Re-encode fallback for codecs stream-copy cannot package.
+            [
+                "-c:v", "libx264",
+                "-preset", "veryfast",
+                "-crf", "23",
+                "-c:a", "aac",
+                "-b:a", "128k",
+                "-movflags", "+faststart",
+            ],
+        )
+
+        for attempt, pass_args in enumerate(passes, start=1):
             if os.path.exists(path):
                 try:
                     os.remove(path)
                 except OSError:
                     pass
+            cmd = [
+                ffmpeg, "-y", "-hide_banner", "-loglevel", "error",
+                *header_args,
+                "-i", play_url,
+                *pass_args,
+                path,
+            ]
             try:
-                proc = subprocess.run(
-                    [
-                        ffmpeg, "-y", "-hide_banner", "-loglevel", "error",
-                        "-i", play_url,
-                        "-c", "copy",
-                        "-movflags", "+faststart",
-                        path,
-                    ],
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
-                    text=True,
-                    timeout=240,
-                    check=False,
-                )
-            except subprocess.TimeoutExpired:
-                logger.info("HLS pin download attempt %s timed out", attempt)
-                continue
-            last_stderr = (proc.stderr or "") if proc else ""
-            if proc and proc.returncode == 0 and os.path.exists(path) and os.path.getsize(path) >= 2048:
+                ok = _dl._run_process_cancellable(cmd, cancel_check, timeout=240)
+            except DownloadCancelledError:
+                raise
+            except Exception as exc:
+                logger.info("HLS pin pass %s crashed: %s", attempt, str(exc)[:300])
+                ok = False
+            if ok and os.path.exists(path) and os.path.getsize(path) >= 2048:
                 return path
-            logger.info("HLS pin download attempt %s failed: %s", attempt, last_stderr[-300:])
+            logger.info("HLS pin pass %s failed for %s", attempt, str(play_url)[:120])
+
         if os.path.exists(path):
             try:
                 os.remove(path)
             except OSError:
                 pass
         return None
+    except DownloadCancelledError:
+        try:
+            if os.path.exists(path):
+                os.remove(path)
+        except OSError:
+            pass
+        raise
     except Exception as exc:
         logger.info("HLS pin download crashed: %s", exc)
         try:
