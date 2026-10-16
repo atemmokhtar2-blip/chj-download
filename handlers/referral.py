@@ -255,15 +255,24 @@ def _home_text(stats: dict) -> str:
 
 
 def _home_rich_html(stats: dict) -> str:
-    """Compact, mobile-first Telegram Rich Message with expandable conditions."""
+    """Compact, mobile-first referral dashboard with clear progress and expandable rules."""
     link = escape(str(stats.get("link", "")))
     stage = referral.referrer_stage(stats)
+    target = max(1, int(stats.get("target", REFERRAL_TARGET)))
+    qualified = max(0, int(stats.get("qualified", 0)))
+    remaining = max(0, target - qualified)
+    pending = max(0, int(stats.get("pending", 0)))
+    suspicious = max(0, int(stats.get("suspicious", 0)))
+    percent = max(0, min(100, int(stats.get("percent", 0))))
+    bar_len = 20
+    filled = min(bar_len, percent * bar_len // 100)
+    bar = "█" * filled + "░" * (bar_len - filled)
     stage_line = {
         "active": "🤖 <b>نسختك الخاصة مفعّلة وشغالة.</b>",
         "expired": "⌛ <b>انتهت مدة نسختك.</b> التجديد عبر تذكرة دعم.",
         "eligible": "🎉 <b>أنت مؤهل لتفعيل نسختك.</b>",
         "awaiting_token": "🔑 <b>بانتظار توكن البوت الجديد.</b>",
-        "progress": f"🚀 باقي <b>{max(0, int(stats['target']) - int(stats['qualified']))}</b> مستخدمًا مؤهلًا.",
+        "progress": f"🚀 باقي <b>{remaining}</b> مستخدم مؤهل للوصول لهدفك.",
     }[stage]
     inst = stats.get("instance") or {}
     plan_line = ""
@@ -275,21 +284,20 @@ def _home_rich_html(stats: dict) -> str:
             plan_line = f"<p>📦 <b>{plan_badge}</b> · متبقي {int(days_left)} يوم · {exp}</p>"
         elif inst.get("status") == "expired":
             plan_line = f"<p>📦 <b>{plan_badge}</b> · انتهت {exp}</p>"
-    percent = max(0, min(100, int(stats.get("percent", 0))))
-    filled = min(14, percent * 14 // 100)
-    bar = "█" * filled + "░" * (14 - filled)
     return (
-        "<h3>🎁 اكسب نسختك من XELVOR</h3>"
-        f"<p>🎯 الهدف: <b>{int(stats['target'])}</b> مستخدم مؤهل</p>"
-        f"<p>👥 المؤهلون: <b>{int(stats['qualified'])}/{int(stats['target'])}</b> · 📊 <b>{percent}%</b></p>"
-        f"<p><code>{bar}</code></p>"
-        f"<p>⏳ انتظار النشاط: {int(stats['pending'])} · 🚩 مراجعة: {int(stats['suspicious'])}</p>"
+        "<h3>🎁 نسختك الخاصة — حالة التقدم</h3>"
+        f"<p>🎯 <b>الهدف:</b> {target} مستخدمًا مؤهلًا</p>"
+        f"<p>👥 <b>المؤهلون:</b> {qualified} من {target}</p>"
+        f"<p><code>{bar}</code> <b>{percent}%</b></p>"
+        f"<p>🚀 <b>المتبقي:</b> {remaining} مستخدمًا مؤهلًا</p>"
+        f"<p>⏳ <b>بانتظار النشاط:</b> {pending} · 🚩 <b>تحت المراجعة:</b> {suspicious}</p>"
         f"{plan_line}<p>{stage_line}</p><hr/>"
-        "<p><b>🔗 رابط دعوتك</b></p>"
+        "<h3>🔗 رابط دعوتك</h3>"
         f"<p><code>{link}</code></p>"
-        "<details><summary>📌 شروط التأهل وطريقة احتساب المستخدم</summary>"
-        "<p>كل مستخدم مؤهل يقرّبك من امتلاك نسختك الخاصة.</p>"
-        "<p>يُحتسب المستخدم مؤهلًا بعد أول تحميل ناجح، أو استخدام البوت في يومين مختلفين.</p>"
+        "<details><summary>📌 كيف يُحتسب المستخدم مؤهلًا؟</summary>"
+        "<p>• يكمل أول تحميل ناجح عبر البوت، أو</p>"
+        "<p>• يستخدم البوت في يومين مختلفين.</p>"
+        "<p>كل مستخدم مؤهل يقرّبك خطوة من امتلاك نسختك الخاصة. الحسابات المحظورة أو الإحالات تحت المراجعة لا تُحتسب ضمن الهدف حتى تُحسم مراجعتها.</p>"
         "</details>"
     )
 
