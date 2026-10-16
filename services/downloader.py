@@ -1500,10 +1500,12 @@ async def analyze_url(url: str) -> dict | None:
 
 
 async def download_video(url: str, format_id: str = "best", quality_label: str = "best", progress=None, play_url: str | None = None, allow_large: bool = False) -> str | None:
-    if allow_large:
-        # Keep large files intact so the caller can split them into
-        # Telegram-friendly parts instead of deleting them mid-download.
-        return await _generic_download_video(url, format_id, quality_label, progress, play_url, allow_large=True)
+    # ALWAYS run the platform engine first. The old `allow_large` shortcut
+    # silently bypassed every scraper-first engine (Pinterest above all, but
+    # also TikTok / Instagram / Facebook / Reddit) whenever auto-split was
+    # enabled — which is the DEFAULT. Pinterest videos therefore went straight
+    # into generic yt-dlp, which cannot resolve its video pins reliably, while
+    # images flowed through a different path (download_image) and kept working.
     engine = _select_engine(url)
     cancel_check = getattr(progress, "cancel_check", None)
     try:
@@ -1511,13 +1513,20 @@ async def download_video(url: str, format_id: str = "best", quality_label: str =
         path = _prepare_video_for_delivery(
             path,
             source=f"engine:{getattr(engine, 'name', 'unknown')}",
+            allow_large=allow_large,
             cancel_check=cancel_check,
         )
         if path:
             return path
         logger.warning("Engine returned no verified-audio video (%s); forcing generic merge fallback for %s", getattr(engine, "name", "unknown"), url[:120])
-        return await _generic_download_video(url, format_id, quality_label, progress, None)
+        return await _generic_download_video(url, format_id, quality_label, progress, None, allow_large=allow_large)
     except FileTooLargeError:
+        if allow_large:
+            # The engine located a real stream but its direct downloader enforces
+            # the byte cap. With auto-split enabled retry through the no-limit
+            # generic path so the large file is kept and split, never dropped.
+            logger.warning("Engine hit size cap (%s); retrying no-limit generic for %s", getattr(engine, "name", "unknown"), url[:120])
+            return await _generic_download_video(url, format_id, quality_label, progress, None, allow_large=True)
         raise
     except DownloadCancelledError:
         raise
@@ -1528,7 +1537,7 @@ async def download_video(url: str, format_id: str = "best", quality_label: str =
         raise
     except Exception as exc:
         logger.warning("Engine video download failed (%s) for %s: %s", getattr(engine, "name", "unknown"), url[:120], exc)
-        return await _generic_download_video(url, format_id, quality_label, progress, None)
+        return await _generic_download_video(url, format_id, quality_label, progress, None, allow_large=allow_large)
 
 
 async def download_audio(url: str, progress=None, bitrate: str | None = None) -> str | None:
