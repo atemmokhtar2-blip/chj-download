@@ -592,11 +592,14 @@ async def settings_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await safe_edit(query.edit_message_text, text, parse_mode="HTML",
                             reply_markup=_mk(rows))
             return
-        await safe_edit(
-            query.edit_message_text,
-            plan_policy.plan_summary_text(plan_policy.plan_context(context.bot)),
-            parse_mode="HTML",
+        from utils.telegram_rich import edit_plan_table
+        fallback_text = plan_policy.plan_summary_text(plan_policy.plan_context(context.bot))
+        await edit_plan_table(
+            query,
+            context,
+            plan_policy,
             reply_markup=_mk([[("🔵 ↩️ رجوع", "settings:home")]]),
+            fallback_text=fallback_text,
         )
         return
 
