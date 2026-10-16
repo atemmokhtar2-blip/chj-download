@@ -73,7 +73,14 @@ def expand_pin_url(url: str, session: requests.Session | None = None) -> str:
 
 
 def extract_pin_id(url: str) -> str | None:
+    # Classic numeric pin ids: /pin/123456789/ or /pin/slug--123456789/
     m = re.search(r"/pin/(?:[\w-]+--)?(\d+)", url)
+    if m:
+        return m.group(1)
+    # Modern alphanumeric pin ids (2025+ story/video pins): /pin/e1_AfqP...
+    # These cannot be resolved through the legacy PinResource API, but
+    # gallery-dl / HTML providers still receive the real id instead of None.
+    m = re.search(r"/pin/([A-Za-z0-9_-]{20,})/", url)
     if m:
         return m.group(1)
     m = re.search(r"(\d{10,})", url)
@@ -467,6 +474,56 @@ def _from_gallery_dl(url: str) -> dict | None:
         return None
 
 
+def _video_urls_from_html(html: str) -> list[dict]:
+    """Collect playable Pinterest video URLs embedded in a pin page.
+
+    The desktop pin page embeds the video renditions directly in the HTML
+    (both progressive ``.../videos/mc/720p/xxx.mp4`` and HLS
+    ``.../videos/mc/hls/xxx.m3u8``). This keeps video pins resolvable even when
+    the PinResource API is throttled, region-blocked or has already expired.
+    Returns strongest-first (progressive mp4 preferred over HLS).
+    """
+    if not html:
+        return []
+    found: dict[str, dict] = {}
+
+    def _add(u: str) -> None:
+        u = (u or "").strip()
+        if u.startswith("//"):
+            u = "https:" + u
+        if not u.startswith("http"):
+            return
+        # Only trust the Pinterest video CDN — never arbitrary HTML links.
+        if "pinimg.com/videos/" not in u and "pinterest.com/videos" not in u:
+            return
+        is_hls = ".m3u8" in u or "/hls/" in u.lower()
+        found.setdefault(u, {
+            "url": u,
+            "kind": "hls" if is_hls else "mp4",
+            "height": 0,
+            "score": 0 if is_hls else 10_000,
+        })
+
+    for token in re.findall(
+        r"https?:?//v\d\.pinimg\.com/videos/[A-Za-z0-9/_\.\-]+\.(?:m3u8|mp4|webm)",
+        html,
+        re.I,
+    ):
+        _add(token)
+
+    # og:video / twitter:player:stream / generic video_url meta tags.
+    for pat in (
+        r'<meta[^>]+(?:property|name)=["\'](?:og:video(?:url)?|og:video:secure_url|twitter:player:stream|video_url)["\'][^>]+content=["\']([^"\']+)["\']',
+        r'<meta[^>]+content=["\']([^"\']+)["\'][^>]+(?:property|name)=["\'](?:og:video(?:url)?|og:video:secure_url|twitter:player:stream|video_url)["\']',
+    ):
+        for m in re.findall(pat, html, re.I):
+            _add(m)
+
+    out = list(found.values())
+    out.sort(key=lambda c: (0 if c["kind"] == "mp4" else 1, -int(c["score"] or 0)))
+    return out
+
+
 def _from_html(url: str, session: requests.Session) -> dict | None:
     try:
         r = session.get(url, timeout=20, allow_redirects=True)
@@ -528,6 +585,40 @@ def _from_html(url: str, session: requests.Session) -> dict | None:
         if not chosen and by_bucket:
             chosen = next(iter(by_bucket.values()))
         image_url = og or chosen
+
+        # Video pins embed their rendition URLs directly in the page. Prefer a
+        # real video over the poster still — a video pin must never degrade to
+        # its silent cover image when the API path is unavailable.
+        video_cands = _video_urls_from_html(html)
+        if video_cands:
+            still = upgrade_to_originals(image_url) if image_url else ""
+            title = "Pinterest Video"
+            tm = re.search(r"<title>(.*?)</title>", html, re.I | re.S)
+            if tm:
+                clean = re.sub(r"\s*\|\s*Pinterest\s*$", "", tm.group(1).strip(), flags=re.I)
+                if clean:
+                    title = clean
+            return {
+                "title": title[:200],
+                "uploader": "Pinterest User",
+                "duration": "Unknown",
+                "duration_secs": 0,
+                "thumbnail": still,
+                "platform": "Pinterest",
+                "media_type": "video",
+                "qualities": [{"label": "Best", "format_id": "best", "has_audio": True}],
+                "audio_formats": [],
+                "image_url": None,
+                "album_items": [],
+                "url": url,
+                "webpage_url": final,
+                "ext": "mp4",
+                "media_id": pin_id or "",
+                "play_url": video_cands[0]["url"],
+                "download_candidates": video_cands,
+                "source": "html",
+            }
+
         if not image_url:
             return None
         image_url = upgrade_to_originals(image_url)

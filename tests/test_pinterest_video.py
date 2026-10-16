@@ -120,6 +120,50 @@ def test_video_candidates_mp4_first_and_deduped():
     assert len(urls) == 3 and len(set(urls)) == 3
 
 
+def test_extract_pin_id_supports_numeric_and_alphanumeric():
+    """Both classic numeric and modern alphanumeric pin URLs resolve their id."""
+    assert ps.extract_pin_id(
+        "https://www.pinterest.com/pin/155303887461186624/"
+    ) == "155303887461186624"
+    assert ps.extract_pin_id(
+        "https://www.pinterest.com/pin/some-title--155303887461186624/"
+    ) == "155303887461186624"
+    assert ps.extract_pin_id(
+        "https://www.pinterest.com/pin/e1_AfqPShznDOOeWDz0mnIdqC4NgqcSYvi5ZIuyisa5aZU99xtgJ2Yi/"
+    ) == "e1_AfqPShznDOOeWDz0mnIdqC4NgqcSYvi5ZIuyisa5aZU99xtgJ2Yi"
+
+
+def test_html_harvest_extracts_embedded_video_urls():
+    """Pin pages embed CDN renditions in the HTML; the HTML provider must
+    return a video (mp4 preferred) instead of bailing on a missing image."""
+
+    class FakeResp:
+        url = "https://www.pinterest.com/pin/664281013778109217/"
+        text = (
+            "<html><head><title>Origami | Pinterest</title></head><body>"
+            '<script>const a="https://v1.pinimg.com/videos/mc/hls/12/83/f0/'
+            '1283f06c1c8fa040011cd7231f33f069_360w.m3u8";</script>'
+            '<script>const b="https://v1.pinimg.com/videos/mc/720p/12/83/f0/'
+            '1283f06c1c8fa040011cd7231f33f069.mp4";</script>'
+            "</body></html>"
+        )
+
+    class FakeSession:
+        def get(self, url, timeout=20, allow_redirects=True):
+            return FakeResp()
+
+    res = ps._from_html(
+        "https://www.pinterest.com/pin/664281013778109217/", FakeSession()
+    )
+    assert res is not None
+    assert res["media_type"] == "video"
+    assert res["play_url"].endswith(".mp4")
+    assert res["title"] == "Origami"
+    cand_urls = [c["url"] for c in res.get("download_candidates") or []]
+    assert any(".m3u8" in u for u in cand_urls)
+    assert not res.get("image_url")  # video, never downgraded to its poster
+
+
 def test_pin_data_exposes_download_candidates():
     """The PinResource result carries every rendition so the engine can walk
     past a stale/silent mp4 instead of failing into the yt-dlp format error."""
