@@ -1261,30 +1261,19 @@ def _rep_screen() -> tuple[str, InlineKeyboardMarkup]:
 # ---- settings & security --------------------------------------------------------------------------
 
 def _set_screen() -> tuple[str, InlineKeyboardMarkup]:
-    from utils.maintenance import is_maintenance_mode
-    from database.pg import backend_name
-    text = (
-        "⚙️ <b>الإعدادات والأمان</b>\n"
-        "الصلاحيات والأمان والتشغيل\n\n"
-        f"👑 المالك (ثابت وغير قابل للتغيير): <code>{OWNER_ID}</code>\n"
-        f"🛡 أدمن من البيئة: <b>{len(ADMIN_IDS)}</b>"
-        f" • أدمن ممنوحون منك: <b>{len(list_extra_admins())}</b>\n"
-        f"🗄 قاعدة البيانات: <b>{escape(backend_name())}</b>\n"
-        f"🚧 وضع الصيانة: <b>{'🔴 مفعّل' if is_maintenance_mode() else '🟢 معطّل'}</b>\n"
-        f"🎯 هدف الإحالات الحالي: <b>{referral.get_effective_target()}</b>\n"
-        f"🧹 التخزين المؤقت: <b>{_fmt_bytes(_temp_dir_stats()[0])}</b>"
-    )
+    """Button-first settings hub. Every button maps to an existing, owner-gated action."""
+    text = "\u2063"
     keyboard = _kb([
-        [inline_button("🛡 الصلاحيات والأدمن", callback_data="own_set_perms"),
-         inline_button("📜 سجل الأمان", callback_data="own_audit")],
-        [inline_button("🎯 تغيير قواعد الإحالات", callback_data="own_set_target"),
-         inline_button("🧹 تنظيف الملفات", callback_data="own_set_clean")],
-        [inline_button("🚧 تفعيل الصيانة", callback_data="own_set_maint_on"),
+        [inline_button("🛡 الصلاحيات والأدمن", callback_data="own_set_perms")],
+        [inline_button("🚧 وضع الصيانة: تفعيل / إيقاف", callback_data="own_set_maint_on"),
          inline_button("🟢 إيقاف الصيانة", callback_data="own_set_maint_off")],
-        *_back(),
+        [inline_button("🎯 قواعد الإحالات والهدف", callback_data="own_set_target")],
+        [inline_button("🧹 تنظيف الملفات المؤقتة", callback_data="own_set_clean")],
+        [inline_button("📜 سجل الأمان والتغييرات", callback_data="own_audit")],
+        [inline_button("📈 حالة النظام والتقارير", callback_data="own_rep")],
+        [inline_button("🔙 مركز التحكم الرئيسي", callback_data="own_home")],
     ])
     return text, keyboard
-
 
 def _perms_screen() -> tuple[str, InlineKeyboardMarkup]:
     extra = list_extra_admins()
