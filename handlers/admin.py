@@ -779,103 +779,7 @@ async def _show_clone_instances(query) -> None:
 
 
 def _build_admin_panel(lang: str, user_id: int | None = None):
-    """Assemble the live, professional admin dashboard from real DB data."""
-    total_users = get_total_users()
-    new_today = get_new_users_today()
-    active_today = get_active_today()
-    active_24h = get_active_24h()
-    banned = get_banned_users_count()
-    downloads_today = get_downloads_today()
-    downloads_24h = get_downloads_24h()
-    downloads_week = get_downloads_week()
-    downloads_month = get_downloads_month()
-    downloads_total = get_total_downloads()
-    total_data = get_total_data_bytes()
-    cache_count = get_cache_count()
-    cache_hits = get_cache_hits()
-    platform_stats = get_downloads_by_platform()
-    top_users = get_top_users(5)
-    top_today = get_top_user_today(3)
-    engines = list_engines()
-    temp_size = _temp_dir_size()
-    audit_entries = get_admin_audit(5)
-    try:
-        version = get_ytdlp_version()
-    except Exception:
-        version = "غير متاح"
-
-    from utils.maintenance import is_maintenance_mode
-    maintenance = "🔴 مفعّل" if is_maintenance_mode() else "🟢 معطّل"
-
-    top = sorted(platform_stats.items(), key=lambda kv: kv[1], reverse=True)[:6]
-    platform_lines = "\n".join(
-        f"• <b>{escape(str(p))}</b>: {c} تحميل" for p, c in top
-    ) or "• لا توجد تحميلات مسجلة بعد."
-
-    top_user_lines = "\n".join(
-        f"• <b>{escape(str(u.get('first_name') or str(u.get('user_id'))))}</b> — {u.get('downloads', 0)} تحميل"
-        for u in top_users
-    ) or "• لا يوجد نشاط بعد."
-
-    top_today_lines = "\n".join(
-        f"• <b>{escape(str(u.get('first_name') or str(u.get('user_id'))))}</b> — {u.get('downloads', 0)} تحميل اليوم"
-        for u in top_today
-    ) or "• لا توجد تحميلات اليوم بعد."
-
-    history = get_broadcast_history(3)
-    if history:
-        last = history[0]
-        broadcast_lines = (
-            f"• آخر إذاعة: <b>{last.get('success', 0)}</b>/<b>{last.get('total', 0)}</b> نجاح"
-            f" • <code>{escape(str(last.get('created_at') or '—')[:16])}</code>"
-        )
-    else:
-        broadcast_lines = "• لا توجد إذاعات مسجلة بعد."
-
-    if audit_entries:
-        audit_lines = "\n".join(
-            f"• <b>{escape(str(e.get('action') or '—'))}</b>"
-            f" • <code>{escape(str(e.get('created_at') or '—')[:16])}</code>"
-            for e in audit_entries
-        )
-    else:
-        audit_lines = "• لا توجد أحداث مسجلة بعد."
-
-    text = (
-        "👑 <b>لوحة التحكم الرئيسية</b>\n\n"
-        "👥 <b>المستخدمون</b>\n"
-        f"• الإجمالي: <b>{total_users}</b>\n"
-        f"• جديد اليوم: <b>{new_today}</b>\n"
-        f"• نشط اليوم: <b>{active_today}</b>\n"
-        f"• نشط آخر 24 ساعة: <b>{active_24h}</b>\n"
-        f"• محظور: <b>{banned}</b>\n\n"
-        "📥 <b>التحميلات</b>\n"
-        f"• اليوم: <b>{downloads_today}</b>\n"
-        f"• آخر 24 ساعة: <b>{downloads_24h}</b>\n"
-        f"• آخر ٧ أيام: <b>{downloads_week}</b>\n"
-        f"• آخر ٣٠ يومًا: <b>{downloads_month}</b>\n"
-        f"• الإجمالي: <b>{downloads_total}</b>\n"
-        f"• حجم البيانات الكلي: <b>{_format_bytes(total_data)}</b>\n\n"
-        "💾 <b>الكاش</b>\n"
-        f"• عناصر مخزنة: <b>{cache_count}</b>\n"
-        f"• ضربات التوصيل: <b>{cache_hits}</b>\n"
-        f"• التخزين المؤقت (temp): <b>{_format_bytes(temp_size)}</b>\n\n"
-        "🧠 <b>محرك التنزيل</b>\n"
-        f"• yt-dlp: <code>{escape(version)}</code>\n"
-        f"• المحركات النشطة: <b>{len(engines)}</b>\n\n"
-        "🌍 <b>أكثر المنصات استخدامًا</b>\n"
-        f"{platform_lines}\n\n"
-        "👑 <b>الأكثر نشاطًا</b>\n"
-        f"{top_user_lines}\n\n"
-        "🏆 <b>الأكثر تحميلًا اليوم</b>\n"
-        f"{top_today_lines}\n\n"
-        "📢 <b>الإذاعة</b>\n"
-        f"{broadcast_lines}\n\n"
-        "📜 <b>سجل أمان الأدمن</b>\n"
-        f"{audit_lines}\n\n"
-        f"🚧 <b>وضع الصيانة:</b> {maintenance}"
-    )
-
+    """Build a button-first admin menu; detailed stats live in their own screens."""
     keyboard = [
         *([[
             inline_button("👑 ملخص المالك", callback_data="admin_owner_overview"),
@@ -904,8 +808,8 @@ def _build_admin_panel(lang: str, user_id: int | None = None):
             inline_button("🛟 تذاكر الدعم", callback_data="admin_support"),
         ],
     ]
+    text = "👑 <b>لوحة الإدارة</b>\n\nاختار القسم من الأزرار:"
     return text, InlineKeyboardMarkup(keyboard)
-
 
 async def _show_admin_panel(query, lang: str):
     text, keyboard = _build_admin_panel(lang, query.from_user.id)
