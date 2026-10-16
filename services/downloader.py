@@ -120,6 +120,21 @@ class EmptyFileError(Exception):
     """
 
 
+class DownloadImpossibleError(RuntimeError):
+    """Raised once EVERY download strategy for a URL has been exhausted.
+
+    Carries an ``empty_file`` flag so callers can distinguish "the host CDN
+    rejected every segment (expired token, geo-block, rate-limit)" from "no
+    downloadable stream exists". This lets the outer wrappers avoid re-running
+    an already-exhausted generic fallback and lets the audio path skip a
+    wasteful video->audio retry that would hit the SAME dead CDN.
+    """
+
+    def __init__(self, message: str, *, empty_file: bool = False):
+        super().__init__(message)
+        self.empty_file = empty_file
+
+
 def _platform(url: str) -> str:
     host = urlparse(url).netloc.lower().replace("www.", "")
     if "youtu" in host: return "YouTube"
@@ -1097,13 +1112,14 @@ async def _generic_download_video(url: str, format_id: str = "best", quality_lab
 
     if last_error:
         if _is_empty_file_error(last_error):
-            raise RuntimeError(
+            raise DownloadImpossibleError(
                 "The media stream returned zero data — the host CDN rejected or "
                 "expired the segment URLs. Try again in a moment, pick a lower "
-                "quality, or send a different link."
+                "quality, or send a different link.",
+                empty_file=True,
             )
         raise last_error
-    raise RuntimeError(
+    raise DownloadImpossibleError(
         "No downloadable video stream returned after all formats and fallbacks were exhausted"
     )
 
@@ -1197,12 +1213,15 @@ async def _generic_download_audio(url: str, progress=None, bitrate: str | None =
 
     if last_error:
         if _is_empty_file_error(last_error):
-            raise RuntimeError(
+            raise DownloadImpossibleError(
                 "The media stream returned zero data — the host CDN rejected or "
-                "expired the segment URLs. Try again in a moment or send a different link."
+                "expired the segment URLs. Try again in a moment or send a different link.",
+                empty_file=True,
             )
         raise last_error
-    raise RuntimeError("No downloadable audio stream returned after all formats and fallbacks were exhausted")
+    raise DownloadImpossibleError(
+        "No downloadable audio stream returned after all formats and fallbacks were exhausted"
+    )
 
 
 def _normalize_tiktok_info(raw: dict, original_url: str) -> dict:
@@ -1387,6 +1406,11 @@ async def download_video(url: str, format_id: str = "best", quality_label: str =
         raise
     except DownloadCancelledError:
         raise
+    except DownloadImpossibleError:
+        # The engine already walked its direct candidates AND exhausted the
+        # generic fallback. Re-running it here would double the wait on a dead
+        # URL — surface the clear result instead.
+        raise
     except Exception as exc:
         logger.warning("Engine video download failed (%s) for %s: %s", getattr(engine, "name", "unknown"), url[:120], exc)
         return await _generic_download_video(url, format_id, quality_label, progress, None)
@@ -1397,6 +1421,7 @@ async def download_audio(url: str, progress=None, bitrate: str | None = None) ->
 
     requested = _valid_audio_bitrate(bitrate or AUDIO_BITRATE)
     last_error: Exception | None = None
+    generic_exhausted = False
 
     # Platform audio overrides only run for default-bitrate requests; explicit
     # high-bitrate requests (e.g. 320) go straight to the reliable yt-dlp/ffmpeg
@@ -1413,23 +1438,40 @@ async def download_audio(url: str, progress=None, bitrate: str | None = None) ->
             raise
         except DownloadCancelledError:
             raise
+        except DownloadImpossibleError as exc:
+            # The engine override already exhausted the generic audio path
+            # (e.g. SoundCloud's override IS `_generic_download_audio`). Never
+            # rerun it. An empty CDN rejection means the video->audio fallback
+            # below would hit the SAME dead CDN, so surface it immediately.
+            generic_exhausted = True
+            last_error = exc
+            if exc.empty_file:
+                raise
+            logger.warning("Engine audio download exhausted (%s) for %s: %s", getattr(engine, "name", "unknown"), url[:120], exc)
         except Exception as exc:
             if last_error is None:
                 last_error = exc
             logger.warning("Engine audio download failed (%s) for %s: %s", getattr(engine, "name", "unknown"), url[:120], exc)
 
-    try:
-        path = await _generic_download_audio(url, progress, requested)
-        if path:
-            return path
-    except FileTooLargeError:
-        raise
-    except DownloadCancelledError:
-        raise
-    except Exception as exc:
-        if last_error is None:
+    if not generic_exhausted:
+        try:
+            path = await _generic_download_audio(url, progress, requested)
+            if path:
+                return path
+        except FileTooLargeError:
+            raise
+        except DownloadCancelledError:
+            raise
+        except DownloadImpossibleError as exc:
             last_error = exc
-        logger.warning("Generic audio download failed for %s: %s", url[:120], exc)
+            if exc.empty_file:
+                # A dead CDN is not fixable by the video path — raise now.
+                raise
+            logger.warning("Generic audio download exhausted for %s: %s", url[:120], exc)
+        except Exception as exc:
+            if last_error is None:
+                last_error = exc
+            logger.warning("Generic audio download failed for %s: %s", url[:120], exc)
 
     # Universal last resort: download the verified video path, then transcode its
     # audio track locally. This closes the gap for platforms where yt-dlp cannot
@@ -1446,6 +1488,14 @@ async def download_audio(url: str, progress=None, bitrate: str | None = None) ->
         return audio_path
     except FileTooLargeError:
         raise
+    except DownloadCancelledError:
+        raise
+    except DownloadImpossibleError as exc:
+        if exc.empty_file:
+            raise
+        if last_error is None:
+            last_error = exc
+        logger.warning("Universal video->audio fallback exhausted for %s: %s", url[:120], exc)
     except Exception as exc:
         if last_error is None:
             last_error = exc
@@ -1453,7 +1503,7 @@ async def download_audio(url: str, progress=None, bitrate: str | None = None) ->
 
     if last_error:
         raise last_error
-    raise RuntimeError("No downloadable audio stream returned after all fallbacks were exhausted")
+    raise DownloadImpossibleError("No downloadable audio stream returned after all fallbacks were exhausted")
 
 
 # Compatibility aliases used by platform engines.

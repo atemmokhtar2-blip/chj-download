@@ -414,5 +414,136 @@ def test_outer_download_video_surfaces_friendly_error_when_engine_swallows_all(m
     assert "zero data" in str(exc_info.value)
 
 
+# --------------------------------------------------------------------------- #
+# Outer-wrapper control flow: no double generic runs, no wasted video fallbacks.
+# --------------------------------------------------------------------------- #
+
+def test_outer_download_video_does_not_rerun_generic_after_engine_exhaustion(monkeypatch):
+    """When an engine already exhausted its internal generic fallback, the
+    public downloader must NOT rerun generic — that doubles the wait on a dead
+    URL for the exact same result."""
+    generic_calls: list[str] = []
+
+    class ExhaustedEngine:
+        name = "ExhaustedEngine"
+
+        async def download_video(self, *args, **kwargs):
+            raise downloader.DownloadImpossibleError(ZERO_DATA, empty_file=True)
+
+    async def fake_generic(*args, **kwargs):
+        generic_calls.append("generic")
+        raise downloader.DownloadImpossibleError(ZERO_DATA, empty_file=True)
+
+    monkeypatch.setattr(downloader, "_select_engine", lambda url: ExhaustedEngine())
+    monkeypatch.setattr(downloader, "_generic_download_video", fake_generic)
+
+    with pytest.raises(downloader.DownloadImpossibleError) as exc_info:
+        asyncio.run(
+            downloader.download_video("https://x.com/user/status/1", "best", "best")
+        )
+    assert exc_info.value.empty_file is True
+    assert generic_calls == []
+
+
+def test_download_audio_empty_cdn_skips_video_fallback(monkeypatch):
+    """A CDN that rejected every audio fragment also rejects video fragments —
+    the expensive video->audio fallback must not run."""
+    from services.engines.base import PlatformEngine
+
+    video_calls: list[str] = []
+
+    async def fake_generic_audio(*args, **kwargs):
+        raise downloader.DownloadImpossibleError(ZERO_DATA, empty_file=True)
+
+    async def fake_download_video(*args, **kwargs):
+        video_calls.append("video")
+        raise AssertionError("video fallback must not run for an empty CDN")
+
+    monkeypatch.setattr(downloader, "_select_engine", lambda url: PlatformEngine())
+    monkeypatch.setattr(downloader, "_generic_download_audio", fake_generic_audio)
+    monkeypatch.setattr(downloader, "download_video", fake_download_video)
+
+    with pytest.raises(downloader.DownloadImpossibleError) as exc_info:
+        asyncio.run(downloader.download_audio("https://soundcloud.com/x/y"))
+    assert exc_info.value.empty_file is True
+    assert video_calls == []
+
+
+def test_download_audio_dedups_generic_after_engine_exhaustion(monkeypatch):
+    """When an engine override already exhausted the generic audio path, the
+    public wrapper must not rerun generic, but the non-empty exhaustion still
+    deserves the universal video->audio attempt."""
+    from services.engines.base import PlatformEngine
+
+    class ExhaustedAudioEngine(PlatformEngine):
+        name = "ExhaustedAudioEngine"
+
+        async def download_audio(self, *args, **kwargs):
+            raise downloader.DownloadImpossibleError("no audio formats", empty_file=False)
+
+    generic_calls: list[str] = []
+    video_calls: list[str] = []
+
+    async def fake_generic_audio(*args, **kwargs):
+        generic_calls.append("generic")
+        raise downloader.DownloadImpossibleError("no audio formats", empty_file=False)
+
+    async def fake_download_video(*args, **kwargs):
+        video_calls.append("video")
+        raise downloader.DownloadImpossibleError("no video", empty_file=False)
+
+    monkeypatch.setattr(downloader, "_select_engine", lambda url: ExhaustedAudioEngine())
+    monkeypatch.setattr(downloader, "_generic_download_audio", fake_generic_audio)
+    monkeypatch.setattr(downloader, "download_video", fake_download_video)
+
+    with pytest.raises(downloader.DownloadImpossibleError):
+        asyncio.run(downloader.download_audio("https://soundcloud.com/x/y"))
+    assert generic_calls == []
+    assert video_calls == ["video"]
+
+
+def test_download_audio_cancel_propagates_from_video_fallback(monkeypatch):
+    """🛑 pressed during the final video->audio fallback must abort immediately,
+    not get swallowed and replaced by the earlier generic error."""
+    from services.engines.base import PlatformEngine
+
+    async def fake_generic_audio(*args, **kwargs):
+        raise downloader.DownloadImpossibleError("no audio formats", empty_file=False)
+
+    async def fake_download_video(*args, **kwargs):
+        raise DownloadCancelledError()
+
+    monkeypatch.setattr(downloader, "_select_engine", lambda url: PlatformEngine())
+    monkeypatch.setattr(downloader, "_generic_download_audio", fake_generic_audio)
+    monkeypatch.setattr(downloader, "download_video", fake_download_video)
+
+    with pytest.raises(DownloadCancelledError):
+        asyncio.run(downloader.download_audio("https://soundcloud.com/x/y"))
+
+
+def test_download_audio_video_fallback_recovers_audio_after_exhaustion(monkeypatch):
+    """For a platform with no audio-only format, the video->audio extraction must
+    still run and deliver the recovered audio."""
+    from services.engines.base import PlatformEngine
+
+    async def fake_generic_audio(*args, **kwargs):
+        raise downloader.DownloadImpossibleError("no audio formats", empty_file=False)
+
+    async def fake_download_video(*args, **kwargs):
+        return "/tmp/fake-video.mp4"
+
+    async def fake_run_sync(fn, *args):
+        return "/tmp/fake-audio.mp3"
+
+    monkeypatch.setattr(downloader, "_select_engine", lambda url: PlatformEngine())
+    monkeypatch.setattr(downloader, "_generic_download_audio", fake_generic_audio)
+    monkeypatch.setattr(downloader, "download_video", fake_download_video)
+    monkeypatch.setattr(downloader, "_run_sync", fake_run_sync)
+    monkeypatch.setattr(downloader, "_safe_remove", lambda path: None)
+
+    path = asyncio.run(downloader.download_audio("https://soundcloud.com/x/y"))
+    assert path == "/tmp/fake-audio.mp3"
+
+
 if __name__ == "__main__":
     print("engine cdn-rejection full-coverage tests import OK")
