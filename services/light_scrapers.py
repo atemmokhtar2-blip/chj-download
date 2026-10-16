@@ -8,6 +8,11 @@ These platforms previously relied entirely on the catch-all yt-dlp engine
   2. Streamable -> api.streamable.com + HTML og:video fallback
   3. Imgur      -> i.imgur.com direct mp4 (video/GIF posts) + oEmbed metadata
   4. Coub       -> coub.com/api/v2/coubs/{id} JSON (html5 mp4 file_versions)
+  5. Threads    -> /embed player page (og:video + JSON-LD + script CDN mining)
+  6. Embed      -> browser-TLS impersonation + og/JSON-LD/<video>/<source>/
+                   <script> mining + oEmbed auto-discovery (used by Snapchat,
+                   Telegram, Likee, Kwai, Twitch, Bilibili, VK, Tumblr,
+                   Odysee, Niconico, Douyin, Xiaohongshu and others)
 
 Every resolved URL still passes the central audio guard
 (downloader._prepare_video_for_delivery) before delivery, so a silent direct
@@ -17,7 +22,10 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
+from html import unescape as _html_unescape
+from http import cookiejar as _cookiejar
 from typing import Any
 from urllib.parse import quote, urlparse
 
@@ -29,12 +37,96 @@ _UA = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
     "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131 Safari/537.36"
 )
+_MOBILE_UA = (
+    "Mozilla/5.0 (iPhone; CPU iPhone OS 17_4 like Mac OS X) "
+    "AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Mobile/15E148 Safari/604.1"
+)
+
+
+def _load_cookies() -> requests.cookies.RequestsCookieJar:
+    """Load the same Netscape cookies.txt that yt-dlp uses.
+
+    This lets the lightweight resolvers unlock login-walled media (Instagram,
+    Facebook, YouTube, X, …) exactly like the heavy downloader path, instead of
+    being permanently anonymous.
+    """
+    jar = requests.cookies.RequestsCookieJar()
+    path = None
+    try:
+        from config.settings import YTDLP_COOKIES_FILE
+        path = YTDLP_COOKIES_FILE
+    except Exception:
+        pass
+    path = path or "cookies.txt"
+    if not path or not os.path.exists(path):
+        return jar
+    try:
+        cj = _cookiejar.MozillaCookieJar()
+        cj.load(path, ignore_discard=True, ignore_expires=True)
+        jar.update(cj)
+    except Exception as exc:
+        logger.debug("Cookie loading failed for %s: %s", path, exc)
+    return jar
 
 
 def _session() -> requests.Session:
     s = requests.Session()
-    s.headers.update({"User-Agent": _UA, "Accept-Language": "en-US,en;q=0.9"})
+    s.headers.update({"User-Agent": _UA, "Accept-Language": "en-US,en;q=0.9,ar;q=0.8"})
+    try:
+        s.cookies.update(_load_cookies())
+    except Exception:
+        pass
     return s
+
+
+def _cookie_dict() -> dict:
+    try:
+        return {c.name: c.value for c in _load_cookies()}
+    except Exception:
+        return {}
+
+
+def _impersonate_get(
+    url: str,
+    headers: dict | None = None,
+    timeout: int = 20,
+    allow_redirects: bool = True,
+):
+    """Browser-grade GET with curl_cffi TLS impersonation.
+
+    Many modern embeds (Threads, Snapchat, Likee, Kwai, Xiaohongshu) block or
+    serve empty pages to plain-requests TLS fingerprints. curl_cffi impersonates
+    a real Chrome handshake (JA3/HTTP2), which is the same world-class technique
+    the production Twitter resolver already uses. Falls back to a cookie-carrying
+    requests session when curl_cffi is unavailable.
+    """
+    base = {
+        "User-Agent": _UA,
+        "Accept": "text/html,application/xhtml+xml,application/json;q=0.9,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.9,ar;q=0.8",
+        "Upgrade-Insecure-Requests": "1",
+        "Sec-Fetch-Dest": "document",
+        "Sec-Fetch-Mode": "navigate",
+        "Sec-Fetch-Site": "none",
+        "Sec-Fetch-User": "?1",
+    }
+    if headers:
+        base.update(headers)
+    try:
+        from curl_cffi import requests as creq
+
+        return creq.get(
+            url,
+            headers=base,
+            cookies=_cookie_dict() or None,
+            impersonate="chrome",
+            timeout=timeout,
+            allow_redirects=allow_redirects,
+        )
+    except Exception:
+        pass
+    s = _session()
+    return s.get(url, headers=base, timeout=timeout, allow_redirects=allow_redirects)
 
 
 def _fmt_duration(seconds) -> str:
@@ -452,6 +544,148 @@ def _jsonld_video_urls(html: str) -> list[str]:
     return urls
 
 
+_MEDIA_URL_RE = re.compile(
+    r"https?://[A-Za-z0-9._~:/?#\[\]@!$&'()*+,;=%-]+?\.(?:mp4|m3u8|webm|m4v|mov)"
+    r"(?:[?#][A-Za-z0-9._~:/?#\[\]@!$&'()*+,;=%-]*)?",
+    re.I,
+)
+
+
+def _unescape_url(value: str | None) -> str:
+    if not value:
+        return ""
+    try:
+        value = _html_unescape(str(value))
+    except Exception:
+        pass
+    return (
+        value.replace("\\u0026", "&")
+        .replace("\\/", "/")
+        .strip()
+    )
+
+
+def _video_tag_urls(html: str) -> list[str]:
+    """Extract src attributes from HTML5 <video> and <source> elements.
+
+    A growing number of platforms (and oEmbed html snippets) publish their
+    direct player file as a plain HTML5 tag instead of og:video meta.
+    """
+    if not html:
+        return []
+    out: list[str] = []
+    for m in re.finditer(
+        r"<video\b[^>]*?\bsrc\s*=\s*[\"']([^\"']+)[\"']", html, re.S | re.I
+    ):
+        out.append(_unescape_url(m.group(1)))
+    for m in re.finditer(
+        r"<(?:video|source)\b[^>]*?\bsrc\s*=\s*[\"']([^\"']+)[\"']", html, re.S | re.I
+    ):
+        out.append(_unescape_url(m.group(1)))
+    return out
+
+
+def _script_media_urls(html: str) -> list[str]:
+    """Mine every direct media URL buried inside inline <script> JSON.
+
+    Modern pages rarely expose og:video anymore — the player state (and the CDN
+    URLs) live inside JSON blobs that are invisible to simple meta parsers.
+    """
+    if not html:
+        return []
+    out: list[str] = []
+    for block in re.finditer(r"<script[^>]*>(.*?)</script>", html, re.S | re.I):
+        raw = block.group(1) or ""
+        if not raw:
+            continue
+        try:
+            raw = _html_unescape(raw)
+        except Exception:
+            pass
+        # JSON-in-JS commonly escapes literal slashes (https:\/\/cdn...) and
+        # ampersands (\u0026). Normalize both before URL matching so the miner
+        # sees the real CDN URL instead of a backslash-broken string.
+        raw = raw.replace("\\u0026", "&").replace("\\/", "/")
+        for m in _MEDIA_URL_RE.finditer(raw):
+            out.append(m.group(0))
+    return out
+
+
+def _collect_media_urls_from_html(html: str) -> list[str]:
+    """Every direct media URL detectable from an HTML fragment."""
+    if not html:
+        return []
+    out: list[str] = []
+    for value in _video_tag_urls(html) + _script_media_urls(html):
+        if value not in out:
+            out.append(value)
+    for m in _MEDIA_URL_RE.finditer(html):
+        value = m.group(0)
+        if value not in out:
+            out.append(value)
+    return out
+
+
+_OEMBED_LINK_RE = re.compile(
+    r'<link[^>]+type=["\']application/(?:json|xml)\+oembed["\'][^>]+href=["\']([^"\']+)',
+    re.I,
+)
+_OEMBED_LINK_RE_ALT = re.compile(
+    r'<link[^>]+href=["\']([^"\']+)["\'][^>]+type=["\']application/(?:json|xml)\+oembed["\']',
+    re.I,
+)
+
+
+def _oembed_endpoints(html: str) -> list[str]:
+    if not html:
+        return []
+    found: list[str] = []
+    for pat in (_OEMBED_LINK_RE, _OEMBED_LINK_RE_ALT):
+        for m in pat.finditer(html):
+            href = _unescape_url(m.group(1))
+            if href.startswith("http") and href not in found:
+                found.append(href)
+    return found[:4]
+
+
+def _oembed_media_urls(endpoints: list[str], extra_headers: dict | None = None) -> list[str]:
+    """Auto-discovered oEmbed endpoints frequently contain a ready-to-stream URL.
+
+    The page links to the oEmbed endpoint in its <head>; the endpoint returns
+    JSON (often with an html block or a direct url/video_url field) that points
+    at the exact media file without any login or token dance.
+    """
+    out: list[str] = []
+    headers = {"Accept": "application/json,text/xml,*/*;q=0.9"}
+    if extra_headers:
+        headers.update(extra_headers)
+    for endpoint in endpoints:
+        try:
+            r = _impersonate_get(endpoint, headers=headers, timeout=15)
+            if int(getattr(r, "status_code", 0) or 0) != 200:
+                continue
+            raw = getattr(r, "text", "") or ""
+            if not raw:
+                continue
+            stripped = raw.lstrip()
+            if stripped.startswith(("<", "<?xml")):
+                out.extend(_MEDIA_URL_RE.findall(raw))
+                continue
+            payload = json.loads(raw)
+            if not isinstance(payload, dict):
+                continue
+            html_block = payload.get("html")
+            if html_block:
+                out.extend(_collect_media_urls_from_html(str(html_block)))
+            for key in ("url", "video_url", "thumbnail_url", "provider_url"):
+                value = payload.get(key)
+                if isinstance(value, str) and value.startswith("http"):
+                    out.append(value)
+        except Exception as exc:
+            logger.debug("oEmbed fetch failed for %s: %s", endpoint, exc)
+    return out
+
+
 def _rank_candidate(u: str) -> int:
     low = u.lower()
     score = 0
@@ -475,33 +709,58 @@ def _rank_candidate(u: str) -> int:
 
 
 def resolve_embed_media(url: str, extra_headers: dict | None = None) -> dict[str, Any] | None:
-    """Generic direct-media resolver for pages exposing player metadata.
+    """World-class generic direct-media resolver for embed/publish pages.
 
-    Works across platforms whose pages publish og:video / twitter:player:stream
-    meta tags or JSON-LD contentUrl. The central audio guard still runs later,
-    so a silent direct file is rejected and engines fall back to yt-dlp.
+    Layered extraction instead of the old meta-only scan:
+
+      1. curl_cffi Chrome TLS impersonation fetch (bypasses plain-requests bot
+         fingerprints), with a mobile-UA retry when the desktop profile is
+         blocked or served an empty page.
+      2. og:video / twitter:player:stream meta tags.
+      3. JSON-LD VideoObject (contentUrl / embedUrl).
+      4. HTML5 <video> / <source> src attributes.
+      5. Inline <script> JSON mining for direct CDN mp4/m3u8/webm URLs.
+      6. oEmbed auto-discovery via <link> rel=alternate, then fetch the
+         endpoint and mine its html block or direct url fields.
+
+    Every candidate still passes the central audio guard later, so a silent
+    direct file is always rejected and the engine falls back to the robust
+    yt-dlp merge path.
     """
-    s = _session()
     headers = {
         "Accept": "text/html,application/xhtml+xml,application/json;q=0.9,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.9,ar;q=0.8",
     }
     if extra_headers:
         headers.update(extra_headers)
-    try:
-        r = s.get(url, timeout=20, allow_redirects=True)
-        if r.status_code != 200:
-            return None
-        html = r.text or ""
-        resolved_url = r.url or url
-    except Exception as exc:
-        logger.debug("Embed meta fetch failed for %s: %s", url, exc)
+
+    html = ""
+    resolved_url = url
+    for profile in ("desktop", "mobile"):
+        try:
+            r = _impersonate_get(
+                url,
+                headers={**headers, "User-Agent": _UA if profile == "desktop" else _MOBILE_UA},
+                timeout=20,
+                allow_redirects=True,
+            )
+            status = int(getattr(r, "status_code", 0) or 0)
+            if status != 200:
+                continue
+            html = getattr(r, "text", "") or ""
+            resolved_url = getattr(r, "url", url) or url
+            if html:
+                break
+        except Exception as exc:
+            logger.debug("Embed meta fetch failed (%s) for %s: %s", profile, url, exc)
+
+    if not html:
         return None
 
     candidates: list[str] = []
 
     def add(value: str | None) -> None:
-        value = (value or "").strip()
-        value = value.replace("&amp;", "&").replace("\\u0026", "&").replace("\\/", "/")
+        value = _unescape_url(value)
         if value.startswith("http") and _VIDEO_FILE_RE.search(value) and value not in candidates:
             candidates.append(value)
 
@@ -510,6 +769,17 @@ def resolve_embed_media(url: str, extra_headers: dict | None = None) -> dict[str
 
     for value in _jsonld_video_urls(html):
         add(value)
+
+    for value in _video_tag_urls(html):
+        add(value)
+
+    for value in _script_media_urls(html):
+        add(value)
+
+    oembed_endpoints = _oembed_endpoints(html)
+    if oembed_endpoints:
+        for value in _oembed_media_urls(oembed_endpoints, extra_headers):
+            add(value)
 
     if not candidates:
         return None
@@ -534,7 +804,89 @@ def resolve_embed_media(url: str, extra_headers: dict | None = None) -> dict[str
         thumbnail=thumbnail,
         qualities=None,
         candidates=candidates,
-        engine_profile="embed-og-video-jsonld",
+        engine_profile="browser-impersonation+og-jsonld-video-tag-script-oembed",
+    )
+
+
+# --------------------------------------------------------------------------- #
+# Threads
+# --------------------------------------------------------------------------- #
+_THREADS_POST_RE = re.compile(r"threads\.net/@([^/?#]+)/post/([A-Za-z0-9_-]+)", re.I)
+
+
+def resolve_threads(url: str) -> dict[str, Any] | None:
+    """Resolve a Threads post through its public /embed player page.
+
+    Threads' main post page is login-walled and yt-dlp dropped Threads support,
+    so without this resolver the engine had no real path. The /embed endpoint is
+    intentionally public and still publishes og:video / JSON-LD / inline player
+    JSON with the actual CDN mp4 — the same world-class embed technique used by
+    every web preview scraper.
+    """
+    m = _THREADS_POST_RE.search(url or "")
+    if not m:
+        return None
+    user, code = m.group(1), m.group(2)
+    embed_url = f"https://www.threads.net/@{user}/post/{code}/embed"
+
+    headers = {
+        "Referer": "https://www.threads.net/",
+        "Accept": "text/html,application/xhtml+xml,application/json;q=0.9,*/*;q=0.8",
+    }
+    html = ""
+    for profile in ("desktop", "mobile"):
+        try:
+            r = _impersonate_get(
+                embed_url,
+                headers={**headers, "User-Agent": _UA if profile == "desktop" else _MOBILE_UA},
+                timeout=20,
+                allow_redirects=True,
+            )
+            if int(getattr(r, "status_code", 0) or 0) != 200:
+                continue
+            html = getattr(r, "text", "") or ""
+            if html:
+                break
+        except Exception as exc:
+            logger.debug("Threads embed fetch failed (%s) for %s: %s", profile, url, exc)
+
+    if not html:
+        return None
+
+    candidates: list[str] = []
+
+    def add(value: str | None) -> None:
+        value = _unescape_url(value)
+        if value.startswith("http") and _VIDEO_FILE_RE.search(value) and value not in candidates:
+            candidates.append(value)
+
+    for key in ("og:video:secure_url", "og:video:url", "og:video", "twitter:player:stream"):
+        add(_meta_any(html, key))
+    for value in _jsonld_video_urls(html):
+        add(value)
+    for value in _script_media_urls(html):
+        add(value)
+    for value in _video_tag_urls(html):
+        add(value)
+
+    if not candidates:
+        return None
+
+    candidates = sorted(candidates, key=_rank_candidate, reverse=True)[:12]
+    title = _meta_any(html, "og:title")
+    thumbnail = _meta_any(html, "og:image")
+
+    return _video_payload(
+        url=url,
+        media_id=code,
+        title=title,
+        uploader=f"@{user}",
+        duration=None,
+        platform="Threads",
+        thumbnail=thumbnail,
+        qualities=None,
+        candidates=candidates,
+        engine_profile="threads-embed-player+browser-impersonation",
     )
 
 

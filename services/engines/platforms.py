@@ -937,6 +937,8 @@ class ThreadsEngine(EmbedFallbackEngine):
     name = "ThreadsEnginePro"
     platform_label = "Threads"
     domains = ("threads.net", "www.threads.net")
+    resolver_name = "resolve_threads"
+    embed_headers = {"Referer": "https://www.threads.net/"}
 
 
 class VimeoEngine(PlatformEngine):
