@@ -28,7 +28,7 @@ _EMOJI_RE = re.compile(
 
 def normalize_button_text(value: str) -> str:
     """Comparison-only form of a label: emoji removed, whitespace collapsed."""
-    return re.sub(r"\\s{2,}", " ", _EMOJI_RE.sub("", str(value or ""))).strip()
+    return re.sub(r"\s{2,}", " ", _EMOJI_RE.sub("", str(value or ""))).strip()
 
 
 def strip_button_emoji(value: str) -> str:
