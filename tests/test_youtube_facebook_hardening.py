@@ -6,7 +6,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from services.youtube_scraper import _safe_selector
 from services.facebook_scraper import _from_ytdlp
-from services.downloader import _youtube_client_profiles
+from services.downloader import (
+    _youtube_client_profiles,
+    _force_page_download,
+    _video_format_candidates,
+)
 from services.tiktok_scraper import resolve_tiktok, _build_download_candidates, _from_item
 
 
@@ -99,6 +103,27 @@ def test_facebook_ytdlp_marks_video_only_for_page_fallback() -> None:
     assert result["prefer_page_download"] is True
 
 
+def test_facebook_hosts_force_page_download() -> None:
+    for url in (
+        "https://www.facebook.com/watch/?v=123",
+        "https://fb.watch/abc123/",
+        "https://www.fb.com/video",
+        "https://m.facebook.com/story.php",
+        "https://mbasic.facebook.com/watch/?v=123",
+    ):
+        assert _force_page_download(url) is True, url
+    assert _force_page_download("https://www.youtube.com/watch?v=abc") is False
+    assert _force_page_download("https://www.tiktok.com/@u/video/123") is False
+    assert _force_page_download("") is False
+
+
+def test_hd_quality_label_maps_to_audio_merge() -> None:
+    candidates = _video_format_candidates("hd")
+    assert candidates, "synthetic 'hd' label must resolve to real merge selectors"
+    assert "+bestaudio" in candidates[0]
+    assert "format_id=hd" not in candidates[0]
+
+
 def test_tiktok_from_item_extracts_multiple_video_urls() -> None:
     item = {
         "desc": "clip",
@@ -162,6 +187,8 @@ if __name__ == "__main__":
     test_youtube_uses_multi_surface_client_profiles()
     test_facebook_ytdlp_prefers_progressive_with_audio()
     test_facebook_ytdlp_marks_video_only_for_page_fallback()
+    test_facebook_hosts_force_page_download()
+    test_hd_quality_label_maps_to_audio_merge()
     test_tiktok_from_item_extracts_multiple_video_urls()
     test_tiktok_download_matrix_includes_alternate_urls()
     test_tiktok_resolver_keeps_ranked_download_candidates()

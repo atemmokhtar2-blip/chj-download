@@ -483,55 +483,28 @@ class FacebookEngine(PlatformEngine):
         import asyncio
 
         loop = asyncio.get_running_loop()
-        candidate = play_url
-        prefer_page_download = False
-        direct_has_audio = False
-        normalized_url = url
-        if not candidate:
-            try:
-                meta = await loop.run_in_executor(get_executor(), scrape_facebook, url)
-                if meta:
-                    normalized_url = meta.get("webpage_url") or meta.get("url") or url
-                    prefer_page_download = bool(meta.get("prefer_page_download"))
-                    direct_has_audio = bool(meta.get("direct_has_audio"))
-                    candidate = meta.get("hd_url") if format_id == "hd" else meta.get("play_url")
-                    candidate = candidate or meta.get("play_url")
-                    download_logger.info(
-                        "FacebookEnginePro selected source=%s score=%s direct_has_audio=%s prefer_page=%s",
-                        meta.get("source"), meta.get("provider_score"), direct_has_audio, prefer_page_download,
-                    )
-            except Exception as exc:
-                error_logger.error("FacebookEnginePro resolve before download failed: %s", exc)
 
-        # Facebook splits video and audio into separate DASH streams. A direct
-        # CDN URL is trusted only when a provider explicitly verified that it
-        # carries audio; otherwise force the yt-dlp page download so audio gets
-        # merged instead of delivering a silent video.
-        # Facebook splits video/audio into separate DASH streams. A direct CDN
-        # URL is trusted ONLY when a provider explicitly verified audio on that
-        # exact stream (yt-dlp progressive). HTML/OG URLs are video-only and
-        # must always go through the yt-dlp page download so audio is merged.
-        if candidate and direct_has_audio is True and prefer_page_download is not True:
-            try:
-                direct_path = await loop.run_in_executor(
-                    get_executor(),
-                    downloader._download_direct_sync,
-                    candidate,
-                    {"Referer": "https://www.facebook.com/"},
-                    60,
-                    progress_callback,
-                    loop,
-                    "xdl-facebook",
+        # Facebook stores video and audio as SEPARATE DASH streams:
+        # browser_native_hd_url / playable_url_quality_hd / og:video are
+        # VIDEO-ONLY. Radical fix: NEVER download a direct Facebook CDN URL in
+        # this engine. Everything goes through yt-dlp on the PAGE URL so it can
+        # merge bestvideo+bestaudio, and the central audio guard
+        # (_prepare_video_for_delivery) verifies the merged file. No silent
+        # video can leave this path — if the merge produces no audio the guard
+        # rejects it and the next page variant is tried.
+        normalized_url = url
+        try:
+            meta = await loop.run_in_executor(get_executor(), scrape_facebook, url)
+            if meta:
+                normalized_url = meta.get("webpage_url") or meta.get("url") or url
+                download_logger.info(
+                    "FacebookEnginePro page-merge path source=%s score=%s direct_has_audio=%s prefer_page=%s (direct CDN skipped by design)",
+                    meta.get("source"), meta.get("provider_score"),
+                    bool(meta.get("direct_has_audio")), bool(meta.get("prefer_page_download")),
                 )
-                direct_path = downloader._prepare_video_for_delivery(direct_path, source="direct-cdn")
-                if direct_path:
-                    return direct_path
-            except downloader.FileTooLargeError:
-                raise
-            except downloader.DownloadCancelledError:
-                raise
-            except Exception as exc:
-                error_logger.error("FacebookEnginePro direct download failed: %s", exc)
+        except Exception as exc:
+            error_logger.error(
+                "FacebookEnginePro scrape before download failed (continuing with page merge): %s", exc)
 
         for page_url in dict.fromkeys([
             normalized_url,
@@ -539,6 +512,8 @@ class FacebookEngine(PlatformEngine):
             url.replace("://www.facebook.com", "://m.facebook.com"),
             url.replace("://www.facebook.com", "://mbasic.facebook.com"),
         ]):
+            if not page_url:
+                continue
             try:
                 path = await downloader._generic_download_video(page_url, format_id, quality_label, progress_callback)
                 if path:

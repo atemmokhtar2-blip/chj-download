@@ -1040,7 +1040,11 @@ def _video_format_candidates(format_id: str = "best") -> list[str]:
         "/best[acodec!=none][vcodec!=none]"
         "/bestvideo*+bestaudio*/best*"
     )
-    if requested in {"best", "best_quality"}:
+    # Synthetic quality labels ("hd" / "sd" / "high") used by single-file
+    # platforms (Facebook/Twitter/Reddit/Pinterest) must map to a REAL
+    # bestvideo+bestaudio merge, not to a format id like "hd" that doesn't
+    # exist in yt-dlp (which would burn the first fallback).
+    if requested in {"best", "best_quality", "hd", "high", "sd"}:
         return [merged_best, merged_720, safe_small]
     return [
         f"{requested}+bestaudio[ext=m4a]/{requested}+bestaudio/bestvideo[format_id={requested}]+bestaudio",
@@ -1059,9 +1063,7 @@ async def _generic_download_video(url: str, format_id: str = "best", quality_lab
     cancel_check = getattr(progress, "cancel_check", None)
     host = urlparse(url).netloc.lower()
     formats = _video_format_candidates(format_id)
-    _force_page = any(
-        host == h or host.endswith("." + h) for h in _FORCE_PAGE_DOWNLOAD_HOSTS
-    )
+    _force_page = _force_page_download(url)
     targets: list[tuple[str, str]] = []
     if not _force_page and play_url and play_url != url:
         # Direct CDN URLs are often video-only. Try them first for speed, but if
