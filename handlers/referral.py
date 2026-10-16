@@ -59,32 +59,74 @@ _SUPPORT_SUBJECT_BODY = {
     "other": "طلب دعم فني عام.",
 }
 
-_FAQ_TEXT = (
-    "❓ <b>الأسئلة الشائعة</b>\\n\\n"
-    "🔑 <b>1) إيه أعمله لو التوكن مرفوض؟</b>\\n"
-    "• انسخ التوكن كاملًا من @BotFather من غير مسافات زيادة.\\n"
-    "• لو ظهر إن التوكن مربوط بالفعل، أنشئ بوتًا جديدًا باستخدام /newbot واربط توكنه.\\n"
-    "• لو التوكن صحيح لكن التحقق فشل بسبب الاتصال، انتظر دقيقة وجرّب مرة أخرى.\\n"
-    "• لو استمرت المشكلة، افتح تذكرة من «🛟 الدعم الفني».\\n\\n"
-    "🤖 <b>2) نسختي الخاصة مش شغالة، أعمل إيه؟</b>\\n"
-    "• اضغط «🔄 تحديث حالة نسختي» لإعادة فحص الحالة.\\n"
-    "• تأكد إن التوكن ما اتلغاش أو اتعمل له /revoke من @BotFather.\\n"
-    "• لو الحالة ما اتغيرتش، افتح تذكرة دعم واذكر الرسالة اللي ظهرت لك.\\n\\n"
-    "👥 <b>3) إمتى الإحالة تتحسب مؤهلة؟</b>\\n"
-    "تتحسب الإحالة بعد ما الشخص يبدأ البوت من رابطك ويكمل أول تحميل ناجح، أو يستخدم البوت في يومين مختلفين.\\n"
-    "الحساب الواحد يتحسب مرة واحدة فقط، والحسابات المحظورة لا تُحتسب.\\n\\n"
-    "🎯 <b>4) ليه عدد المؤهلين ما زادش؟</b>\\n"
-    "مجرد فتح رابط الدعوة أو بدء البوت مش كفاية وحده؛ لازم يكتمل أحد شرطي التأهيل بالأعلى. وقد تظهر الإحالة «⏳ بانتظار النشاط» إلى أن تكمل الشرط، أو «🚩 تحت المراجعة» لو رُصد نشاط يحتاج مراجعة.\\n\\n"
-    "🔗 <b>5) أجيب رابط الدعوة منين؟</b>\\n"
-    "افتح صفحة «🎁 اكسب نسختك» واضغط «📋 نسخ رابط الإحالة»، وبعدها شاركه مع الأشخاص اللي عايز تدعوهم.\\n\\n"
-    "🎁 <b>6) إمتى أقدر أفعّل نسختي؟</b>\\n"
-    "تابع هدف الإحالات في صفحة التقدم. لما توصل للهدف وتظهر إنك مؤهل، اضغط «🚀 فعّل نسختك الآن» واتبع خطوات الربط.\\n\\n"
-    "🔐 <b>7) هل أرسل توكن البوت في قناة أو لشخص آخر؟</b>\\n"
-    "لا. أرسل التوكن في محادثة البوت الخاصة فقط أثناء خطوة الربط، ولا تشاركه مع أي شخص. لو اتكشف، ألغِه من @BotFather وأنشئ توكنًا جديدًا.\\n\\n"
-    "🛟 <b>8) إزاي أتواصل مع الدعم؟</b>\\n"
-    "من صفحة «🎁 اكسب نسختك» اضغط «🛟 الدعم الفني» ثم «فتح تذكرة جديدة» واختار نوع المشكلة. احتفظ برقم التذكرة بصيغة TKT-XXXXXX لمتابعة الردود والحالة.\\n\\n"
-    "📌 <b>نصيحة:</b> ما تبعتش التوكن داخل تذكرة الدعم؛ ابعت وصف المشكلة ورسالة الخطأ فقط."
-)
+_FAQ_ITEMS = {
+    "1": (
+        "🔑 <b>التوكن مرفوض</b>\\n\\n"
+        "<b>جرّب الخطوات دي بالترتيب:</b>\\n"
+        "1. افتح @BotFather وانسخ التوكن كاملًا من غير مسافات.\\n"
+        "2. لو التوكن مربوط قبل كده، أنشئ بوتًا جديدًا بالأمر <code>/newbot</code> واستخدم توكنه.\\n"
+        "3. لو فيه مشكلة اتصال، استنى دقيقة وجرّب تاني.\\n\\n"
+        "لو المشكلة مستمرة، افتح تذكرة من «🛟 الدعم الفني» واكتب رسالة الخطأ فقط."
+    ),
+    "2": (
+        "🤖 <b>نسختي الخاصة مش شغالة</b>\\n\\n"
+        "<b>اعمل الفحص السريع ده:</b>\\n"
+        "1. ارجع لصفحة «🎁 اكسب نسختك».\\n"
+        "2. اضغط «🔄 تحديث حالة نسختي».\\n"
+        "3. اتأكد إنك ما ألغيتش التوكن بأمر <code>/revoke</code> من @BotFather.\\n\\n"
+        "لو لسه مش شغالة، افتح تذكرة دعم واكتب رسالة الخطأ اللي ظهرت لك."
+    ),
+    "3": (
+        "👥 <b>إمتى الإحالة تتحسب مؤهلة؟</b>\\n\\n"
+        "الشخص لازم يبدأ البوت من رابط دعوتك، وبعدها يحقق <b>شرط واحد</b> من دول:\\n"
+        "• يكمل أول تحميل ناجح.\\n"
+        "• يستخدم البوت في يومين مختلفين.\\n\\n"
+        "الحساب الواحد بيتحسب مرة واحدة فقط، والحسابات المحظورة لا تُحتسب."
+    ),
+    "4": (
+        "🎯 <b>ليه عدد المؤهلين ما زادش؟</b>\\n\\n"
+        "فتح الرابط أو الضغط على Start لوحده مش كفاية. الشخص لازم يكمل أحد شرطي التأهيل في السؤال السابق.\\n\\n"
+        "• <b>⏳ بانتظار النشاط:</b> الشخص لسه ما كملش الشرط.\\n"
+        "• <b>🚩 تحت المراجعة:</b> الإحالة محتاجة مراجعة قبل احتسابها."
+    ),
+    "5": (
+        "🔗 <b>أجيب رابط الدعوة منين؟</b>\\n\\n"
+        "1. افتح «🎁 اكسب نسختك».\\n"
+        "2. اضغط «📋 نسخ رابط الإحالة».\\n"
+        "3. انسخ الرابط وابعته للأشخاص اللي عايز تدعوهم.\\n\\n"
+        "تابع تقدمك من نفس الصفحة."
+    ),
+    "6": (
+        "🎁 <b>إمتى أقدر أفعّل نسختي؟</b>\\n\\n"
+        "1. تابع عدد المستخدمين المؤهلين في صفحة «🎁 اكسب نسختك».\\n"
+        "2. لما توصل للهدف وتظهر إنك مؤهل، اضغط «🚀 فعّل نسختك الآن».\\n"
+        "3. اتبع خطوات إنشاء بوت جديد وربط التوكن.\\n\\n"
+        "لو محتاج شرح خطوة بخطوة، افتح «📖 دليل التفعيل»."
+    ),
+    "7": (
+        "🔐 <b>أشارك توكن البوت مع حد؟</b>\\n\\n"
+        "<b>لا.</b> التوكن زي كلمة السر؛ ابعته في المحادثة الخاصة مع البوت أثناء الربط فقط، وما تبعتوش في قناة أو جروب أو تذكرة دعم.\\n\\n"
+        "لو اتكشف، افتح @BotFather وألغيه باستخدام <code>/revoke</code>، وبعدها أنشئ توكنًا جديدًا."
+    ),
+    "8": (
+        "🛟 <b>إزاي أتواصل مع الدعم؟</b>\\n\\n"
+        "1. افتح «🎁 اكسب نسختك».\\n"
+        "2. اضغط «🛟 الدعم الفني».\\n"
+        "3. اختار «📨 فتح تذكرة جديدة» وحدد نوع المشكلة.\\n\\n"
+        "احتفظ برقم التذكرة بالشكل <code>TKT-XXXXXX</code> عشان تتابع حالتها والردود."
+    ),
+}
+
+_FAQ_TITLES = {
+    "1": "🔑 التوكن مرفوض",
+    "2": "🤖 نسختي مش شغالة",
+    "3": "👥 شروط تأهيل الإحالة",
+    "4": "🎯 الإحالات مش بتزيد",
+    "5": "🔗 رابط الدعوة",
+    "6": "🎁 تفعيل نسختي",
+    "7": "🔐 أمان التوكن",
+    "8": "🛟 التواصل مع الدعم",
+}
 
 _RULES_TEXT = (
     "📜 <b>قواعد الإحالات</b>\n\n"
@@ -420,13 +462,45 @@ def _back_home_row() -> list[InlineKeyboardButton]:
     return [InlineKeyboardButton("🔙 رجوع لصفحة المكافأة", callback_data="ref:home")]
 
 
-async def _show_faq(q) -> None:
-    markup = InlineKeyboardMarkup([
-        [InlineKeyboardButton("🛟 افتح تذكرة دعم", callback_data="ref:support")],
-        _back_home_row(),
-    ])
-    await _edit_ref(q, _FAQ_TEXT, markup)
+async def _show_faq(q, topic: str | None = None) -> None:
+    """Show a compact FAQ index; each question opens its own readable page."""
+    if topic in _FAQ_ITEMS:
+        rows = []
+        if topic == "1":
+            rows.append([InlineKeyboardButton("🛟 افتح تذكرة دعم", callback_data="ref:support")])
+        elif topic == "2":
+            rows.append([InlineKeyboardButton("🔄 تحديث حالة نسختي", callback_data="ref:refresh_status")])
+            rows.append([InlineKeyboardButton("🛟 افتح تذكرة دعم", callback_data="ref:support")])
+        elif topic == "5":
+            rows.append([InlineKeyboardButton("📋 نسخ رابط الإحالة", callback_data="ref:copy")])
+        elif topic == "6":
+            rows.append([InlineKeyboardButton("📖 دليل التفعيل", callback_data="ref:guide")])
+        elif topic == "8":
+            rows.append([InlineKeyboardButton("🛟 افتح الدعم الفني", callback_data="ref:support")])
+        rows.append([InlineKeyboardButton("⬅️ كل الأسئلة", callback_data="ref:faq")])
+        rows.append(_back_home_row())
+        await _edit_ref(q, _FAQ_ITEMS[topic], InlineKeyboardMarkup(rows))
+        return
 
+    rows = [
+        [InlineKeyboardButton(_FAQ_TITLES["1"], callback_data="ref:faq:1")],
+        [InlineKeyboardButton(_FAQ_TITLES["2"], callback_data="ref:faq:2")],
+        [InlineKeyboardButton(_FAQ_TITLES["3"], callback_data="ref:faq:3")],
+        [InlineKeyboardButton(_FAQ_TITLES["4"], callback_data="ref:faq:4")],
+        [InlineKeyboardButton(_FAQ_TITLES["5"], callback_data="ref:faq:5")],
+        [InlineKeyboardButton(_FAQ_TITLES["6"], callback_data="ref:faq:6")],
+        [InlineKeyboardButton(_FAQ_TITLES["7"], callback_data="ref:faq:7")],
+        [InlineKeyboardButton(_FAQ_TITLES["8"], callback_data="ref:faq:8")],
+        [InlineKeyboardButton("🛟 الدعم الفني", callback_data="ref:support")],
+        _back_home_row(),
+    ]
+    await _edit_ref(
+        q,
+        "❓ <b>مركز المساعدة</b>\\n\\n"
+        "اختار السؤال اللي محتاج إجابته من الأزرار تحت.\\n"
+        "كل سؤال هيفتح في صفحة لوحده عشان القراءة تبقى أسهل.",
+        InlineKeyboardMarkup(rows),
+    )
 
 def _rules_rich_html() -> str:
     """Mobile-first rules page using Telegram Rich Message expandable sections."""
@@ -911,6 +985,10 @@ async def referral_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 
     if data == "ref:faq":
         await _show_faq(q)
+        return
+    if data.startswith("ref:faq:"):
+        topic = data.rsplit(":", 1)[-1]
+        await _show_faq(q, topic)
         return
 
     if data == "ref:rules":
