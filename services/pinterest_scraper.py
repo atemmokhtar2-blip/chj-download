@@ -236,6 +236,7 @@ def _score_result(result: dict, session: requests.Session | None = None) -> int:
     source_bonus = {
         "pinterest_downloader": 380,
         "pin_resource": 340,
+        "graphql": 340,
         "gallery_dl": 260,
         "html_json": 200,
         "html": 120,
@@ -315,6 +316,88 @@ def _pin_from_api(pin_id: str, session: requests.Session) -> dict | None:
         return data
     except Exception as e:
         logger.info("PinResource failed for %s: %s", pin_id, e)
+        return None
+
+
+_CLOSEUP_DETAIL_QUERY_HASH = "43164757b22ade73c6219d2108b664c014b574d314f725af6b16036188662335"
+
+
+def _normalize_graphql_pin(data: dict) -> dict:
+    """Map camelCase PWS-GraphQL closeup fields onto the snake_case shape
+    ``_result_from_pin_data`` expects."""
+    if not isinstance(data, dict):
+        return {}
+    out = dict(data)
+    if data.get("entityId") and not data.get("id"):
+        out["id"] = str(data["entityId"])
+    if data.get("gridTitle") and not data.get("grid_title"):
+        out["grid_title"] = data["gridTitle"]
+    return out
+
+
+def _pin_from_graphql(pin_id: str, session: requests.Session) -> dict | None:
+    """Resolve a NUMERIC pin through the modern PWS GraphQL closeup endpoint.
+
+    ``PinResource`` is geo-blocked on some host IPs; this uses the exact same
+    persisted query the web app runs for an unauthenticated closeup page, so it
+    serves as an independent second backend for numeric pins. Alphanumeric
+    story/go-linkless pin ids return ``PinNotFound`` here (their data is only
+    surfaced through the search API), so they are skipped before any request.
+    """
+    if not re.fullmatch(r"\d+", str(pin_id or "")):
+        return None
+    try:
+        # The GraphQL endpoint rejects bare POSTs with "Bad CSRF token".
+        if not session.cookies.get("csrftoken"):
+            session.get("https://www.pinterest.com/", timeout=20)
+        csrf = session.cookies.get("csrftoken")
+        variables = {
+            "isAuth": False,
+            "isAuthDesktop": False,
+            "isDesktop": True,
+            "isUnauth": True,
+            "pinId": pin_id,
+            "shouldDefer": False,
+            "shouldFetchAIInsight": False,
+            "shouldFetchDesktopShoppingModule": False,
+            "shouldFetchMobileShoppingModule": False,
+            "shouldFetchUnauthAmazonModule": False,
+            "shouldShowSeoDrawerOption": True,
+        }
+        r = session.post(
+            "https://www.pinterest.com/_/graphql/",
+            data=json.dumps({
+                "queryHash": _CLOSEUP_DETAIL_QUERY_HASH,
+                "variables": variables,
+            }),
+            headers={
+                "Content-Type": "application/json",
+                "Accept": "application/json",
+                "X-Requested-With": "XMLHttpRequest",
+                "X-CSRFToken": csrf or "",
+                "X-Pinterest-App-Version": "8c14a35",
+                "X-APP-VERSION": "8c14a35",
+                "Referer": f"https://www.pinterest.com/pin/{pin_id}/",
+                "Origin": "https://www.pinterest.com",
+            },
+            timeout=20,
+        )
+        if r.status_code != 200:
+            logger.info("Pinterest GraphQL closeup HTTP %s for %s", r.status_code, pin_id)
+            return None
+        body = r.json()
+        node = (body.get("data") or {}).get("v3GetPinQueryv2")
+        if not isinstance(node, dict):
+            return None
+        inner = node.get("data")
+        if not isinstance(inner, dict):
+            return None
+        # PinNotFound carries neither id nor entityId — reject it early.
+        if not (inner.get("id") or inner.get("entityId")):
+            return None
+        return _normalize_graphql_pin(inner)
+    except Exception as exc:
+        logger.info("Pinterest GraphQL closeup failed for %s: %s", pin_id, exc)
         return None
 
 
@@ -870,7 +953,16 @@ def scrape_pinterest(url: str) -> dict | None:
         if not pin_id:
             return None
         pin = _pin_from_api(pin_id, session)
-        return _result_from_pin_data(pin, url) if pin else None
+        source = "pin_resource"
+        if not pin and str(pin_id).isdigit():
+            pin = _pin_from_graphql(pin_id, session)
+            source = "graphql"
+        if not pin:
+            return None
+        result = _result_from_pin_data(pin, url)
+        if result:
+            result["source"] = source
+        return result
 
     tasks = [run_pinterest_downloader, run_pin_resource, lambda: _from_gallery_dl(url), lambda: _from_html(url, session)]
     with ThreadPoolExecutor(max_workers=4) as pool:

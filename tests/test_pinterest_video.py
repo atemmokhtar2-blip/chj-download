@@ -164,6 +164,56 @@ def test_html_harvest_extracts_embedded_video_urls():
     assert not res.get("image_url")  # video, never downgraded to its poster
 
 
+def test_graphql_closeup_normalizes_numeric_pin():
+    """The PWS GraphQL fallback resolves numeric pins when PinResource is
+    geo-blocked; its camelCase shape must map back to the normal result."""
+
+    class Cookies:
+        def get(self, name):
+            return "tok"
+
+    class FakeResp:
+        status_code = 200
+        def json(self):
+            return {
+                "data": {"v3GetPinQueryv2": {
+                    "__typename": "PinResponse",
+                    "data": {
+                        "entityId": "664281013778109217",
+                        "title": "Origami",
+                        "gridTitle": "Origami",
+                        "pinner": {"username": "u"},
+                        "videos": {"videoList": {
+                            "v720P": {
+                                "url": "https://v1.pinimg.com/videos/mc/720p/x.mp4",
+                                "height": 720,
+                            },
+                            "vHLSV4": {
+                                "url": "https://v1.pinimg.com/videos/mc/hls/x.m3u8",
+                                "height": 720,
+                            },
+                        }},
+                    },
+                }},
+            }
+
+    class FakeSession:
+        cookies = Cookies()
+        def post(self, *a, **k):
+            return FakeResp()
+
+    pin = ps._pin_from_graphql("664281013778109217", FakeSession())
+    assert pin is not None
+    assert pin["id"] == "664281013778109217"
+    res = ps._result_from_pin_data(
+        pin, "https://www.pinterest.com/pin/664281013778109217/"
+    )
+    assert res["media_type"] == "video"
+    assert res["play_url"].endswith(".mp4")
+    # alphanumeric ids are not resolvable by this backend -> skipped, no call
+    assert ps._pin_from_graphql("e1_AfqPShznDOOeWDz0mnId", FakeSession()) is None
+
+
 def test_pin_data_exposes_download_candidates():
     """The PinResource result carries every rendition so the engine can walk
     past a stale/silent mp4 instead of failing into the yt-dlp format error."""
