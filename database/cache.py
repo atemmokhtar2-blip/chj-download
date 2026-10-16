@@ -27,6 +27,18 @@ from .db import db_cursor
 
 logger = logging.getLogger(__name__)
 
+# Bump this whenever the media pipeline changes in a way that makes previously
+# cached Telegram file_ids untrustworthy (e.g. the Facebook silent-video fix).
+# Old entries live under a different namespace, are never served, and are
+# gradually evicted by the LRU sweeper in `_db_set`.
+_CACHE_NAMESPACE = "v3"
+
+
+def _scope(hash_value: str) -> str:
+    """Prefix a URL hash with the cache namespace so bumps auto-invalidate."""
+    return f"{_CACHE_NAMESPACE}:{hash_value}"
+
+
 # ---------------------------------------------------------------------------
 # URL canonicalization
 # ---------------------------------------------------------------------------
@@ -75,7 +87,7 @@ def url_hash(url: str) -> str:
 
 
 def _compound_key(url: str, quality: str, media_type: str) -> str:
-    return f"{url_hash(url)}|{quality}|{media_type}"
+    return f"{_scope(url_hash(url))}|{quality}|{media_type}"
 
 
 # ---------------------------------------------------------------------------
@@ -153,13 +165,14 @@ def _get_redis():
 
 
 def _redis_key(h: str, quality: str, media_type: str) -> str:
-    return f"tgcache:v2:{h}:{quality}:{media_type}"
+    return f"tgcache:{_CACHE_NAMESPACE}:{h}:{quality}:{media_type}"
 
 
 # ---------------------------------------------------------------------------
 # L3 helpers — PostgreSQL
 # ---------------------------------------------------------------------------
 def _db_get(h: str, quality: str, media_type: str) -> str | None:
+    scope = _scope(h)
     with db_cursor() as c:
         c.execute(
             """
@@ -167,7 +180,7 @@ def _db_get(h: str, quality: str, media_type: str) -> str | None:
             WHERE url_hash = ? AND quality = ? AND media_type = ?
               AND created_at >= datetime('now', ?)
             """,
-            (h, quality, media_type, f"-{int(CACHE_TTL_SECONDS)} seconds"),
+            (scope, quality, media_type, f"-{int(CACHE_TTL_SECONDS)} seconds"),
         )
         row = c.fetchone()
         if not row:
@@ -178,7 +191,7 @@ def _db_get(h: str, quality: str, media_type: str) -> str | None:
                 WHERE url_hash = ? AND quality = ? AND media_type = ?
                   AND created_at < datetime('now', ?)
                 """,
-                (h, quality, media_type, f"-{int(CACHE_TTL_SECONDS)} seconds"),
+                (scope, quality, media_type, f"-{int(CACHE_TTL_SECONDS)} seconds"),
             )
             return None
         c.execute(
@@ -186,7 +199,7 @@ def _db_get(h: str, quality: str, media_type: str) -> str | None:
             UPDATE file_cache SET hits = hits + 1
             WHERE url_hash = ? AND quality = ? AND media_type = ?
             """,
-            (h, quality, media_type),
+            (scope, quality, media_type),
         )
         return row["file_id"]
 
@@ -195,6 +208,7 @@ def _db_set(
     h: str, quality: str, media_type: str, file_id: str,
     title: str, platform: str,
 ) -> None:
+    scope = _scope(h)
     with db_cursor() as c:
         c.execute(
             """
@@ -207,7 +221,7 @@ def _db_set(
                 platform = excluded.platform,
                 created_at = datetime('now')
             """,
-            (h, quality, media_type, file_id, title, platform),
+            (scope, quality, media_type, file_id, title, platform),
         )
         if CACHE_MAX_SIZE > 0:
             c.execute("SELECT COUNT(*) AS cnt FROM file_cache")
@@ -226,14 +240,15 @@ def _db_set(
 
 
 def _db_delete(h: str, quality: str | None = None, media_type: str | None = None) -> int:
+    scope = _scope(h)
     with db_cursor() as c:
         if quality is not None and media_type is not None:
             c.execute(
                 "DELETE FROM file_cache WHERE url_hash = ? AND quality = ? AND media_type = ?",
-                (h, quality, media_type),
+                (scope, quality, media_type),
             )
         else:
-            c.execute("DELETE FROM file_cache WHERE url_hash = ?", (h,))
+            c.execute("DELETE FROM file_cache WHERE url_hash = ?", (scope,))
         return c.rowcount if c.rowcount and c.rowcount > 0 else 0
 
 
@@ -319,7 +334,7 @@ def invalidate_cache(
         # Drop all L1 keys for this hash prefix
         with _l1_lock:
             for k in list(_l1.keys()):
-                if isinstance(k, str) and k.startswith(h):
+                if isinstance(k, str) and k.startswith(_scope(h)):
                     _l1.pop(k, None)
 
     r = _get_redis()
@@ -328,7 +343,7 @@ def invalidate_cache(
             if quality is not None and media_type is not None:
                 r.delete(_redis_key(h, quality, media_type))
             else:
-                for rk in r.scan_iter(match=f"tgcache:v2:{h}:*"):
+                for rk in r.scan_iter(match=f"tgcache:{_CACHE_NAMESPACE}:{h}:*"):
                     r.delete(rk)
         except Exception as e:
             logger.debug("Redis cache operation failed: %s", e)
@@ -565,7 +580,7 @@ def index_fingerprint(
                     vault_message_id = COALESCE(?, vault_message_id)
                 WHERE url_hash = ? AND quality = ? AND media_type = ?
                 """,
-                (fingerprint, vault_chat_id, vault_message_id, h, quality, media_type),
+                (fingerprint, vault_chat_id, vault_message_id, _scope(h), quality, media_type),
             )
     except Exception as e:
         logger.warning("fingerprint index write failed: %s", e)
