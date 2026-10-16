@@ -351,6 +351,45 @@ def test_instagram_engine_propagates_cancel(monkeypatch):
         )
 
 
+def test_instagram_audio_engine_propagates_cancel(monkeypatch):
+    """Instagram's audio override falls back to video→extract after a failed
+    generic pass — but a stop request must abort immediately, never fall back."""
+
+    def raise_cancel(*args, **kwargs):
+        raise DownloadCancelledError()
+
+    monkeypatch.setattr(downloader, "_generic_download_audio", raise_cancel)
+
+    with pytest.raises(DownloadCancelledError):
+        asyncio.run(
+            InstagramEngine().download_audio(
+                "https://www.instagram.com/reel/ABC/", None
+            )
+        )
+
+
+def test_instagram_audio_falls_back_to_video_extract_after_generic_failure(monkeypatch):
+    """A non-cancellation generic-audio failure still routes through the
+    video→MP3 extraction fallback (the Instagram audio resilience path)."""
+
+    def fake_generic_audio(*args, **kwargs):
+        raise RuntimeError("some unrelated extractor failure")
+
+    async def fake_download_video(url, *args, **kwargs):
+        return "/tmp/video.mp4"
+
+    monkeypatch.setattr(downloader, "_generic_download_audio", fake_generic_audio)
+    monkeypatch.setattr(downloader, "download_video", fake_download_video)
+    monkeypatch.setattr(downloader, "extract_audio_mp3", lambda path, bitrate: "/tmp/audio.mp3")
+
+    path = asyncio.run(
+        InstagramEngine().download_audio(
+            "https://www.instagram.com/reel/ABC/", None
+        )
+    )
+    assert path == "/tmp/audio.mp3"
+
+
 def test_reddit_engine_propagates_cancel(monkeypatch):
     def raise_cancel(*args, **kwargs):
         raise DownloadCancelledError()

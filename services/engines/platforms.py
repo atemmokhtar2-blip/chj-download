@@ -294,6 +294,10 @@ class InstagramEngine(PlatformEngine):
             return await downloader._generic_download_audio(url, progress_callback)
         except downloader.FileTooLargeError:
             raise
+        except downloader.DownloadCancelledError:
+            # The stop button must abort the fallback too — never swallow it
+            # into a video->audio retry that would hit the same cancellation.
+            raise
         except Exception as exc:
             error_logger.warning(
                 "InstagramEnginePro generic audio failed (%s); falling back to video+extract for %s",

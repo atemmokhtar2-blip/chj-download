@@ -888,16 +888,22 @@ async def download_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
     except Exception as e:
         logger.exception("Download error for user=%s url=%s: %s", user.id, str(info.get("url", ""))[:120], e)
-        reason = summarize_error(e)
+        # CDN segment rejection (expired token / geo-block / rate-limit) gets a
+        # short, human message instead of yt-dlp's cryptic technical text.
+        empty_cdn = isinstance(e, DownloadImpossibleError) and bool(getattr(e, "empty_file", False))
+        reason = "cdn_rejected" if empty_cdn else summarize_error(e)
         _log_clone_failure(context, user.id, str(info.get("url") or ""), reason,
                            platform=str(info.get("platform") or ""))
         show_detail = bool(settings.get("notify_failure", 1))
         try:
             if show_detail:
-                await _quiet_edit(edit_fn,
-                    t(lang, "download_failed_reason", reason=escape(reason)),
-                    parse_mode="HTML",
-                )
+                if empty_cdn:
+                    await _quiet_edit(edit_fn, t(lang, "cdn_rejected"), parse_mode="HTML")
+                else:
+                    await _quiet_edit(edit_fn,
+                        t(lang, "download_failed_reason", reason=escape(reason)),
+                        parse_mode="HTML",
+                    )
             else:
                 await _quiet_edit(edit_fn, t(lang, "download_failed"))
         except Exception:

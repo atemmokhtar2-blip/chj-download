@@ -46,6 +46,7 @@ TRANSLATIONS = {
         "file_too_large_user": "📦 This file exceeds <b>your personal size limit</b> ({max_size}).\n\nYou set this limit in ⚙️ Settings → Quality & Size → Maximum size.\n💡 Pick a lower quality, or raise/remove your limit in Settings.",
         "download_failed": "❌ Download failed. Try another quality or link.",
         "download_failed_reason": "❌ Download failed.\n\n🧾 <b>Technical reason:</b>\n<code>{reason}</code>\n\n💡 <b>What to try:</b>\n• Choose a lower quality (720p/480p)\n• Resend the same link — transient failures often recover\n• Make sure the post is public (private/age-restricted content needs login)",
+        "cdn_rejected": "⚠️ <b>Download failed</b> — the source server (CDN) rejected or expired the media segments.\n\n💡 <b>Try:</b>\n• Resend the link in a moment — temporary links refresh automatically\n• Pick a lower quality (720p/480p)\n• Try a different link if it keeps happening",
         "unexpected_error": "⚠️ An unexpected error occurred.\n\n🧾 Reason: {reason}\n\nIf this keeps happening, use /start and try again.",
         "preparing_download": "⚙️ Preparing download...\n💡 Large links can take a few seconds before the progress bar appears. You can cancel anytime with 🛑.",
         "preparing_audio": "🎧 Extracting clean MP3 audio...\n💡 Conversion takes a few seconds on long tracks. You can cancel anytime with 🛑.",
