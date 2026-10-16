@@ -1265,7 +1265,7 @@ def _set_screen() -> tuple[str, InlineKeyboardMarkup]:
     text = "\u2063"
     keyboard = _kb([
         [inline_button("🛡 الصلاحيات والأدمن", callback_data="own_set_perms")],
-        [inline_button("🚧 وضع الصيانة: تفعيل / إيقاف", callback_data="own_set_maint_on"),
+        [inline_button("🔴 تفعيل وضع الصيانة", callback_data="own_set_maint_on"),
          inline_button("🟢 إيقاف الصيانة", callback_data="own_set_maint_off")],
         [inline_button("🎯 قواعد الإحالات والهدف", callback_data="own_set_target")],
         [inline_button("🧹 تنظيف الملفات المؤقتة", callback_data="own_set_clean")],
