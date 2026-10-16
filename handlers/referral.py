@@ -522,6 +522,80 @@ def _plans_text(stats: dict) -> str:
     return text
 
 
+def _plans_rich_html(stats: dict) -> str:
+    """Compact mobile-first plan page: summary first, detailed comparison expandable."""
+    from html import escape
+    from services.referral import clone_plan_days, pro_target
+    from services.plan_policy import PLAN_LIMITS, PLAN_BASIC, PLAN_PRO
+
+    target = int(stats.get("target") or 0)
+    pro_goal = int(pro_target())
+    basic_days = int(clone_plan_days("basic"))
+    pro_days = int(clone_plan_days("pro"))
+    qualified = int(stats.get("qualified") or 0)
+    b, p = PLAN_LIMITS[PLAN_BASIC], PLAN_LIMITS[PLAN_PRO]
+    rows = [
+        ("📥 التحميلات اليومية", f"{b['daily_downloads']}", f"{p['daily_downloads']}"),
+        ("🔗 روابط الدفعة", f"{b['batch_urls']}", f"{p['batch_urls']}"),
+        ("🎬 جودة الفيديو", f"حتى {b['max_video_height']}p", "أعلى جودة"),
+        ("🎵 صوت MP3", f"حتى {b['audio_cap_kbps']} kbps", "حتى 320 kbps"),
+        ("📚 سجل التحميلات", f"{b['history_days']} أيام", f"{p['history_days']} يومًا"),
+        ("🛠️ لوحة الإدارة", "❌", "✅"),
+        ("👥 إدارة المستخدمين", "❌", "✅"),
+        ("📣 الإذاعة", "❌", "✅"),
+        ("🔐 صلاحيات الإداريين", "❌", "✅"),
+        ("🧩 إدارة الأكواد والنسخ", "للمالك", "للمالك"),
+    ]
+    table_rows = ["<tr><th>الميزة</th><th>🆓 Basic</th><th>👑 Pro</th></tr>"]
+    for feature, basic, pro in rows:
+        table_rows.append(
+            "<tr><td>" + escape(feature) + "</td><td>" + escape(str(basic)) +
+            "</td><td>" + escape(str(pro)) + "</td></tr>"
+        )
+
+    parts = [
+        "<h3>📦 الخطط والباقات</h3>",
+        "<p>اختر هدفك من الإحالات واعرف مميزات كل خطة قبل التفعيل.</p>",
+        "<table bordered striped compact>" + "".join(table_rows) + "</table>",
+        "<details><summary>🆓 خطة Basic — الهدف والمدة</summary>",
+        f"<p>الهدف: <b>{target} مستخدمًا مؤهلًا</b></p>",
+        f"<p>المدة: <b>{basic_days} يومًا</b> من يوم التفعيل.</p></details>",
+        "<details><summary>👑 خطة Pro — الهدف والمدة</summary>",
+        f"<p>الهدف: <b>{pro_goal} مستخدمًا مؤهلًا</b> (ضعف الهدف الأساسي)</p>",
+        f"<p>المدة: <b>{pro_days} يومًا</b> من يوم التفعيل.</p>",
+        "<p>تُمنح Pro تلقائيًا عند التفعيل إذا كان عدد المؤهلين قد وصل للهدف.</p></details>",
+        "<details><summary>⚙️ كيف تُحدَّد خطتك؟</summary>",
+        f"<p>إذا كان لديك {pro_goal} مؤهلًا أو أكثر وقت التفعيل، تحصل على Pro؛ وإلا تحصل على Basic.</p>",
+        "</details>",
+        "<details><summary>⏳ المدة والانتهاء والتجديد</summary>",
+        "<p>تبدأ المدة من يوم التفعيل، وتظهر في الصفحة الرئيسية. عند انتهائها تتوقف النسخة تلقائيًا.</p>",
+        "<p>التجديد أو التمديد أو الترقية يتم بقرار المالك عبر تذكرة الدعم: «⌛ طلب تجديد مدة نسختي».</p>",
+        "</details>",
+        "<details><summary>📌 حالتك الحالية</summary>",
+    ]
+    inst = stats.get("instance") or {}
+    if inst and inst.get("plan"):
+        plan_badge = "👑 Pro" if inst.get("plan") == "pro" else "🆓 Basic"
+        expiry = escape(str(inst.get("expires_at") or "—")[:10])
+        days_left = inst.get("days_left")
+        parts.append(f"<p>خطتك الحالية: <b>{plan_badge}</b></p>")
+        parts.append(f"<p>تاريخ الانتهاء: <b>{expiry}</b></p>")
+        if days_left is not None:
+            parts.append(f"<p>المتبقي: <b>{int(days_left)} يومًا</b></p>")
+    else:
+        parts.extend([
+            f"<p>المستخدمون المؤهلون: <b>{qualified}</b></p>",
+            f"<p>المتبقي لـ Basic: <b>{max(0, target - qualified)}</b> مستخدمًا مؤهلًا.</p>",
+            f"<p>المتبقي لـ Pro: <b>{max(0, pro_goal - qualified)}</b> مستخدمًا مؤهلًا.</p>",
+        ])
+    parts.extend([
+        "</details>",
+        "<p><i>المستخدم المؤهل هو من بدأ عبر رابطك وأكمل أول تحميل ناجح، أو استخدم البوت في يومين مختلفين.</i></p>",
+        "<p>إدارة الأكواد والنسخ الأخرى متاحة للمالك الرئيسي فقط، حتى في Pro.</p>",
+    ])
+    return "".join(parts)
+
+
 async def _show_plans(q) -> None:
     """📦 Full plan-system overview for any user (ref:plans)."""
     stats = referral.get_stats(q.from_user.id)
@@ -531,7 +605,23 @@ async def _show_plans(q) -> None:
         rows.insert(0, [InlineKeyboardButton("⌛ طلب تجديد مدة نسختي", callback_data="ref:support:open:clone")])
     elif not inst:
         rows.insert(0, [InlineKeyboardButton("📋 نسخ رابط الإحالة", callback_data="ref:copy")])
-    await _edit_ref(q, _plans_text(stats), InlineKeyboardMarkup(rows))
+    markup = InlineKeyboardMarkup(rows)
+    message = getattr(q, "message", None)
+    if message is not None:
+        try:
+            await q.get_bot().do_api_request(
+                endpoint="editMessageText",
+                api_kwargs={
+                    "chat_id": message.chat_id,
+                    "message_id": message.message_id,
+                    "rich_message": {"html": _plans_rich_html(stats)},
+                    "reply_markup": markup,
+                },
+            )
+            return
+        except Exception:
+            logger.info("Rich referral plans unavailable; using HTML fallback", exc_info=True)
+    await _edit_ref(q, _plans_text(stats), markup)
 
 
 async def _show_activity(q) -> None:
