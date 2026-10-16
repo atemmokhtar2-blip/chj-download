@@ -111,37 +111,37 @@ def plan_summary_text(ctx: dict) -> str:
     """Compact, scannable plan comparison that remains readable on phones."""
     from html import escape
 
-    compare = "\\n".join(plan_comparison_lines())
+    compare = "\n".join(plan_comparison_lines())
     text = (
-        "📦 <b>الخطط والباقات</b>\\n"
-        "<i>مقارنة سريعة بين خطط النسخ الخاصة</i>\\n\\n"
-        f"{compare}\\n"
+        "📦 <b>الخطط والباقات</b>\n"
+        "<i>مقارنة سريعة بين خطط النسخ الخاصة</i>\n\n"
+        f"{compare}\n"
     )
     if ctx.get("is_clone"):
         plan = effective_plan(ctx.get("instance")) if ctx.get("instance") else normalize_plan(ctx.get("plan"))
         badge = "👑 <b>Pro</b>" if plan == PLAN_PRO else "🆓 <b>Basic</b>"
         inst = ctx.get("instance") or {}
         text += (
-            "━━━━━━━━━━━━━━\\n"
-            f"🤖 <b>خطة نسختك الحالية:</b> {badge}\\n"
+            "━━━━━━━━━━━━━━\n"
+            f"🤖 <b>خطة نسختك الحالية:</b> {badge}\n"
         )
         try:
             from services.referral import instance_days_left
             days_left = instance_days_left(inst)
             if days_left is not None:
-                text += f"⏳ <b>المدة المتبقية:</b> {days_left} يوم\\n"
+                text += f"⏳ <b>المدة المتبقية:</b> {days_left} يوم\n"
         except Exception:
             pass
         if plan == PLAN_BASIC:
             text += (
-                "كل حدود Basic مطبّقة تلقائيًا على هذه النسخة.\\n"
+                "كل حدود Basic مطبّقة تلقائيًا على هذه النسخة.\n"
                 "📩 الترقية أو طلب تمديد المدة يكون من المالك."
             )
         else:
             text += "✅ مميزات Pro متاحة لمالك النسخة والإداريين المصرّح لهم."
     else:
         text += (
-            "🤖 <b>أنت في البوت الأساسي</b> — لا تنطبق عليه حدود خطط النسخ.\\n"
+            "🤖 <b>أنت في البوت الأساسي</b> — لا تنطبق عليه حدود خطط النسخ.\n"
             "الخطط أعلاه تخص النسخ الخاصة."
         )
     return text
