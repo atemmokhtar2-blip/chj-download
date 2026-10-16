@@ -199,10 +199,8 @@ def _rows_for(stats: dict, bot_username: str | None) -> list[list[InlineKeyboard
         InlineKeyboardButton("🧾 سجل العمليات", callback_data="ref:activity"),
         InlineKeyboardButton("🛟 الدعم الفني", callback_data="ref:support"),
     ])
-    rows.append([
-        InlineKeyboardButton("❓ أسئلة شائعة", callback_data="ref:faq"),
-        InlineKeyboardButton("📜 قواعد الإحالات", callback_data="ref:rules"),
-    ])
+    rows.append([InlineKeyboardButton("📜 قواعد الإحالات — مهم قبل المشاركة", callback_data="ref:rules")])
+    rows.append([InlineKeyboardButton("❓ أسئلة شائعة", callback_data="ref:faq")])
 
     bottom: list[InlineKeyboardButton] = [
         InlineKeyboardButton("🔙 العودة إلى الإعدادات", callback_data="settings:home"),
@@ -400,11 +398,57 @@ async def _show_faq(q) -> None:
     await _edit_ref(q, _FAQ_TEXT, markup)
 
 
+def _rules_rich_html() -> str:
+    """Mobile-first rules page using Telegram Rich Message expandable sections."""
+    return (
+        "<h3>📜 قواعد الإحالات</h3>"
+        "<p><b>اقرأ القواعد قبل مشاركة رابطك عشان مكافأتك تتحسب بشكل صحيح.</b></p>"
+        "<details><summary>👤 1–2 · ملكية الإحالة ومنع التكرار</summary>"
+        "<p>كل حساب تيليجرام يُحتسب مرة واحدة فقط ولأول شخص دعاه.</p>"
+        "<p>ممنوع تدعو نفسك. بعد ربط الإحالة، لا تنتقل لمُحيل آخر أبدًا.</p>"
+        "</details>"
+        "<details><summary>✅ 3 · إمتى المستخدم يبقى مؤهل؟</summary>"
+        "<p>يتأهل لو بدأ البوت من رابطك وأكمل أول تحميل ناجح، أو استخدم البوت في يومين مختلفين.</p>"
+        "</details>"
+        "<details><summary>🚫 4–5 · الحظر ومراجعة النشاط</summary>"
+        "<p>أي مستخدم محظور لا يُحتسب.</p>"
+        "<p>لو حصلت إحالات كثيرة في وقت قصير جدًا، تتعلّم تحت المراجعة ولا تُحتسب تلقائيًا.</p>"
+        "</details>"
+        "<details><summary>🎁 6 · المكافآت والخطط</summary>"
+        "<p>🆓 <b>Basic:</b> الهدف الأساسي يمنح نسخة خاصة لمدة 30 يومًا.</p>"
+        "<p>👑 <b>Pro:</b> ضعف الهدف يمنح نسخة خاصة لمدة 40 يومًا.</p>"
+        "<p>التفاصيل الكاملة في صفحة «📦 الخطط والباقات».</p>"
+        "</details>"
+        "<details><summary>🎟️ أكواد التفعيل والتجربة المجانية</summary>"
+        "<p>فعّل كود المالك من «🤖 النسخ الخاصة» ← «🔑 استقبال كود تفعيل».</p>"
+        "<p>الكود لا يُستهلك إلا بعد نجاح إنشاء نسختك وتفعيلها بالكامل.</p>"
+        "<p>تجربة Basic أو Pro مجانية لمدة 24 ساعة، مرة واحدة لكل حساب.</p>"
+        "</details>"
+        "<p><b>⚠️ أي غش أو حسابات وهمية ممكن توقف الأهلية نهائيًا.</b></p>"
+    )
+
+
 async def _show_rules(q) -> None:
     markup = InlineKeyboardMarkup([
+        [InlineKeyboardButton("📦 عرض الخطط والباقات", callback_data="ref:plans")],
         [InlineKeyboardButton("🛟 عندك مشكلة؟ الدعم الفني", callback_data="ref:support")],
         _back_home_row(),
     ])
+    message = getattr(q, "message", None)
+    if message is not None:
+        try:
+            await q.get_bot().do_api_request(
+                endpoint="editMessageText",
+                api_kwargs={
+                    "chat_id": message.chat_id,
+                    "message_id": message.message_id,
+                    "rich_message": {"html": _rules_rich_html()},
+                    "reply_markup": markup,
+                },
+            )
+            return
+        except Exception:
+            logger.info("Rich referral rules unavailable; using HTML fallback", exc_info=True)
     await _edit_ref(q, _RULES_TEXT, markup)
 
 
