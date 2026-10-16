@@ -255,16 +255,16 @@ def _home_text(stats: dict) -> str:
 
 
 def _home_rich_html(stats: dict) -> str:
-    """Compact, mobile-first referral dashboard with clear progress and expandable rules."""
+    """Polished mobile-first layout; keep referral rules and calculations unchanged."""
     link = escape(str(stats.get("link", "")))
     stage = referral.referrer_stage(stats)
-    target = max(1, int(stats.get("target", REFERRAL_TARGET)))
-    qualified = max(0, int(stats.get("qualified", 0)))
+    target = int(stats["target"])
+    qualified = int(stats["qualified"])
     remaining = max(0, target - qualified)
-    pending = max(0, int(stats.get("pending", 0)))
-    suspicious = max(0, int(stats.get("suspicious", 0)))
+    pending = int(stats["pending"])
+    suspicious = int(stats["suspicious"])
     percent = max(0, min(100, int(stats.get("percent", 0))))
-    bar_len = 20
+    bar_len = 14
     filled = min(bar_len, percent * bar_len // 100)
     bar = "█" * filled + "░" * (bar_len - filled)
     stage_line = {
@@ -272,7 +272,7 @@ def _home_rich_html(stats: dict) -> str:
         "expired": "⌛ <b>انتهت مدة نسختك.</b> التجديد عبر تذكرة دعم.",
         "eligible": "🎉 <b>أنت مؤهل لتفعيل نسختك.</b>",
         "awaiting_token": "🔑 <b>بانتظار توكن البوت الجديد.</b>",
-        "progress": f"🚀 باقي <b>{remaining}</b> مستخدم مؤهل للوصول لهدفك.",
+        "progress": f"🚀 باقي لك <b>{remaining}</b> مستخدمًا مؤهلًا.",
     }[stage]
     inst = stats.get("instance") or {}
     plan_line = ""
@@ -286,18 +286,23 @@ def _home_rich_html(stats: dict) -> str:
             plan_line = f"<p>📦 <b>{plan_badge}</b> · انتهت {exp}</p>"
     return (
         "<h3>🎁 نسختك الخاصة — حالة التقدم</h3>"
-        f"<p>🎯 <b>الهدف:</b> {target} مستخدمًا مؤهلًا</p>"
-        f"<p>👥 <b>المؤهلون:</b> {qualified} من {target}</p>"
-        f"<p><code>{bar}</code> <b>{percent}%</b></p>"
-        f"<p>🚀 <b>المتبقي:</b> {remaining} مستخدمًا مؤهلًا</p>"
-        f"<p>⏳ <b>بانتظار النشاط:</b> {pending} · 🚩 <b>تحت المراجعة:</b> {suspicious}</p>"
+        "<table bordered striped compact>"
+        "<tr><th>المؤشر</th><th>الحالة</th></tr>"
+        f"<tr><td>🎯 الهدف</td><td>{target} مستخدم مؤهل</td></tr>"
+        f"<tr><td>✅ المؤهلون</td><td>{qualified}</td></tr>"
+        f"<tr><td>🚀 المتبقي</td><td>{remaining}</td></tr>"
+        f"<tr><td>⏳ بانتظار النشاط</td><td>{pending}</td></tr>"
+        f"<tr><td>🚩 تحت المراجعة</td><td>{suspicious}</td></tr>"
+        "</table>"
+        f"<p><b>📊 نسبة الإنجاز: {percent}%</b></p>"
+        f"<p><code>{bar}</code></p>"
         f"{plan_line}<p>{stage_line}</p><hr/>"
         "<h3>🔗 رابط دعوتك</h3>"
         f"<p><code>{link}</code></p>"
         "<details><summary>📌 كيف يُحتسب المستخدم مؤهلًا؟</summary>"
-        "<p>• يكمل أول تحميل ناجح عبر البوت، أو</p>"
+        "<p>• يقوم بأول تحميل ناجح عبر البوت، أو</p>"
         "<p>• يستخدم البوت في يومين مختلفين.</p>"
-        "<p>كل مستخدم مؤهل يقرّبك خطوة من امتلاك نسختك الخاصة. الحسابات المحظورة أو الإحالات تحت المراجعة لا تُحتسب ضمن الهدف حتى تُحسم مراجعتها.</p>"
+        "<p>شارك رابط دعوتك الآن — كل مستخدم مؤهل يقربك خطوة من امتلاك نسختك الخاصة.</p>"
         "</details>"
     )
 
