@@ -223,10 +223,8 @@ async def process_url(update: Update, context: ContextTypes.DEFAULT_TYPE, user, 
     except Exception as exc:
         logger.exception("URL analysis crashed for %s: %s", url[:120], exc)
         _log_clone_failure(context, user.id, url, summarize_error(exc))
-        await _quiet_edit(status_msg.edit_text, 
-            t(lang, "analysis_failed_reason", reason=escape(summarize_error(exc))),
-            parse_mode="HTML",
-        )
+        # Technical reasons are logged server-side only — never shown to users.
+        await _quiet_edit(status_msg.edit_text, t(lang, "analysis_failed"), parse_mode="HTML")
         return
     if not info:
         _log_clone_failure(context, user.id, url, "analysis_failed")
@@ -369,8 +367,8 @@ def _friendly_error(lang: str, info: dict) -> str:
         return t(lang, "region_blocked")
     if reason == "removed_or_not_found":
         return t(lang, "removed_or_not_found")
-    if reason and reason != "analysis_failed":
-        return t(lang, "analysis_failed_reason", reason=escape(summarize_error(reason)))
+    # Unknown/unmapped reasons fall back to a generic friendly message — the
+    # raw technical text stays in the logs, never in a user's chat.
     return t(lang, "analysis_failed")
 
 
@@ -890,21 +888,16 @@ async def download_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         logger.exception("Download error for user=%s url=%s: %s", user.id, str(info.get("url", ""))[:120], e)
         # CDN segment rejection (expired token / geo-block / rate-limit) gets a
-        # short, human message instead of yt-dlp's cryptic technical text.
-        empty_cdn = isinstance(e, DownloadImpossibleError) and bool(getattr(e, "empty_file", False))
+        # short, human, actionable message; every other failure gets a plain
+        # "try again". The FULL technical reason lives only in the server logs
+        # and the clone-failure records — NEVER in the user's chat.
+        empty_cdn = is_cdn_rejection(e)
         reason = "cdn_rejected" if empty_cdn else summarize_error(e)
         _log_clone_failure(context, user.id, str(info.get("url") or ""), reason,
                            platform=str(info.get("platform") or ""))
-        show_detail = bool(settings.get("notify_failure", 1))
         try:
-            if show_detail:
-                if empty_cdn:
-                    await _quiet_edit(edit_fn, t(lang, "cdn_rejected"), parse_mode="HTML")
-                else:
-                    await _quiet_edit(edit_fn,
-                        t(lang, "download_failed_reason", reason=escape(reason)),
-                        parse_mode="HTML",
-                    )
+            if empty_cdn:
+                await _quiet_edit(edit_fn, t(lang, "cdn_rejected"), parse_mode="HTML")
             else:
                 await _quiet_edit(edit_fn, t(lang, "download_failed"))
         except Exception:
