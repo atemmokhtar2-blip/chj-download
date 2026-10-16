@@ -34,7 +34,7 @@ def build_main_keyboard(context, user_id: int) -> ReplyKeyboardMarkup:
     general admin (separate clone_admins table, Pro-plan gated, and
     re-verified server-side on every single press).
     """
-    rows = [[t("ar", "menu_download"), t("ar", "menu_settings")]]
+    rows = [[reply_button(t("ar", "menu_download"), "primary"), reply_button(t("ar", "menu_settings"))]]
     try:
         from services import plan_policy
         ctx = plan_policy.plan_context(context.bot)
