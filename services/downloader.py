@@ -27,6 +27,31 @@ QUALITY_MAX_ROWS = 6
 _STANDARD_HEIGHTS = (2160, 1440, 1080, 720, 480, 360, 240, 144)
 logger = logging.getLogger(__name__)
 
+# Facebook (and its short/legacy hosts) store video and audio as SEPARATE DASH
+# streams. The scraped "direct" URLs (browser_native_hd_url /
+# playable_url_quality_hd / og:video) are VIDEO-ONLY. For these hosts the
+# downloader must NEVER trust the direct CDN URL: it always downloads the
+# canonical page URL so yt-dlp can locate and merge bestvideo+bestaudio.
+_FORCE_PAGE_DOWNLOAD_HOSTS = {
+    "facebook.com", "fb.watch", "fb.com", "m.facebook.com",
+    "mobile.facebook.com", "mbasic.facebook.com", "facebookreel.com",
+}
+
+
+def _force_page_download(url: str) -> bool:
+    """True when the host serves video+audio as split streams (Facebook family).
+
+    ``_generic_download_video`` consults this to decide whether to skip the
+    fast direct-CDN target and go straight to the page URL for a yt-dlp
+    bestvideo+bestaudio merge. The central audio guard then verifies the
+    merged result, so a silent video can never be delivered.
+    """
+    try:
+        host = urlparse(str(url or "").lower()).netloc.lower().replace("www.", "")
+    except Exception:
+        return False
+    return any(host == h or host.endswith("." + h) for h in _FORCE_PAGE_DOWNLOAD_HOSTS)
+
 
 def _quality_height(label) -> int:
     """Extract a numeric height from a quality label ('1080p60' -> 1080, 'Best' -> 0)."""
@@ -791,10 +816,12 @@ def _has_audio_stream(path: str) -> bool | None:
             timeout=25,
             check=False,
         )
-        output = f"{proc.stdout}\n{proc.stderr}".lower()
-        if "audio:" in output or "stream #" in output and ": audio" in output:
+        output = f"{proc.stdout or ''}\n{proc.stderr or ''}".lower()
+        has_audio_stream = re.search(r"stream #\S*:.*audio:", output) is not None
+        has_video_stream = re.search(r"stream #\S*:.*video:", output) is not None
+        if has_audio_stream:
             return True
-        if "video:" in output or "stream #" in output:
+        if has_video_stream:
             return False
         return None
     except Exception as exc:
