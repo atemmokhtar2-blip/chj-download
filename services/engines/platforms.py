@@ -311,7 +311,10 @@ class InstagramEngine(PlatformEngine):
         video_path = await downloader.download_video(url, "best", "best", progress_callback)
         if not video_path:
             raise RuntimeError("Instagram audio fallback: no video available to extract from")
-        return await loop.run_in_executor(get_executor(), downloader.extract_audio_mp3, video_path, AUDIO_BITRATE)
+        cancel_check = getattr(progress_callback, "cancel_check", None)
+        return await loop.run_in_executor(
+            get_executor(), downloader.extract_audio_mp3, video_path, AUDIO_BITRATE, cancel_check
+        )
 
 
 class PinterestEngine(PlatformEngine):

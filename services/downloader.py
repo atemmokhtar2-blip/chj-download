@@ -292,12 +292,18 @@ def _base_opts(progress=None, loop: asyncio.AbstractEventLoop | None = None) -> 
     if yt_visitor_data:
         opts.setdefault("extractor_args", {}).setdefault("youtube", {})["visitor_data"] = [yt_visitor_data]
     if progress and loop:
-        def hook(d):
-            # User pressed 🛑 — raise inside the yt-dlp thread so the download
-            # aborts immediately instead of finishing the whole fallback matrix.
+        # yt-dlp calls progress hooks AND postprocessor hooks without wrapping
+        # them in try/except (verified against yt_dlp 2025.x), so raising our
+        # DownloadCancelledError from either hook aborts an in-flight download,
+        # bestvideo+bestaudio merge, or MP3 extraction immediately — the user
+        # never waits for the whole fallback matrix to finish.
+        def _cancel_from_hook():
             cancel_check = getattr(progress, "cancel_check", None)
             if cancel_check is not None:
                 cancel_check()
+
+        def hook(d):
+            _cancel_from_hook()
             if d.get("status") != "downloading":
                 return
             total = d.get("total_bytes") or d.get("total_bytes_estimate") or 0
@@ -314,6 +320,12 @@ def _base_opts(progress=None, loop: asyncio.AbstractEventLoop | None = None) -> 
             except RuntimeError as exc:
                 logger.debug("Progress hook skipped: %s", exc)
         opts["progress_hooks"] = [hook]
+
+        def pp_hook(_d):
+            # Postprocessor phase (FFmpeg merger / FFmpegExtractAudio) also
+            # honours the 🛑 button — same abort semantics as the download hook.
+            _cancel_from_hook()
+        opts["postprocessor_hooks"] = [pp_hook]
 
     # Use the system ffmpeg when present; otherwise point yt-dlp at the
     # imageio-ffmpeg bundled binary so video merging and MP3 extraction keep
@@ -445,6 +457,44 @@ def _check_size(path: str) -> str:
         _safe_remove(path)
         raise FileTooLargeError()
     return path
+
+
+def _run_process_cancellable(cmd: list[str], check_size, timeout: int = 90) -> bool:
+    """Run a subprocess (FastStart remux / audio-conversion probe) but kill it
+    the moment a cancel request is raised in another thread.
+
+    Python's subprocess has no cooperative cancellation: ``check_size`` (a
+    wrapper around progress.cancel_check + size guard) must be polled from the
+    calling thread, so we run the process in the background and poll every 50ms.
+    This is what makes 🛑 stop a mid-flight ffmpeg run instead of blocking for
+    up to ``timeout`` seconds.
+    """
+    proc = subprocess.Popen(
+        cmd,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    deadline = time.monotonic() + timeout
+    try:
+        while proc.poll() is None:
+            if time.monotonic() > deadline:
+                proc.kill()
+                proc.wait()
+                raise TimeoutError("process timed out")
+            if check_size is not None:
+                check_size()
+            time.sleep(0.05)
+    except BaseException:
+        # Cancellation, size guard, or any other abort: never leave a stray
+        # ffmpeg running that would hold the temp file open after we delete it.
+        if proc.poll() is None:
+            proc.kill()
+            try:
+                proc.wait(timeout=3)
+            except Exception:
+                pass
+        raise
+    return proc.returncode == 0
 
 
 def _download_direct_sync(
@@ -850,12 +900,13 @@ def _require_audio_or_none(path: str | None, *, source: str = "direct") -> str |
     return path
 
 
-def _remux_mp4_faststart(path: str) -> str:
+def _remux_mp4_faststart(path: str, cancel_check=None) -> str:
     """Copy-remux MP4 for Telegram streaming compatibility without re-encoding.
 
     Keeps the operation cheap (`-c copy`) while moving metadata to the front of
     the file. If ffmpeg is unavailable or remux fails, the original verified file
-    is kept.
+    is kept. ``cancel_check`` is polled every 50ms so the 🛑 button also stops a
+    long remux instead of blocking for up to 90s.
     """
     ffmpeg = _ffmpeg_path()
     if not ffmpeg or not path or not os.path.exists(path):
@@ -866,10 +917,12 @@ def _remux_mp4_faststart(path: str) -> str:
     fd, out_path = tempfile.mkstemp(prefix="xdl-faststart-", suffix=".mp4", dir=TEMP_DIR)
     os.close(fd)
     try:
-        proc = subprocess.run(
+        ok = _run_process_cancellable(
             [
                 ffmpeg,
                 "-y",
+                "-hide_banner",
+                "-loglevel", "error",
                 "-i", path,
                 "-map", "0:v:0?",
                 "-map", "0:a:0?",
@@ -877,14 +930,11 @@ def _remux_mp4_faststart(path: str) -> str:
                 "-movflags", "+faststart",
                 out_path,
             ],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
+            cancel_check,
             timeout=90,
-            check=False,
         )
-        if proc.returncode != 0 or not os.path.exists(out_path) or os.path.getsize(out_path) < 2048:
-            logger.debug("ffmpeg faststart remux skipped for %s: %s", path, proc.stderr[-300:])
+        if not ok or not os.path.exists(out_path) or os.path.getsize(out_path) < 2048:
+            logger.debug("ffmpeg faststart remux skipped for %s (returncode=%s)", path, ok)
             _safe_remove(out_path)
             return path
         # Never replace a verified audio file with a silent remux.
@@ -901,27 +951,35 @@ def _remux_mp4_faststart(path: str) -> str:
         return path
 
 
-def _prepare_video_for_delivery(path: str | None, *, source: str = "video", allow_large: bool = False) -> str | None:
+def _prepare_video_for_delivery(
+    path: str | None,
+    *,
+    source: str = "video",
+    allow_large: bool = False,
+    cancel_check=None,
+) -> str | None:
     """Final guard before Telegram upload/cache: verify audio and optimize MP4.
 
     When ``allow_large`` is set we skip the faststart remux (which enforces the
     size limit) and keep the oversized file intact so the caller can split it
-    into Telegram-friendly parts afterwards.
+    into Telegram-friendly parts afterwards. ``cancel_check`` makes the optional
+    faststart remux honour the 🛑 button.
     """
     path = _require_audio_or_none(path, source=source)
     if not path:
         return None
     if allow_large:
         return path
-    return _remux_mp4_faststart(path)
+    return _remux_mp4_faststart(path, cancel_check=cancel_check)
 
 
-def extract_audio_mp3(path: str, bitrate: str = "192") -> str | None:
+def extract_audio_mp3(path: str, bitrate: str = "192", cancel_check=None) -> str | None:
     """Extract the audio track of a local video to MP3 via ffmpeg.
 
     Used by platforms (e.g. Instagram) whose direct yt-dlp audio resolution is
     weak: instead grab the verified video through the robust video path, then
     transcode its audio track locally. Returns None on any failure.
+    ``cancel_check`` is polled every 50ms so 🛑 aborts an in-flight transcode.
     """
     ffmpeg = _ffmpeg_path()
     if not ffmpeg or not path or not os.path.exists(path):
@@ -931,9 +989,11 @@ def extract_audio_mp3(path: str, bitrate: str = "192") -> str | None:
     os.close(fd)
     _safe_remove(out_path)
     try:
-        proc = subprocess.run(
+        ok = _run_process_cancellable(
             [
                 ffmpeg, "-y",
+                "-hide_banner",
+                "-loglevel", "error",
                 "-i", path,
                 "-vn",
                 "-acodec", "libmp3lame",
@@ -941,14 +1001,11 @@ def extract_audio_mp3(path: str, bitrate: str = "192") -> str | None:
                 "-f", "mp3",
                 out_path,
             ],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
+            cancel_check,
             timeout=300,
-            check=False,
         )
-        if proc.returncode != 0 or not os.path.exists(out_path) or os.path.getsize(out_path) < 2048:
-            logger.debug("ffmpeg audio extract failed for %s: %s", path, proc.stderr[-300:])
+        if not ok or not os.path.exists(out_path) or os.path.getsize(out_path) < 2048:
+            logger.debug("ffmpeg audio extract failed for %s (returncode=%s)", path, ok)
             _safe_remove(out_path)
             return None
         return out_path
@@ -1127,7 +1184,12 @@ async def _generic_download_video(url: str, format_id: str = "best", quality_lab
                 try:
                     sync_fn = _download_sync_no_limit if allow_large else _download_sync
                     path = await _run_sync(sync_fn, target, opts)
-                    path = _prepare_video_for_delivery(path, source=f"yt-dlp:{target_kind}", allow_large=allow_large)
+                    path = _prepare_video_for_delivery(
+                        path,
+                        source=f"yt-dlp:{target_kind}",
+                        allow_large=allow_large,
+                        cancel_check=cancel_check,
+                    )
                     if path:
                         if target_kind != "page-url" or fmt != formats[0] or profile_name != client_profiles[0][0]:
                             logger.info(
@@ -1443,9 +1505,14 @@ async def download_video(url: str, format_id: str = "best", quality_label: str =
         # Telegram-friendly parts instead of deleting them mid-download.
         return await _generic_download_video(url, format_id, quality_label, progress, play_url, allow_large=True)
     engine = _select_engine(url)
+    cancel_check = getattr(progress, "cancel_check", None)
     try:
         path = await engine.download_video(url, format_id, quality_label, progress, play_url)
-        path = _prepare_video_for_delivery(path, source=f"engine:{getattr(engine, 'name', 'unknown')}")
+        path = _prepare_video_for_delivery(
+            path,
+            source=f"engine:{getattr(engine, 'name', 'unknown')}",
+            cancel_check=cancel_check,
+        )
         if path:
             return path
         logger.warning("Engine returned no verified-audio video (%s); forcing generic merge fallback for %s", getattr(engine, "name", "unknown"), url[:120])
@@ -1468,6 +1535,7 @@ async def download_audio(url: str, progress=None, bitrate: str | None = None) ->
     from services.engines.base import PlatformEngine
 
     requested = _valid_audio_bitrate(bitrate or AUDIO_BITRATE)
+    cancel_check = getattr(progress, "cancel_check", None)
     last_error: Exception | None = None
     generic_exhausted = False
 
@@ -1528,7 +1596,7 @@ async def download_audio(url: str, progress=None, bitrate: str | None = None) ->
         video_path = await download_video(url, "best", "best", progress, allow_large=True)
         if not video_path:
             raise RuntimeError("video fallback returned no file")
-        audio_path = await _run_sync(extract_audio_mp3, video_path, requested)
+        audio_path = await _run_sync(extract_audio_mp3, video_path, requested, cancel_check)
         _safe_remove(video_path)
         if not audio_path:
             raise RuntimeError("audio extraction produced no file")
