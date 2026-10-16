@@ -101,3 +101,40 @@ def test_raw_videos_shape_is_recognised(monkeypatch):
     assert result["media_type"] == "video"
     assert result["play_url"].endswith(".mp4")
     assert result.get("image_url") is None
+
+
+def test_video_candidates_mp4_first_and_deduped():
+    """Progressive mp4s come before HLS, all unique, all preserved."""
+    videos = {
+        "video_list": {
+            "V_HLSV4": {"url": "https://v1.pinimg.com/videos/mc/hls/v4.m3u8", "height": 720},
+            "V_720P": {"url": "https://v1.pinimg.com/videos/mc/720p.mp4", "height": 720},
+            "V_480P": {"url": "https://v1.pinimg.com/videos/mc/480p.mp4", "height": 480},
+        }
+    }
+    cands = ps._video_candidates(videos)
+    urls = [c["url"] for c in cands]
+    assert urls[0].endswith("720p.mp4"), urls
+    assert urls[1].endswith("480p.mp4"), urls
+    assert urls[2].endswith("v4.m3u8"), urls
+    assert len(urls) == 3 and len(set(urls)) == 3
+
+
+def test_pin_data_exposes_download_candidates():
+    """The PinResource result carries every rendition so the engine can walk
+    past a stale/silent mp4 instead of failing into the yt-dlp format error."""
+    pin = {
+        "id": "123",
+        "title": "t",
+        "images": {"originals": {"url": "https://i.pinimg.com/originals/a/b/c.jpg"}},
+        "videos": {"video_list": {
+            "V_HLSV4": {"url": "https://v1.pinimg.com/videos/mc/hls/v.m3u8"},
+            "V_720P": {"url": "https://v1.pinimg.com/videos/mc/v.mp4", "height": 720},
+        }},
+    }
+    res = ps._result_from_pin_data(pin, "https://www.pinterest.com/pin/123/")
+    assert res["media_type"] == "video"
+    assert res["play_url"].endswith(".mp4")
+    cand_urls = [c["url"] for c in res.get("download_candidates") or []]
+    assert res["play_url"] in cand_urls
+    assert any(".m3u8" in u for u in cand_urls), cand_urls

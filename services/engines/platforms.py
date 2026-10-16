@@ -342,60 +342,97 @@ class PinterestEngine(PlatformEngine):
         play_url: str | None = None,
     ) -> str | None:
         from services import downloader
-        from services.pinterest_scraper import scrape_pinterest
+        from services.pinterest_scraper import scrape_pinterest, download_hls_video
         from middlewares.concurrency import get_executor
         import asyncio
 
         loop = asyncio.get_running_loop()
-        candidate = play_url
-        if not candidate:
-            try:
-                meta = await loop.run_in_executor(get_executor(), scrape_pinterest, url)
-                if meta:
-                    candidate = meta.get("play_url")
-                    download_logger.info(
-                        "PinterestEnginePro selected source=%s score=%s",
-                        meta.get("source"), meta.get("provider_score"),
+        candidates: list[dict] = []
+        seen: set[str] = set()
+
+        def _add(candidate: str | None, provider: str, score: int = 0) -> None:
+            candidate = (candidate or "").strip()
+            if candidate.startswith("http") and candidate not in seen:
+                seen.add(candidate)
+                candidates.append({
+                    "url": candidate,
+                    "provider": provider,
+                    "score": int(score or 0),
+                })
+
+        _add(play_url, "cached-play-url", 9999)
+        try:
+            meta = await loop.run_in_executor(get_executor(), scrape_pinterest, url)
+            if meta:
+                for item in meta.get("download_candidates") or []:
+                    _add(
+                        item.get("url") or item.get("play_url"),
+                        f"pin-resource:{item.get('kind') or 'mp4'}",
+                        int(item.get("score") or 0),
                     )
-            except Exception as exc:
-                error_logger.error("PinterestEnginePro resolve before download failed: %s", exc)
+                _add(
+                    meta.get("play_url"),
+                    meta.get("source") or "pin-resource-best",
+                    int(meta.get("provider_score") or 0),
+                )
+                download_logger.info(
+                    "PinterestEnginePro selected source=%s score=%s direct-candidates=%s",
+                    meta.get("source"), meta.get("provider_score"), len(candidates),
+                )
+        except Exception as exc:
+            error_logger.error("PinterestEnginePro resolve before download failed: %s", exc)
 
-        if candidate and (".mp4" in candidate or ".m3u8" in candidate):
+        # Walk EVERY rendition (progressive mp4 first, then HLS) before yt-dlp.
+        # A single expired/silent CDN URL can no longer sink the whole download
+        # into the misleading "Requested format is not available" yt-dlp error.
+        for candidate in sorted(candidates, key=lambda c: (0 if ".m3u8" not in c["url"] else 1, -int(c["score"] or 0))):
+            target = candidate["url"]
             try:
-                if ".m3u8" in candidate:
-                    from services.pinterest_scraper import download_hls_video
-
-                    safe_name = sanitize_filename(f"pinterest_hls_{hash(url) % 100000}")
-                    hls_out = os.path.join(TEMP_DIR, safe_name)
-                    hls_path = await loop.run_in_executor(
+                if ".m3u8" in target:
+                    safe_name = sanitize_filename(f"pinterest_hls_{hash(target) % 100000}")
+                    path = await loop.run_in_executor(
                         get_executor(),
                         download_hls_video,
-                        candidate,
-                        hls_out,
+                        target,
+                        os.path.join(TEMP_DIR, safe_name),
                     )
-                    hls_path = downloader._prepare_video_for_delivery(hls_path, source="hls-cdn")
-                    if hls_path:
-                        return hls_path
+                    path = downloader._prepare_video_for_delivery(
+                        path, source=f"pinterest-hls:{candidate['provider']}")
                 else:
-                    direct_path = await loop.run_in_executor(
+                    path = await loop.run_in_executor(
                         get_executor(),
                         downloader._download_direct_sync,
-                        candidate,
+                        target,
                         {"Referer": "https://www.pinterest.com/"},
                         60,
                         progress_callback,
                         loop,
                         "xdl-pinterest",
                     )
-                    direct_path = downloader._prepare_video_for_delivery(direct_path, source="direct-cdn")
-                    if direct_path:
-                        return direct_path
+                    path = downloader._prepare_video_for_delivery(
+                        path, source=f"pinterest-direct:{candidate['provider']}")
+                if path:
+                    return path
+                download_logger.info(
+                    "Pinterest candidate rejected (silent/unverifiable) provider=%s",
+                    candidate["provider"],
+                )
+            except downloader.FileTooLargeError:
+                raise
+            except downloader.DownloadCancelledError:
+                raise
             except Exception as exc:
-                error_logger.error("PinterestEnginePro direct download failed: %s", exc)
+                error_logger.error(
+                    "PinterestEnginePro direct candidate failed provider=%s: %s",
+                    candidate["provider"], exc,
+                )
 
-        # Fall back to yt-dlp but keep the resolved direct CDN URL as the first
-        # target so a video pin can never degrade into its poster image.
-        return await downloader._generic_download_video(url, format_id, quality_label, progress_callback, candidate)
+        # Final yt-dlp fallback keeps the strongest direct CDN URL as the first
+        # target, so a video pin can never degrade into its silent poster image.
+        fallback_play = candidates[0]["url"] if candidates else play_url
+        return await downloader._generic_download_video(
+            url, format_id, quality_label, progress_callback, fallback_play
+        )
 
 
 class FacebookEngine(PlatformEngine):

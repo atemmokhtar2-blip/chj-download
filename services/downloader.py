@@ -600,6 +600,109 @@ def download_hls_mp4(play_url: str, prefix: str = "xdl-hls", headers: dict | Non
     return None
 
 
+def merge_hls_video_audio(
+    video_url: str,
+    audio_url: str,
+    prefix: str = "xdl-merge",
+    headers: dict | None = None,
+    timeout: int = 420,
+) -> str | None:
+    """Merge a video-only HLS rendition with a separate audio HLS rendition.
+
+    Pinterest (and a few other split-DASH/HLS platforms) exposes video and
+    audio as SEPARATE ``.m3u8`` playlists. A single-input ``-c copy`` remux of
+    the video playlist can therefore produce a silent file. This runs ffmpeg
+    with BOTH inputs (video + audio) and falls back to a full H.264/AAC
+    re-encode when stream-copy cannot package the codecs.
+    """
+    if not video_url or not audio_url:
+        return None
+    from utils.url_safety import is_public_url
+
+    for u in (video_url, audio_url):
+        safe, _reason = is_public_url(u)
+        if not safe:
+            logger.warning("Blocked HLS merge (SSRF guard) for %s", str(u)[:120])
+            return None
+
+    ffmpeg = _ffmpeg_path()
+    if not ffmpeg:
+        logger.warning("HLS merge skipped: no ffmpeg available")
+        return None
+
+    Path(TEMP_DIR).mkdir(parents=True, exist_ok=True)
+    fd, out_path = tempfile.mkstemp(prefix=f"{prefix}-", suffix=".mp4", dir=TEMP_DIR)
+    os.close(fd)
+    _safe_remove(out_path)
+
+    header_args: list[str] = []
+    if headers:
+        header_args = ["-headers", "\r\n".join(
+            f"{k}: {v}" for k, v in headers.items() if k and v)]
+
+    def _inputs() -> list[str]:
+        args: list[str] = []
+        if header_args:
+            args.extend(header_args)
+        args.extend(["-i", video_url])
+        if header_args:
+            args.extend(header_args)
+        args.extend(["-i", audio_url])
+        return args
+
+    passes = (
+        [
+            "-map", "0:v:0?",
+            "-map", "1:a:0?",
+            "-c:v", "copy",
+            "-c:a", "copy",
+            "-bsf:a", "aac_adtstoasc",
+            "-movflags", "+faststart",
+        ],
+        [
+            "-map", "0:v:0?",
+            "-map", "1:a:0?",
+            "-c:v", "libx264",
+            "-preset", "veryfast",
+            "-crf", "23",
+            "-c:a", "aac",
+            "-b:a", "128k",
+            "-movflags", "+faststart",
+        ],
+    )
+
+    for pass_args in passes:
+        _safe_remove(out_path)
+        try:
+            proc = subprocess.run(
+                [
+                    ffmpeg, "-y", "-hide_banner", "-loglevel", "error",
+                    *_inputs(),
+                    *pass_args,
+                    out_path,
+                ],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                timeout=timeout,
+                check=False,
+            )
+            if proc.returncode == 0 and os.path.exists(out_path) and os.path.getsize(out_path) >= 2048:
+                return out_path
+            logger.debug(
+                "HLS merge pass failed for %s + %s: %s",
+                str(video_url)[:120], str(audio_url)[:120], (proc.stderr or "")[-300:],
+            )
+        except Exception as exc:
+            logger.debug(
+                "HLS merge pass crashed for %s + %s: %s",
+                str(video_url)[:100], str(audio_url)[:100], exc,
+            )
+
+    _safe_remove(out_path)
+    return None
+
+
 def _ffmpeg_path() -> str | None:
     ffmpeg = shutil.which("ffmpeg")
     if ffmpeg:
@@ -833,7 +936,17 @@ def _download_sync_impl(url: str, opts: dict, check_size: bool) -> str | None:
 
 
 def _video_format_candidates(format_id: str = "best") -> list[str]:
-    """Return yt-dlp format fallbacks that strongly prefer video+audio merged output."""
+    """Return yt-dlp format fallbacks that strongly prefer video+audio merged output.
+
+    The FINAL fallback in every chain must never raise "Requested format is
+    not available": split-only platforms (e.g. Pinterest HLS, where video and
+    audio live in SEPARATE renditions with no combined format) would hit that
+    error on ``best`` / ``worst`` / ``best[acodec!=none][vcodec!=none]`` and
+    the real root cause (usually a missing ffmpeg merge) would be masked.
+    The universal escape hatch is ``bestvideo*+bestaudio*/best*`` — any
+    rendition matches, and the central audio guard rejects silent files
+    afterwards instead of failing with a misleading yt-dlp format error.
+    """
     requested = str(format_id or "best").strip()
     # Quality-first selectors: prefer H.264 (avc) video inside MP4 + m4a audio.
     # H.264/AAC is what Telegram hardware-accelerates, so the "best" pick is not
@@ -844,15 +957,22 @@ def _video_format_candidates(format_id: str = "best") -> list[str]:
         "bestvideo[ext=mp4][vcodec^=avc]+bestaudio[ext=m4a]"
         "/bestvideo[ext=mp4]+bestaudio[ext=m4a]"
         "/bestvideo+bestaudio"
-        "/best[acodec!=none][vcodec!=none]/best"
+        "/best[acodec!=none][vcodec!=none]"
+        "/bestvideo*+bestaudio*/best*"
     )
     merged_720 = (
         "bestvideo[height<=720][ext=mp4][vcodec^=avc]+bestaudio[ext=m4a]"
         "/bestvideo[height<=720][ext=mp4]+bestaudio[ext=m4a]"
         "/bestvideo[height<=720]+bestaudio"
-        "/best[height<=720][acodec!=none][vcodec!=none]/best[height<=720]"
+        "/best[height<=720][acodec!=none][vcodec!=none]"
+        "/best[height<=720]"
+        "/bestvideo*+bestaudio*/best*"
     )
-    safe_small = "best[height<=720][acodec!=none][vcodec!=none]/best[acodec!=none][vcodec!=none]/worst[acodec!=none][vcodec!=none]/worst"
+    safe_small = (
+        "best[height<=720][acodec!=none][vcodec!=none]"
+        "/best[acodec!=none][vcodec!=none]"
+        "/bestvideo*+bestaudio*/best*"
+    )
     if requested in {"best", "best_quality"}:
         return [merged_best, merged_720, safe_small]
     return [

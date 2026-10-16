@@ -116,8 +116,9 @@ def _best_image_from_images_dict(images: dict) -> str | None:
     return None
 
 
-def _best_video_url(videos: Any) -> str | None:
-    """Pick the highest-quality mp4 from any Pinterest video structure.
+def _video_candidates(videos: Any) -> list[dict]:
+    """Return EVERY playable video URL from any Pinterest video structure,
+    best first (progressive mp4 > HLS; height breaks ties).
 
     Pinterest returns several shapes across API versions and libraries:
       {"video_list": {"V_720P": {"url": ...}, ...}}
@@ -125,11 +126,13 @@ def _best_video_url(videos: Any) -> str | None:
       [{"url": ..., "height": ...}]
       {"formats": [...]}
 
-    A video pin must never be served as its poster image, so this normalizer
-    is intentionally broad and handles all of the above.
+    Collecting the full list (not just the single best URL) lets the download
+    engine walk every progressive/HLS rendition before falling back to yt-dlp —
+    a stale or silent mp4 no longer aborts the whole Pinterest download with a
+    misleading "Requested format is not available" yt-dlp error.
     """
     if not videos:
-        return None
+        return []
     collected: list[tuple[str, dict]] = []
 
     def walk(node: Any) -> None:
@@ -150,25 +153,31 @@ def _best_video_url(videos: Any) -> str | None:
             collected.append((node, {}))
 
     walk(videos)
-    if not collected:
-        return None
 
-    candidates: list[tuple[int, str]] = []
+    out: list[dict] = []
     seen: set[str] = set()
     for u, meta in collected:
         u = u.strip()
-        if u in seen:
+        if not u or u in seen:
             continue
         seen.add(u)
         h = int(meta.get("height") or meta.get("width") or 0)
-        score = h
         # Prefer a progressive mp4 over an HLS playlist; height is secondary.
-        if ".m3u8" in u or "hls" in u.lower():
-            score -= 10_000
-        candidates.append((score, u))
+        is_hls = ".m3u8" in u or "hls" in u.lower()
+        out.append({
+            "url": u,
+            "height": h,
+            "kind": "hls" if is_hls else "mp4",
+            "score": h - (10_000 if is_hls else 0),
+        })
+    out.sort(key=lambda c: (0 if c["kind"] == "mp4" else 1, -int(c["score"] or 0)))
+    return out
 
-    candidates.sort(key=lambda x: x[0], reverse=True)
-    return candidates[0][1]
+
+def _best_video_url(videos: Any) -> str | None:
+    """Best single playable video URL — see _video_candidates for the order."""
+    cands = _video_candidates(videos)
+    return cands[0]["url"] if cands else None
 
 
 def _probe_media_url(url: str, session: requests.Session | None = None, timeout: int = 10) -> dict:
@@ -329,7 +338,8 @@ def _result_from_pin_data(pin: dict, url: str) -> dict:
         else:
             image_url = upgraded  # try originals path; CDN often still serves it
 
-    video_url = _best_video_url(pin.get("videos"))
+    video_candidates_list = _video_candidates(pin.get("videos"))
+    video_url = video_candidates_list[0]["url"] if video_candidates_list else None
     # Story pins / idea pins carousel
     album_items: list[dict] = []
     carousel = (pin.get("carousel_data") or {}).get("carousel_slots") or []
@@ -385,6 +395,7 @@ def _result_from_pin_data(pin: dict, url: str) -> dict:
         "ext": ext,
         "media_id": pin_id,
         "play_url": video_url,  # direct CDN for video when yt-dlp fails
+        "download_candidates": video_candidates_list,  # every rendition, best first
         "source": "pin_resource",
     }
 
@@ -742,6 +753,17 @@ def scrape_pinterest(url: str) -> dict | None:
 
     def add_candidate(candidate: dict | None):
         if candidate and (candidate.get("image_url") or candidate.get("play_url") or candidate.get("album_items")):
+            if not candidate.get("download_candidates") and candidate.get("play_url"):
+                # Providers that only expose ONE play_url still get a
+                # normalised candidate list, so the engine can walk every
+                # progressive/HSL rendition before yt-dlp.
+                pu = candidate.get("play_url") or ""
+                candidate["download_candidates"] = [{
+                    "url": pu,
+                    "height": 0,
+                    "kind": "mp4" if ".m3u8" not in pu else "hls",
+                    "score": 0,
+                }]
             candidate.setdefault("platform", "Pinterest")
             candidate.setdefault("url", url)
             candidate.setdefault("webpage_url", url)
