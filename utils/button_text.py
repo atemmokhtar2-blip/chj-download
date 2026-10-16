@@ -1,16 +1,17 @@
-"""Shared helpers for Telegram keyboard labels.
+"""Shared helpers for Telegram keyboard labels and native button styling.
 
-Button labels KEEP their emoji — emoji are part of the UX (color dots,
-section icons, state markers). ``normalize_button_text`` exists only for
-emoji-insensitive *comparison* of reply-keyboard presses (clients may send
-the label with or without variation selectors).
+Labels retain their emoji. Reply-keyboard presses are normalized only for
+comparison because Telegram clients may return labels with different emoji
+variation selectors.
 """
 from __future__ import annotations
 
 import re
-from telegram import InlineKeyboardButton as _TelegramInlineKeyboardButton
+from telegram import (
+    InlineKeyboardButton as _TelegramInlineKeyboardButton,
+    KeyboardButton as _TelegramKeyboardButton,
+)
 
-# Emoji/pictograph ranges, variation selectors, joiners, flags, and keycaps.
 _EMOJI_RE = re.compile(
     "["
     "\\U0001F1E6-\\U0001F1FF"
@@ -26,25 +27,60 @@ _EMOJI_RE = re.compile(
 
 
 def normalize_button_text(value: str) -> str:
-    """Comparison-only form of a label: emoji removed, whitespace collapsed.
-
-    Used to match incoming reply-keyboard messages against expected menu
-    buttons regardless of emoji/variation-selector differences between
-    clients. Never use this to *render* a button — rendering keeps emoji.
-    """
-    return re.sub(r"\s{2,}", " ", _EMOJI_RE.sub("", str(value or ""))).strip()
+    """Comparison-only form of a label: emoji removed, whitespace collapsed."""
+    return re.sub(r"\\s{2,}", " ", _EMOJI_RE.sub("", str(value or ""))).strip()
 
 
 def strip_button_emoji(value: str) -> str:
-    """Deprecated: labels keep their emoji now. Kept for compatibility."""
+    """Deprecated compatibility helper; rendered labels keep their emoji."""
     return str(value or "").strip()
 
 
-def inline_button(text: str, *args, **kwargs):
-    """Create an inline button preserving the label exactly (emoji included).
+def _button_style(text: str, callback_data=None, explicit=None) -> str | None:
+    """Choose Telegram's native supported style: primary (blue), success, danger."""
+    if explicit in {"primary", "success", "danger"}:
+        return explicit
 
-    Any legacy ``style=`` kwarg is ignored — Telegram inline buttons have no
-    style/color option, and passing it would raise a TypeError.
-    """
-    kwargs.pop("style", None)
-    return _TelegramInlineKeyboardButton(str(text or "").strip(), *args, **kwargs)
+    label = normalize_button_text(text).casefold()
+    action = str(callback_data or "").casefold()
+
+    danger_terms = (
+        "حذف", "الغاء", "إلغاء", "إغلاق", "اعادة ضبط", "إعادة ضبط",
+        "مسح", "حظر", "ايقاف", "إيقاف", "reset", "delete", "cancel",
+        "close", "ban", "stop", "remove", "unban",
+    )
+    success_terms = (
+        "تأكيد", "تفعيل", "حفظ", "نشر", "تم", "استرداد", "confirm",
+        "activate", "save", "publish", "redeem", "approve",
+    )
+    primary_terms = (
+        "تحميل", "تنزيل", "متابعة", "التالي", "ابدأ", "بدء",
+        "download", "continue", "next", "start", "open", "quality",
+    )
+
+    if any(term in label or term in action for term in danger_terms):
+        return "danger"
+    if any(term in label or term in action for term in success_terms):
+        return "success"
+    if any(term in label or term in action for term in primary_terms):
+        return "primary"
+    return None
+
+
+def inline_button(text: str, *args, **kwargs):
+    """Create an inline button with a restrained native Telegram color style."""
+    label = str(text or "").strip()
+    explicit_style = kwargs.pop("style", None)
+    callback_data = kwargs.get("callback_data")
+    style = _button_style(label, callback_data, explicit_style)
+    if style:
+        kwargs["style"] = style
+    return _TelegramInlineKeyboardButton(label, *args, **kwargs)
+
+
+def reply_button(text: str, style: str | None = None):
+    """Create a reply-keyboard button using Telegram's native style field."""
+    label = str(text or "").strip()
+    chosen_style = _button_style(label, explicit=style)
+    kwargs = {"style": chosen_style} if chosen_style else {}
+    return _TelegramKeyboardButton(label, **kwargs)
