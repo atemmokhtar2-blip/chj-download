@@ -191,33 +191,9 @@ async def owner_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ---- home dashboard ----------------------------------------------------------------
 
 def _build_home() -> tuple[str, InlineKeyboardMarkup]:
-    from database.pg import backend_name
-    try:
-        db_ok = get_total_users() >= 0
-    except Exception:
-        db_ok = False
-    total_users = get_total_users()
-    active_24h = get_active_24h()
-    total_downloads = get_total_downloads()
-    try:
-        overview = referral.get_network_overview()
-        inst_total = overview.get("instances_total", 0)
-        inst_active = overview.get("instances", {}).get("active", 0)
-    except Exception:
-        inst_total = inst_active = 0
-
-    text = (
-        "👑 <b>مركز التحكم الرئيسي</b>\n"
-        "<b>المالك الأساسي • لوحة إدارة النظام</b>\n\n"
-        "🟢 <b>متصل</b>\n"
-        f"حالة البوت: <b>يعمل</b> • قاعدة البيانات: <b>{'متصلة' if db_ok else 'غير متصلة'} ({escape(backend_name())})</b>\n"
-        f"وقت التشغيل: <b>{_uptime()}</b> • آخر تحديث: <code>{datetime.now().strftime('%Y-%m-%d %H:%M')}</code>\n\n"
-        f"👥 كل المستخدمين: <b>{total_users}</b>\n"
-        f"⚡ نشاط آخر 24 ساعة: <b>{active_24h}</b>\n"
-        f"📥 كل التحميلات: <b>{total_downloads}</b>\n"
-        f"🤖 النسخ الخاصة: <b>{inst_total}</b> (نشطة: <b>{inst_active}</b>)\n\n"
-        "<b>القائمة الرئيسية</b>"
-    )
+    """Button-only owner home. Telegram requires a message to hold inline buttons,
+    so use an invisible separator instead of a wall of dashboard text."""
+    text = "\u2063"
     keyboard = _kb([
         [inline_button("👥 المستخدمون", callback_data="own_users"),
          inline_button("🎁 الإحالات", callback_data="own_refs")],
@@ -231,7 +207,6 @@ def _build_home() -> tuple[str, InlineKeyboardMarkup]:
         [inline_button("🔄 تحديث الأرقام", callback_data="own_home")],
     ])
     return text, keyboard
-
 
 # ---- users section --------------------------------------------------------------------
 
