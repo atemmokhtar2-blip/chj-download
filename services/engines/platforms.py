@@ -272,6 +272,8 @@ class InstagramEngine(PlatformEngine):
                 download_logger.info("Instagram direct candidate failed/was silent source=%s", source)
             except downloader.FileTooLargeError:
                 raise
+            except downloader.DownloadCancelledError:
+                raise
             except Exception as exc:
                 error_logger.error("InstagramEnginePro direct candidate failed source=%s: %s", source, exc)
 
@@ -516,6 +518,10 @@ class FacebookEngine(PlatformEngine):
                 direct_path = downloader._prepare_video_for_delivery(direct_path, source="direct-cdn")
                 if direct_path:
                     return direct_path
+            except downloader.FileTooLargeError:
+                raise
+            except downloader.DownloadCancelledError:
+                raise
             except Exception as exc:
                 error_logger.error("FacebookEnginePro direct download failed: %s", exc)
 
@@ -530,6 +536,8 @@ class FacebookEngine(PlatformEngine):
                 if path:
                     return path
             except downloader.FileTooLargeError:
+                raise
+            except downloader.DownloadCancelledError:
                 raise
             except Exception as exc:
                 error_logger.error("FacebookEnginePro page fallback failed for %s: %s", page_url[:90], exc)
@@ -615,6 +623,10 @@ class TwitterEngine(PlatformEngine):
                 direct_path = downloader._prepare_video_for_delivery(direct_path, source="direct-cdn")
                 if direct_path:
                     return direct_path
+            except downloader.FileTooLargeError:
+                raise
+            except downloader.DownloadCancelledError:
+                raise
             except Exception as exc:
                 error_logger.error("TwitterEnginePro direct download failed: %s", exc)
 
@@ -731,6 +743,8 @@ class RedditEngine(PlatformEngine):
                     return direct_path
                 download_logger.info("Reddit direct candidate failed/was silent source=%s", source)
             except downloader.FileTooLargeError:
+                raise
+            except downloader.DownloadCancelledError:
                 raise
             except Exception as exc:
                 error_logger.error("RedditEnginePro direct candidate failed source=%s: %s", source, exc)
@@ -907,6 +921,8 @@ class EmbedFallbackEngine(YtDlpFallbackEngine):
                 download_logger.info("%s direct candidate failed/was silent idx=%s", self.name, idx)
             except downloader.FileTooLargeError:
                 raise
+            except downloader.DownloadCancelledError:
+                raise
             except Exception as exc:
                 error_logger.error("%s direct candidate failed idx=%s: %s", self.name, idx, exc)
 
@@ -993,6 +1009,8 @@ class VimeoEngine(PlatformEngine):
                     return path
                 download_logger.info("Vimeo direct candidate failed/was silent idx=%s", idx)
             except downloader.FileTooLargeError:
+                raise
+            except downloader.DownloadCancelledError:
                 raise
             except Exception as exc:
                 error_logger.error("VimeoEnginePro direct candidate failed idx=%s: %s", idx, exc)
@@ -1136,6 +1154,8 @@ class ImgurEngine(PlatformEngine):
                 download_logger.info("Imgur direct candidate failed/was silent idx=%s", idx)
             except downloader.FileTooLargeError:
                 raise
+            except downloader.DownloadCancelledError:
+                raise
             except Exception as exc:
                 error_logger.error("ImgurEnginePro direct candidate failed idx=%s: %s", idx, exc)
 
@@ -1219,6 +1239,8 @@ class StreamableEngine(PlatformEngine):
                 download_logger.info("Streamable direct candidate failed/was silent idx=%s", idx)
             except downloader.FileTooLargeError:
                 raise
+            except downloader.DownloadCancelledError:
+                raise
             except Exception as exc:
                 error_logger.error("StreamableEnginePro direct candidate failed idx=%s: %s", idx, exc)
 
@@ -1301,6 +1323,8 @@ class CoubEngine(PlatformEngine):
                     return path
                 download_logger.info("Coub direct candidate failed/was silent idx=%s", idx)
             except downloader.FileTooLargeError:
+                raise
+            except downloader.DownloadCancelledError:
                 raise
             except Exception as exc:
                 error_logger.error("CoubEnginePro direct candidate failed idx=%s: %s", idx, exc)
