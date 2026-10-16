@@ -109,6 +109,17 @@ class FileTooLargeError(Exception):
         super().__init__("Media file exceeds the configured size limit.")
 
 
+class EmptyFileError(Exception):
+    """Raised when a media download produced zero usable bytes.
+
+    yt-dlp's ``FragmentFD`` surfaces this as "The downloaded file is empty"
+    when every HLS/DASH fragment was rejected or served empty (expired CDN
+    token, geo/agent block, region restriction). No format selector can repair
+    the SAME target URL — the downloader uses this type to skip the dead
+    target cleanly instead of re-trying every selector on it.
+    """
+
+
 def _platform(url: str) -> str:
     host = urlparse(url).netloc.lower().replace("www.", "")
     if "youtu" in host: return "YouTube"
@@ -920,19 +931,46 @@ def _download_sync_no_limit(url: str, opts: dict) -> str | None:
 
 def _download_sync_impl(url: str, opts: dict, check_size: bool) -> str | None:
     Path(TEMP_DIR).mkdir(parents=True, exist_ok=True)
-    with yt_dlp.YoutubeDL(opts) as ydl:
-        info = ydl.extract_info(url, download=True)
-        filename = ydl.prepare_filename(info)
-        if opts.get("merge_output_format") == "mp4":
-            mp4 = os.path.splitext(filename)[0] + ".mp4"
-            if os.path.exists(mp4):
-                filename = mp4
-        # audio postprocessors can change extension
-        base = os.path.splitext(filename)[0]
-        for candidate in (base + ".mp3", base + ".m4a", base + ".mp4", filename):
-            if os.path.exists(candidate):
-                return candidate if not check_size else _check_size(candidate)
-    return None
+    try:
+        with yt_dlp.YoutubeDL(opts) as ydl:
+            info = ydl.extract_info(url, download=True)
+            filename = ydl.prepare_filename(info)
+            if opts.get("merge_output_format") == "mp4":
+                mp4 = os.path.splitext(filename)[0] + ".mp4"
+                if os.path.exists(mp4):
+                    filename = mp4
+            # audio postprocessors can change extension
+            base = os.path.splitext(filename)[0]
+            for candidate in (base + ".mp3", base + ".m4a", base + ".mp4", filename):
+                if os.path.exists(candidate):
+                    if os.path.getsize(candidate) == 0:
+                        _safe_remove(candidate)
+                        raise EmptyFileError(
+                            "yt-dlp produced a zero-byte file (CDN rejected fragments)"
+                        )
+                    return candidate if not check_size else _check_size(candidate)
+        return None
+    except EmptyFileError:
+        raise
+    except Exception as exc:
+        if _is_empty_file_error(exc):
+            raise EmptyFileError(str(exc)) from exc
+        raise
+
+
+def _is_empty_file_error(exc: BaseException | None) -> bool:
+    """True when yt-dlp's fragmented downloader wrote zero bytes.
+
+    yt-dlp's FragmentFD reports "The downloaded file is empty" when every
+    HLS/DASH fragment either failed silently or was served as an empty body
+    (expired CDN token, geo/agent block, region restriction). No format
+    selector can fix that for the SAME target URL — the right move is to
+    advance to the next target/candidate instead of burning retries.
+    """
+    if isinstance(exc, EmptyFileError):
+        return True
+    text = str(exc or "").lower()
+    return "file is empty" in text or "empty file" in text
 
 
 def _video_format_candidates(format_id: str = "best") -> list[str]:
@@ -1006,8 +1044,18 @@ async def _generic_download_video(url: str, format_id: str = "best", quality_lab
             client_profiles = _youtube_client_profiles()
         else:
             client_profiles = [("default", [YTDLP_CLIENT] if YTDLP_CLIENT else [])]
+        # A single dead target (the CDN rejected every fragment) must not burn
+        # the remaining format/profile candidates on the SAME URL — mark it dead
+        # and advance to the next target. This also covers YouTube's multi-profile
+        # matrix, where a bare `break` would only leave the format loop and then
+        # re-run every selector on the next profile.
+        target_dead = False
         for profile_name, clients in client_profiles:
+            if target_dead:
+                break
             for fmt in formats:
+                if target_dead:
+                    break
                 if cancel_check is not None:
                     cancel_check()
                 opts = {**_base_opts(progress, loop), "format": fmt, "merge_output_format": "mp4", "noplaylist": True}
@@ -1026,6 +1074,7 @@ async def _generic_download_video(url: str, format_id: str = "best", quality_lab
                         return path
                     if target_kind == "direct-play-url":
                         logger.info("Direct play_url produced no verified audio; trying page URL for merge: %s", url[:100])
+                        target_dead = True
                         break
                 except FileTooLargeError:
                     raise
@@ -1037,9 +1086,22 @@ async def _generic_download_video(url: str, format_id: str = "best", quality_lab
                         "Download attempt failed target=%s profile=%s clients=%s format=%s url=%s error=%s",
                         target_kind, profile_name, clients, fmt, url[:100], exc,
                     )
+                    if _is_empty_file_error(exc):
+                        logger.info(
+                            "Empty-file/CDN rejection on target=%s; skipping to next target for %s",
+                            target_kind, url[:100],
+                        )
+                        target_dead = True
+                        break
                     continue
 
     if last_error:
+        if _is_empty_file_error(last_error):
+            raise RuntimeError(
+                "The media stream returned zero data — the host CDN rejected or "
+                "expired the segment URLs. Try again in a moment, pick a lower "
+                "quality, or send a different link."
+            )
         raise last_error
     raise RuntimeError(
         "No downloadable video stream returned after all formats and fallbacks were exhausted"
@@ -1080,8 +1142,16 @@ async def _generic_download_audio(url: str, progress=None, bitrate: str | None =
         client_profiles = [("default", [YTDLP_CLIENT] if YTDLP_CLIENT else [])]
 
     last_error: Exception | None = None
+    # Like the video path: when the host CDN rejects every fragment (empty
+    # file), no audio format selector can repair the SAME URL — stop walking
+    # profiles/selectors and surface a clear message instead.
+    stream_rejected = False
     for profile_name, clients in client_profiles:
+        if stream_rejected:
+            break
         for fmt in formats:
+            if stream_rejected:
+                break
             if cancel_check is not None:
                 cancel_check()
             opts = {
@@ -1120,9 +1190,17 @@ async def _generic_download_audio(url: str, progress=None, bitrate: str | None =
                     "Audio attempt failed profile=%s clients=%s format=%s url=%s error=%s",
                     profile_name, clients, fmt, url[:100], exc,
                 )
+                if _is_empty_file_error(exc):
+                    stream_rejected = True
+                    break
                 continue
 
     if last_error:
+        if _is_empty_file_error(last_error):
+            raise RuntimeError(
+                "The media stream returned zero data — the host CDN rejected or "
+                "expired the segment URLs. Try again in a moment or send a different link."
+            )
         raise last_error
     raise RuntimeError("No downloadable audio stream returned after all formats and fallbacks were exhausted")
 
