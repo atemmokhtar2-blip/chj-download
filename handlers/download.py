@@ -26,7 +26,8 @@ from database.cache import (
 from services.media_vault import archive_to_vault, deliver_from_vault, get_storage_channel_id
 from services.downloader import (
     analyze_url, download_video, download_audio, download_image,
-    download_album, FileTooLargeError, DownloadImpossibleError, ALBUM_MAX_ITEMS,
+    download_album, FileTooLargeError, DownloadImpossibleError,
+    is_cdn_rejection, ALBUM_MAX_ITEMS,
 )
 from services.content_intelligence import render_intelligence_html
 from middlewares.rate_limiter import check_rate_limit_detailed, mark_download

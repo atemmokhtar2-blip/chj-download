@@ -172,3 +172,25 @@ def test_generic_audio_empty_file_raises_friendly_error(monkeypatch):
         assert len(calls) == 1, calls
 
     asyncio.run(run())
+
+
+def test_is_cdn_rejection_detects_typed_and_raw_variants():
+    """The UI helper must recognise CDN rejection whether it arrives as the
+    typed marker OR as yt-dlp's raw text — the exact string users reported."""
+
+    raw = Exception("ERROR: The downloaded file is empty")
+    assert dl.is_cdn_rejection(raw) is True
+
+    assert dl.is_cdn_rejection(dl.EmptyFileError("zero bytes")) is True
+    assert dl.is_cdn_rejection(
+        dl.DownloadImpossibleError("zero data", empty_file=True)
+    ) is True
+
+    # A non-empty exhausted stream is NOT a CDN rejection.
+    assert dl.is_cdn_rejection(
+        dl.DownloadImpossibleError("no downloadable stream")
+    ) is False
+    assert dl.is_cdn_rejection(
+        Exception("ERROR: Requested format is not available")
+    ) is False
+    assert dl.is_cdn_rejection(None) is False

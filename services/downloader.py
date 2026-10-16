@@ -988,6 +988,20 @@ def _is_empty_file_error(exc: BaseException | None) -> bool:
     return "file is empty" in text or "empty file" in text
 
 
+def is_cdn_rejection(exc: BaseException | None) -> bool:
+    """Public counterpart of :func:`_is_empty_file_error` for the UI layer.
+
+    Returns True when an error means the host CDN rejected the media fragments —
+    either through the typed ``DownloadImpossibleError(empty_file=True)`` marker
+    or through the raw yt-dlp string ("The downloaded file is empty"). The
+    Telegram handler uses this so a cryptic technical reason never leaks to a
+    user, no matter which layer surfaced the failure.
+    """
+    if isinstance(exc, DownloadImpossibleError) and bool(getattr(exc, "empty_file", False)):
+        return True
+    return _is_empty_file_error(exc)
+
+
 def _video_format_candidates(format_id: str = "best") -> list[str]:
     """Return yt-dlp format fallbacks that strongly prefer video+audio merged output.
 
