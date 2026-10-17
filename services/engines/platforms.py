@@ -1571,6 +1571,56 @@ class BandcampEngine(EmbedFallbackEngine):
     embed_headers = {"Referer": "https://bandcamp.com/"}
 
 
+class ChzzkEngine(EmbedFallbackEngine):
+    name = "ChzzkEnginePro"
+    platform_label = "Chzzk"
+    domains = ("chzzk.naver.com",)
+    resolver_name = "resolve_chzzk"
+    embed_headers = {"Referer": "https://chzzk.naver.com/"}
+
+
+class NaverBlogEngine(EmbedFallbackEngine):
+    name = "NaverBlogEnginePro"
+    platform_label = "Naver Blog"
+    domains = ("blog.naver.com",)
+    embed_headers = {"Referer": "https://blog.naver.com/"}
+
+
+class NaverCafeEngine(EmbedFallbackEngine):
+    name = "NaverCafeEnginePro"
+    platform_label = "Naver Cafe"
+    domains = ("cafe.naver.com",)
+    embed_headers = {"Referer": "https://cafe.naver.com/"}
+
+
+class NaverPostEngine(EmbedFallbackEngine):
+    name = "NaverPostEnginePro"
+    platform_label = "Naver Post"
+    domains = ("post.naver.com",)
+    embed_headers = {"Referer": "https://post.naver.com/"}
+
+
+class AfreecaTVEngine(EmbedFallbackEngine):
+    name = "AfreecaTVEnginePro"
+    platform_label = "AfreecaTV / SOOP"
+    domains = ("afreecatv.com", "soop.co.kr", "sooplive.co.kr")
+    embed_headers = {"Referer": "https://www.soop.co.kr/"}
+
+
+class AparatEngine(EmbedFallbackEngine):
+    name = "AparatEnginePro"
+    platform_label = "Aparat"
+    domains = ("aparat.com",)
+    embed_headers = {"Referer": "https://www.aparat.com/"}
+
+
+class FC2VideoEngine(EmbedFallbackEngine):
+    name = "FC2VideoEnginePro"
+    platform_label = "FC2 Video"
+    domains = ("video.fc2.com",)
+    embed_headers = {"Referer": "https://video.fc2.com/"}
+
+
 class GenericEngine(YtDlpFallbackEngine):
     name = "GenericEngine"
     domains = ()

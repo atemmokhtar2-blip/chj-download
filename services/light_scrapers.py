@@ -2102,3 +2102,104 @@ def resolve_weibo(url: str) -> dict[str, Any] | None:
         candidates=sorted(candidates, key=_rank_candidate, reverse=True)[:12],
         engine_profile="weibo-render-data-cdn-mining",
     )
+
+
+# --------------------------------------------------------------------------- #
+# Chzzk — Naver game streaming/VOD (KR Twitch successor)
+# --------------------------------------------------------------------------- #
+_CHZZK_URL_RE = re.compile(r"chzzk\.naver\.com/(video|live)/([A-Za-z0-9]+)", re.I)
+
+
+def _chzzk_meta(content: dict) -> tuple[str | None, str | None, str | None, int | None]:
+    """Digest the public metadata API payload into (title, uploader, thumb, duration)."""
+    channel = content.get("channel") if isinstance(content.get("channel"), dict) else {}
+    title = content.get("videoTitle") or content.get("liveTitle")
+    uploader = channel.get("channelName") or channel.get("channelId")
+    thumb = (
+        content.get("thumbnailImageUrl")
+        or content.get("defaultThumbnailImageUrl")
+        or content.get("liveImageUrl")
+    )
+    duration = content.get("duration") or content.get("videoContentDuration")
+    try:
+        duration = int(duration) if duration else None
+    except (TypeError, ValueError):
+        duration = None
+    return title, uploader, thumb, duration
+
+
+def resolve_chzzk(url: str) -> dict[str, Any] | None:
+    """Resolve Chzzk (Naver game streaming/VOD) via its public JSON API.
+
+    VOD:  ``api.chzzk.naver.com/service/v1/videos/{videoNo}``
+    Live: ``api.chzzk.naver.com/service/v2/channels/{channelId}/live-detail``
+
+    The API supplies title / channel / thumbnail before any player token is
+    minted. The playable media is then mined from the SPA render data (VOD) or
+    the ``livePlaybackJson`` descriptor (live) using the same media-URL matcher
+    the generic resolver uses. If only metadata resolves and no direct media URL
+    is found, we return None so yt-dlp can finish through the universal fallback.
+    """
+    m = _CHZZK_URL_RE.search(url or "")
+    if not m:
+        return None
+    kind = m.group(1).lower()
+    key = m.group(2)
+
+    headers = {"Referer": "https://chzzk.naver.com/", "Accept": "application/json"}
+
+    if kind == "live":
+        api = f"https://api.chzzk.naver.com/service/v2/channels/{key}/live-detail"
+    else:
+        api = f"https://api.chzzk.naver.com/service/v1/videos/{key}"
+
+    content: dict = {}
+    try:
+        s = _session()
+        r = s.get(api, headers=headers, timeout=20)
+        if int(getattr(r, "status_code", 0) or 0) == 200:
+            body = r.json() if hasattr(r, "json") else {}
+            if isinstance(body, dict) and isinstance(body.get("content"), dict):
+                content = body["content"]
+    except Exception as exc:
+        logger.debug("Chzzk metadata API failed for %s: %s", url, exc)
+
+    title, uploader, thumb, duration = _chzzk_meta(content)
+
+    html, resolved_url = _fetch_html_variants(url, headers)
+
+    candidates: list[str] = []
+
+    def add(value: str) -> None:
+        value = _unescape_url(value)
+        if value.startswith("http") and value not in candidates:
+            candidates.append(value)
+
+    if html:
+        raw = html.replace("\\u0026", "&").replace("\\/", "/")
+        for mm in _MEDIA_URL_RE.finditer(raw):
+            add(mm.group(0))
+        for value in _collect_video_candidates(html):
+            add(value)
+
+    playback = content.get("livePlaybackJson")
+    if isinstance(playback, str) and playback.strip():
+        text = playback.replace("\\u0026", "&").replace("\\/", "/")
+        for mm in _MEDIA_URL_RE.finditer(text):
+            add(mm.group(0))
+
+    if not candidates:
+        return None
+
+    return _video_payload(
+        url=resolved_url,
+        media_id=key,
+        title=title,
+        uploader=uploader,
+        duration=duration,
+        platform="Chzzk",
+        thumbnail=thumb if isinstance(thumb, str) and thumb.startswith("http") else None,
+        qualities=None,
+        candidates=sorted(candidates, key=_rank_candidate, reverse=True)[:12],
+        engine_profile="chzzk-public-api+render-mining",
+    )

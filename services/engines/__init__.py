@@ -1,14 +1,18 @@
 from __future__ import annotations
 
 from services.engines.platforms import (
+    AfreecaTVEngine,
+    AparatEngine,
     BandcampEngine,
     BilibiliEngine,
     BlueskyEngine,
+    ChzzkEngine,
     CoubEngine,
     DailymotionEngine,
     DouyinEngine,
     DzenEngine,
     FacebookEngine,
+    FC2VideoEngine,
     ImgurEngine,
     InstagramEngine,
     KakaoTVEngine,
@@ -19,6 +23,9 @@ from services.engines.platforms import (
     LikeeEngine,
     MastodonEngine,
     MixcloudEngine,
+    NaverBlogEngine,
+    NaverCafeEngine,
+    NaverPostEngine,
     NaverTVEngine,
     NiconicoEngine,
     NineGagEngine,
@@ -89,7 +96,12 @@ def registered_engines():
         XiaohongshuEngine(),
         KuaishouEngine(),
         NaverTVEngine(),
+        NaverBlogEngine(),
+        NaverCafeEngine(),
+        NaverPostEngine(),
         KakaoTVEngine(),
+        ChzzkEngine(),
+        AfreecaTVEngine(),
         MastodonEngine(),
         WeiboEngine(),
         NineGagEngine(),
@@ -98,6 +110,8 @@ def registered_engines():
         TedEngine(),
         MixcloudEngine(),
         BandcampEngine(),
+        AparatEngine(),
+        FC2VideoEngine(),
     ]
 
 
