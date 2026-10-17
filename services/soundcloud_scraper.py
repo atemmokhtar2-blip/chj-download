@@ -88,6 +88,15 @@ def _base_opts(extra: dict | None = None) -> dict:
         opts["proxy"] = DOWNLOAD_PROXY
     if YTDLP_CLIENT in {"curl_cffi", "requests", "urllib"}:
         opts["http_client"] = YTDLP_CLIENT
+    # Chrome TLS impersonation for SoundCloud's yt-dlp extraction (bot-gated API).
+    try:
+        import curl_cffi
+        parts = [int(x) for x in curl_cffi.__version__.split(".")[:3] if x.isdigit()]
+        ver = tuple(parts + [0] * (3 - len(parts)))
+        if ver < (0, 16, 0):
+            opts["impersonate"] = yt_dlp.networking.impersonate.ImpersonateTarget("chrome")
+    except Exception:
+        pass
     if extra:
         opts.update(extra)
     return opts

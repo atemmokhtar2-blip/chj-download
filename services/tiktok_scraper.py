@@ -133,10 +133,31 @@ def _safe_get(url: str, **kwargs) -> Optional[requests.Response]:
 
 
 def _safe_post(url: str, **kwargs) -> Optional[requests.Response]:
+    """POST with Chrome TLS impersonation (curl_cffi) then requests fallback.
+
+    The aweme/mobile endpoints the POSTs target apply the same bot-gating as the
+    GET paths, so they get the identical impersonate="chrome" treatment before
+    falling back to the plain session.
+    """
+    timeout = kwargs.pop("timeout", PROVIDER_TIMEOUT)
+    session = kwargs.pop("session", None)
+    headers = kwargs.pop("headers", None)
     try:
-        timeout = kwargs.pop("timeout", PROVIDER_TIMEOUT)
-        s = kwargs.pop("session", None) or _session()
-        return s.post(url, timeout=timeout, allow_redirects=True, **kwargs)
+        from curl_cffi import requests as creq
+        hdrs = {}
+        if session is not None and getattr(session, "headers", None):
+            hdrs.update(dict(session.headers))
+        if headers:
+            hdrs.update(headers)
+        return creq.post(
+            url, headers=hdrs if hdrs else None, impersonate="chrome",
+            timeout=timeout, allow_redirects=True, **kwargs,
+        )
+    except Exception:
+        pass
+    try:
+        s = session or _session()
+        return s.post(url, timeout=timeout, allow_redirects=True, headers=headers, **kwargs)
     except Exception as e:
         logger.debug(f"POST fail {url[:60]}: {e}")
         return None
