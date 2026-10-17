@@ -215,6 +215,31 @@ def _safe_youtube_clients() -> list[str]:
     return out or ["android", "ios", "web"]
 
 
+def _safe_ytdlp_impersonate():
+    """Return an ``ImpersonateTarget("chrome")`` when the pinned curl_cffi supports it.
+
+    The generic yt-dlp path (UniversalEngine plus every platform's final
+    generic fallback) otherwise negotiates TLS with the default requests
+    fingerprint, which a growing number of CDNs 403/HTML-challenge. curl_cffi's
+    ``impersonate`` option makes yt-dlp present a real Chrome JA3/HTTP2
+    handshake — the same anti-bot technique the scrapers already use for HTML.
+    Returns None when the installed curl_cffi version dropped the old API so
+    the rest of ``_base_opts`` is untouched.
+    """
+    try:
+        import curl_cffi
+
+        parts = [int(x) for x in curl_cffi.__version__.split(".")[:3] if x.isdigit()]
+        ver = tuple(parts + [0] * (3 - len(parts)))
+        if ver >= (0, 16, 0):
+            return None
+        import yt_dlp.networking.impersonate as _imp
+
+        return _imp.ImpersonateTarget("chrome")
+    except Exception:
+        return None
+
+
 def _youtube_client_profiles() -> list[tuple[str, list[str]]]:
     """World-class YouTube fallback matrix: mobile, web, TV, music, embedded.
 
@@ -279,6 +304,12 @@ def _base_opts(progress=None, loop: asyncio.AbstractEventLoop | None = None) -> 
             ]},
         },
     }
+    # Chrome TLS impersonation for the generic yt-dlp path (UniversalEngine and
+    # every platform's final generic fallback). Same technique the scrapers use:
+    # a real browser handshake defeats bot-gated CDNs on 1000+ sites at once.
+    impersonate = _safe_ytdlp_impersonate()
+    if impersonate is not None:
+        opts["impersonate"] = impersonate
     if DOWNLOAD_PROXY:
         opts["proxy"] = DOWNLOAD_PROXY
     if YTDLP_COOKIES_FROM_BROWSER:
