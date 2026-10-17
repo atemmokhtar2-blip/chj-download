@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import html
 import json
+import os
 import re
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from http import cookiejar as _cookiejar
 from typing import Any
 from urllib.parse import urlparse, urlunparse
 
@@ -27,11 +29,72 @@ def _headers(referer: str = "https://www.reddit.com/") -> dict[str, str]:
     }
 
 
-def _get(url: str, *, mobile: bool = False) -> requests.Response:
+def _cookies() -> dict:
+    """Load the same Netscape cookies.txt yt-dlp uses (unlock private/NSFW posts)."""
+    path = None
+    try:
+        from config.settings import YTDLP_COOKIES_FILE
+        path = YTDLP_COOKIES_FILE
+    except Exception:
+        pass
+    path = path or "cookies.txt"
+    if not path or not os.path.exists(path):
+        return {}
+    try:
+        cj = _cookiejar.MozillaCookieJar()
+        cj.load(path, ignore_discard=True, ignore_expires=True)
+        return {c.name: c.value for c in cj}
+    except Exception as exc:
+        download_logger.debug("Reddit cookie loading failed: %s", exc)
+        return {}
+
+
+def _request_get(
+    url: str,
+    headers: dict | None = None,
+    timeout: int = TIMEOUT,
+    stream: bool = False,
+    allow_redirects: bool = True,
+):
+    """Browser-grade GET: curl_cffi Chrome JA3/HTTP2 impersonation + cookies.
+
+    Reddit's JSON endpoint and CDN block plain-requests TLS fingerprints from
+    datacenter IPs with 403. The curl_cffi ``impersonate="chrome"`` pass presents
+    a real Chrome handshake (same technique as the light scrapers), and the
+    requests fallback keeps the path working when curl_cffi is unavailable.
+    """
+    hdrs = _headers()
+    if headers:
+        hdrs.update(headers)
+    cookies = _cookies()
+    try:
+        from curl_cffi import requests as creq
+        return creq.get(
+            url,
+            headers=hdrs,
+            cookies=cookies or None,
+            impersonate="chrome",
+            timeout=timeout,
+            allow_redirects=allow_redirects,
+            stream=stream,
+        )
+    except Exception:
+        pass
+    return requests.get(
+        url,
+        headers=hdrs,
+        cookies=cookies,
+        timeout=timeout,
+        allow_redirects=allow_redirects,
+        stream=stream,
+    )
+
+
+def _get(url: str, *, mobile: bool = False):
     headers = _headers()
     if mobile:
         headers["User-Agent"] = MOBILE_UA
-    return requests.get(url, headers=headers, timeout=TIMEOUT, allow_redirects=True)
+    return _request_get(url, headers=headers)
 
 
 def normalize_reddit_url(url: str) -> str:
@@ -39,7 +102,7 @@ def normalize_reddit_url(url: str) -> str:
     if not url.startswith(("http://", "https://")):
         url = "https://" + url.lstrip("/")
     try:
-        resp = requests.get(url, headers=_headers(), timeout=8, allow_redirects=True, stream=True)
+        resp = _request_get(url, headers=_headers(), timeout=8, stream=True)
         if resp.url:
             url = resp.url
         resp.close()
@@ -78,7 +141,7 @@ def _probe_media_url(url: str | None) -> dict[str, Any]:
     headers = _headers()
     headers["Range"] = "bytes=0-1023"
     try:
-        resp = requests.get(url, headers=headers, stream=True, timeout=10, allow_redirects=True)
+        resp = _request_get(url, headers=headers, stream=True, timeout=10)
         ctype = (resp.headers.get("Content-Type") or "").lower()
         clen = int(resp.headers.get("Content-Length") or 0)
         ok = resp.status_code in (200, 206) and not any(x in ctype for x in ("text/html", "application/json"))
@@ -293,6 +356,25 @@ def _from_ytdlp(url: str) -> dict[str, Any] | None:
             "socket_timeout": TIMEOUT,
             "http_headers": _headers(),
         }
+        cookie_path = None
+        try:
+            from config.settings import YTDLP_COOKIES_FILE
+            cookie_path = YTDLP_COOKIES_FILE
+        except Exception:
+            pass
+        cookie_path = cookie_path or "cookies.txt"
+        if cookie_path and os.path.exists(cookie_path):
+            opts["cookiefile"] = cookie_path
+        # Same Chrome JA3/HTTP2 fingerprint the HTTP passes use — Reddit's yt-dlp
+        # extractor benefits equally from impersonation on bot-gated endpoints.
+        try:
+            import curl_cffi
+            parts = [int(x) for x in curl_cffi.__version__.split(".")[:3] if x.isdigit()]
+            ver = tuple(parts + [0] * (3 - len(parts)))
+            if ver < (0, 16, 0):
+                opts["impersonate"] = yt_dlp.networking.impersonate.ImpersonateTarget("chrome")
+        except Exception:
+            pass
         with yt_dlp.YoutubeDL(opts) as ydl:
             info = ydl.extract_info(url, download=False)
         if not info:
