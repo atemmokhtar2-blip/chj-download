@@ -860,8 +860,7 @@ async def _render_status_screen(q, verified_title: str) -> None:
 
 
 async def _show_support_home(q) -> None:
-    """Redirect user support requests directly to the developer."""
-    uid = q.from_user.id
+    """Send user-facing support requests directly to the developer."""
     await _edit_ref(
         q,
         "🧑‍💻 <b>التواصل مع المطوّر</b>\\n\\n"
@@ -884,7 +883,6 @@ async def _open_support_ticket(q, category: str) -> None:
 
 async def _render_support_ticket(q, ticket_id: int, just_opened: bool = False) -> None:
     await _show_support_home(q)
-
 
 async def _show_support_new(q) -> None:
     await _edit_ref(
