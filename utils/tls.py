@@ -24,12 +24,16 @@ import logging
 
 log = logging.getLogger(__name__)
 
-# 2026/2027 browser fingerprints — the newest Chrome the installed curl_cffi
-# build can impersonate is tried first.
+# 2026/2027 browser fingerprints. "chrome" is curl_cffi's canonical alias for
+# the NEWEST bundled Chrome and is valid on every build, so it leads the chain
+# (Session() validates lazily at request time, meaning an explicit "chrome140"
+# string would pass creation but fail the first request on older builds).
+# Explicit versions follow as a guarded fallback for unusual builds.
 TLS_TARGETS = (
+    "chrome",
     "chrome140", "chrome139", "chrome138", "chrome137", "chrome136", "chrome135",
     "chrome134", "chrome133", "chrome132", "chrome131",
-    "chrome124", "chrome120", "chrome",
+    "chrome124", "chrome120",
     "safari_ios", "safari",
 )
 
@@ -61,11 +65,33 @@ def _creq():
 
 
 def _impersonate_error_types():
-    try:
-        from curl_cffi.requests.errors import ImpersonateError
-        return (ImpersonateError, ValueError)
-    except Exception:  # pragma: no cover
-        return (ValueError,)
+    """Collect every ImpersonateError class curl_cffi may raise.
+
+    curl_cffi moved the exception between modules across versions
+    (``.errors`` vs ``.exceptions``); importing both and unioning the classes
+    makes the fallback chain immune to that drift, so an unsupported target is
+    always SKIPPED instead of crashing real requests.
+    """
+    import importlib
+
+    err_types: list = [ValueError]
+    for mod_name in ("curl_cffi.requests.exceptions", "curl_cffi.requests.errors"):
+        try:
+            mod = importlib.import_module(mod_name)
+            cls = getattr(mod, "ImpersonateError", None)
+            if cls is not None:
+                err_types.append(cls)
+        except Exception:
+            pass
+    # In case both modules expose the same class, dedupe by identity+name.
+    unique: list = []
+    seen: set = set()
+    for cls in err_types:
+        key = getattr(cls, "__name__", str(cls))
+        if key not in seen:
+            seen.add(key)
+            unique.append(cls)
+    return tuple(unique)
 
 
 def available() -> bool:

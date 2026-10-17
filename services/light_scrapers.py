@@ -68,13 +68,41 @@ def _load_cookies() -> requests.cookies.RequestsCookieJar:
     return jar
 
 
-def _session() -> requests.Session:
-    s = requests.Session()
-    s.headers.update({"User-Agent": _UA, "Accept-Language": "en-US,en;q=0.9,ar;q=0.8"})
+def _session():
+    """Browser-grade session shared by every JSON-API resolver.
+
+    Prefer a curl_cffi Session carrying the newest Chrome JA3/JA4 + HTTP/2
+    fingerprint (the same layer the HTML/embed paths use) and attach the shared
+    cookies.txt jar so login-walled JSON endpoints keep working. The plain
+    requests Session is used only when curl_cffi is unavailable — this upgrade
+    automatically hardens Vimeo, Streamable, Imgur, Coub, Rumble, Dailymotion,
+    Twitch GQL, Ok.ru, Odysee, VK and any future resolver's direct fetch path.
+    """
+    base_headers = {"User-Agent": _UA, "Accept-Language": "en-US,en;q=0.9,ar;q=0.8"}
     try:
-        s.cookies.update(_load_cookies())
+        jar = _load_cookies()
     except Exception:
-        pass
+        jar = requests.cookies.RequestsCookieJar()
+
+    s = tls.session(headers=base_headers)
+    if s is None:
+        s = requests.Session()
+        s.headers.update(base_headers)
+        try:
+            s.cookies.update(jar)
+        except Exception:
+            pass
+        return s
+    # curl_cffi Session: attach the same Netscape jar (its Cookies container
+    # accepts a requests CookieJar / dict update transparently).
+    try:
+        s.cookies.update(jar)
+    except Exception:
+        try:
+            for c in jar:
+                s.cookies.set(c.name, c.value, domain=c.domain, path=c.path or "/")
+        except Exception:
+            pass
     return s
 
 
@@ -1720,4 +1748,126 @@ def resolve_snapchat(url: str) -> dict[str, Any] | None:
         qualities=None,
         candidates=candidates,
         engine_profile="snapchat-spotlight-embed-og-video",
+    )
+
+
+# --------------------------------------------------------------------------- #
+# Bluesky — official public xrpc API (no auth, no JS scraping)
+# --------------------------------------------------------------------------- #
+_BLUE_POST_RE = re.compile(r"bsky\.app/profile/([^/?#]+)/post/([A-Za-z0-9]+)", re.I)
+
+
+def resolve_bluesky(url: str) -> dict[str, Any] | None:
+    """Resolve a Bluesky video post via the official public xrpc API.
+
+    Bluesky's read API is fully unauthenticated. Resolve the profile handle to
+    its DID, build the post AT-URI, fetch the post record, then walk the video
+    embed for its stream playlist (mp4/m3u8) — the same world-class technique
+    the web client uses internally, with zero login or heavy JS parsing. Image
+    posts return None so the generic engine keeps classifying them.
+    """
+    m = _BLUE_POST_RE.search(url or "")
+    if not m:
+        return None
+    handle, rkey = m.group(1), m.group(2)
+
+    s = _session()
+    s.headers.update({"Accept": "application/json"})
+    base_api = "https://public.api.bsky.app"
+
+    def _get_json(target: str):
+        try:
+            r = s.get(target, timeout=20)
+            if int(getattr(r, "status_code", 0) or 0) != 200:
+                return None
+            return r.json()
+        except Exception:
+            return None
+
+    did = handle if handle.startswith("did:") else None
+    if not did:
+        try:
+            info = _get_json(
+                f"{base_api}/xrpc/com.atproto.identity.resolveHandle?handle={quote(handle, safe='')}"
+            )
+            did = (info or {}).get("did")
+        except Exception as exc:
+            logger.debug("Bluesky handle resolve failed for %s: %s", handle, exc)
+    if not did:
+        return None
+
+    at_uri = f"at://{did}/app.bsky.feed.post/{rkey}"
+
+    # Prefer the hydrated post view (getPostThread): native video embeds expose
+    # their real HLS playlist URL there, while the raw getPosts record only
+    # carries blob refs (no downloadable URL).
+    post: dict = {}
+    record: dict = {}
+    try:
+        thread = _get_json(
+            f"{base_api}/xrpc/app.bsky.feed.getPostThread?uri={quote(at_uri, safe='')}&depth=0"
+        )
+        post = (((thread or {}).get("thread") or {}).get("post")) or {}
+        if isinstance(post, dict):
+            record = post.get("record") if isinstance(post.get("record"), dict) else {}
+    except Exception as exc:
+        logger.debug("Bluesky getPostThread failed for %s: %s", url, exc)
+
+    if not isinstance(post, dict) or not post:
+        posts = _get_json(f"{base_api}/xrpc/app.bsky.feed.getPosts?uris={quote(at_uri, safe='')}")
+        post_list = (posts or {}).get("posts") or []
+        post = post_list[0] if (isinstance(post_list, list) and post_list and isinstance(post_list[0], dict)) else {}
+        record = post.get("record") if isinstance(post.get("record"), dict) else {}
+
+    if not record and not post:
+        return None
+
+    title = None
+    raw_text = record.get("text") or ""
+    if raw_text:
+        title = re.sub(r"\s+", " ", raw_text).strip()[:120]
+    thumbnail = None
+    if isinstance(post.get("embed"), dict):
+        embed = post["embed"]
+        thumbnail = embed.get("thumbnail")
+        if not thumbnail:
+            images = embed.get("images") or []
+            if images and isinstance(images[0], dict):
+                thumbnail = images[0].get("thumb")
+
+    candidates: list[str] = []
+
+    def _walk(node) -> None:
+        if isinstance(node, dict):
+            for v in node.values():
+                _walk(v)
+        elif isinstance(node, (list, tuple)):
+            for item in node:
+                _walk(item)
+        elif isinstance(node, str) and node.startswith("http"):
+            low = node.lower()
+            if (".m3u8" in low or ".mp4" in low or ".webm" in low) and node not in candidates:
+                candidates.append(node)
+
+    # Walk the hydrated view's embed — the native video playlist lives here.
+    _walk(post.get("embed"))
+
+    if not candidates:
+        return None
+
+    candidates = sorted(candidates, key=_rank_candidate, reverse=True)[:12]
+    author = post.get("author") if isinstance(post.get("author"), dict) else {}
+    uploader = author.get("displayName") or author.get("handle")
+
+    return _video_payload(
+        url=url,
+        media_id=rkey,
+        title=title,
+        uploader=uploader,
+        duration=None,
+        platform="Bluesky",
+        thumbnail=thumbnail,
+        qualities=None,
+        candidates=candidates,
+        engine_profile="bluesky-public-xrpc-video-embed",
     )

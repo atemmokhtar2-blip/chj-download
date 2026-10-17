@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from services.engines.platforms import (
     BilibiliEngine,
+    BlueskyEngine,
     CoubEngine,
     DailymotionEngine,
     DouyinEngine,
@@ -59,6 +60,7 @@ def registered_engines():
         KwaiEngine(),
         TwitchEngine(),
         BilibiliEngine(),
+        BlueskyEngine(),
         VkEngine(),
         TumblrEngine(),
         ImgurEngine(),

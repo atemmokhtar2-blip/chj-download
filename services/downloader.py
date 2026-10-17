@@ -1734,46 +1734,60 @@ async def download_image(url: str, image_url: str | None = None) -> str | None:
 
     # Stream to disk with a hard size cap instead of buffering the whole image in
     # memory — a hostile/oversized response could otherwise exhaust RAM across
-    # concurrent downloads.
+    # concurrent downloads. Fetch through the browser-grade TLS layer first (image
+    # CDNs now fingerprint plain Python TLS), then fall back to plain requests.
+    downloaded = 0
+    r = None
     try:
-        with requests.get(target, timeout=45, headers=headers, stream=True) as r:
-            r.raise_for_status()
-            content_type = (r.headers.get("Content-Type") or "").lower()
-            if content_type and "text/html" in content_type:
-                _safe_remove(path)
-                raise RuntimeError("image endpoint returned HTML")
+        try:
+            r = tls.get(target, headers=headers, timeout=45, stream=True)
+            if r is None:
+                r = requests.get(target, timeout=45, headers=headers, stream=True)
+        except Exception:
+            r = requests.get(target, timeout=45, headers=headers, stream=True)
 
-            try:
-                total = max(0, int(r.headers.get("Content-Length") or 0))
-            except (TypeError, ValueError):
-                total = 0
-            if total > MAX_FILE_SIZE_BYTES:
-                _safe_remove(path)
-                raise FileTooLargeError(size_bytes=total, limit_bytes=MAX_FILE_SIZE_BYTES)
+        r.raise_for_status()
+        content_type = (r.headers.get("Content-Type") or "").lower()
+        if content_type and "text/html" in content_type:
+            _safe_remove(path)
+            raise RuntimeError("image endpoint returned HTML")
 
-            downloaded = 0
-            with open(path, "wb") as fh:
-                for chunk in r.iter_content(chunk_size=256 * 1024):
-                    if not chunk:
-                        continue
-                    if downloaded + len(chunk) > MAX_FILE_SIZE_BYTES:
+        try:
+            total = max(0, int(r.headers.get("Content-Length") or 0))
+        except (TypeError, ValueError):
+            total = 0
+        if total > MAX_FILE_SIZE_BYTES:
+            _safe_remove(path)
+            raise FileTooLargeError(size_bytes=total, limit_bytes=MAX_FILE_SIZE_BYTES)
+
+        with open(path, "wb") as fh:
+            for chunk in r.iter_content(chunk_size=256 * 1024):
+                if not chunk:
+                    continue
+                if downloaded + len(chunk) > MAX_FILE_SIZE_BYTES:
+                    _safe_remove(path)
+                    raise FileTooLargeError(
+                        size_bytes=downloaded + len(chunk),
+                        limit_bytes=MAX_FILE_SIZE_BYTES,
+                    )
+                if downloaded == 0:
+                    sample = chunk.lstrip().lower()
+                    if sample.startswith((b"<!doctype html", b"<html", b"<script")):
                         _safe_remove(path)
-                        raise FileTooLargeError(
-                            size_bytes=downloaded + len(chunk),
-                            limit_bytes=MAX_FILE_SIZE_BYTES,
-                        )
-                    if downloaded == 0:
-                        sample = chunk.lstrip().lower()
-                        if sample.startswith((b"<!doctype html", b"<html", b"<script")):
-                            _safe_remove(path)
-                            raise RuntimeError("image endpoint returned a web page")
-                    fh.write(chunk)
-                    downloaded += len(chunk)
+                        raise RuntimeError("image endpoint returned a web page")
+                fh.write(chunk)
+                downloaded += len(chunk)
     except FileTooLargeError:
         raise
     except Exception:
         _safe_remove(path)
         raise
+    finally:
+        if r is not None:
+            try:
+                r.close()
+            except Exception:
+                pass
 
     if downloaded < 64:
         _safe_remove(path)

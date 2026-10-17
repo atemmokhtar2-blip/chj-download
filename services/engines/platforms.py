@@ -1463,6 +1463,14 @@ class XiaohongshuEngine(EmbedFallbackEngine):
     embed_headers = {"Referer": "https://www.xiaohongshu.com/"}
 
 
+class BlueskyEngine(EmbedFallbackEngine):
+    name = "BlueskyEnginePro"
+    platform_label = "Bluesky"
+    domains = ("bsky.app", "staging.bsky.app")
+    resolver_name = "resolve_bluesky"
+    embed_headers = {"Referer": "https://bsky.app/"}
+
+
 class GenericEngine(YtDlpFallbackEngine):
     name = "GenericEngine"
     domains = ()
