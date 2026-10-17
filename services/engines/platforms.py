@@ -1621,6 +1621,99 @@ class FC2VideoEngine(EmbedFallbackEngine):
     embed_headers = {"Referer": "https://video.fc2.com/"}
 
 
+class BitChuteEngine(EmbedFallbackEngine):
+    name = "BitChuteEnginePro"
+    platform_label = "BitChute"
+    domains = ("bitchute.com", "www.bitchute.com")
+    embed_headers = {"Referer": "https://www.bitchute.com/"}
+
+
+class TVerEngine(EmbedFallbackEngine):
+    name = "TVerEnginePro"
+    platform_label = "TVer"
+    domains = ("tver.jp",)
+    embed_headers = {"Referer": "https://tver.jp/"}
+
+
+class OpenrecEngine(EmbedFallbackEngine):
+    name = "OpenrecEnginePro"
+    platform_label = "OPENREC"
+    domains = ("openrec.tv", "www.openrec.tv")
+    embed_headers = {"Referer": "https://www.openrec.tv/"}
+
+
+class IQiyiEngine(EmbedFallbackEngine):
+    name = "IQiyiEnginePro"
+    platform_label = "iQIYI"
+    domains = ("iq.com", "iqiyi.com", "www.iq.com")
+    embed_headers = {"Referer": "https://www.iq.com/"}
+
+
+class TencentVideoEngine(EmbedFallbackEngine):
+    name = "TencentVideoEnginePro"
+    platform_label = "Tencent Video"
+    domains = ("v.qq.com",)
+    embed_headers = {"Referer": "https://v.qq.com/"}
+
+
+class YoukuEngine(EmbedFallbackEngine):
+    name = "YoukuEnginePro"
+    platform_label = "Youku"
+    domains = ("youku.com", "v.youku.com")
+    embed_headers = {"Referer": "https://www.youku.com/"}
+
+
+class MangoTVEngine(EmbedFallbackEngine):
+    name = "MangoTVEnginePro"
+    platform_label = "MangoTV"
+    domains = ("mgtv.com", "hunantv.com", "www.mgtv.com")
+    embed_headers = {"Referer": "https://www.mgtv.com/"}
+
+
+class ShareChatEngine(EmbedFallbackEngine):
+    name = "ShareChatEnginePro"
+    platform_label = "ShareChat"
+    domains = ("sharechat.com", "www.sharechat.com")
+    embed_headers = {"Referer": "https://sharechat.com/"}
+
+
+class MojEngine(EmbedFallbackEngine):
+    name = "MojEnginePro"
+    platform_label = "Moj"
+    domains = ("mojapp.in", "www.mojapp.in")
+    embed_headers = {"Referer": "https://mojapp.in/"}
+
+
+class NamashaEngine(EmbedFallbackEngine):
+    name = "NamashaEnginePro"
+    platform_label = "Namasha"
+    domains = ("namasha.com", "www.namasha.com")
+    embed_headers = {"Referer": "https://www.namasha.com/"}
+
+
+class AudiomackEngine(EmbedFallbackEngine):
+    name = "AudiomackEnginePro"
+    platform_label = "Audiomack"
+    domains = ("audiomack.com", "www.audiomack.com")
+    embed_headers = {"Referer": "https://audiomack.com/"}
+
+
+class DeezerEngine(EmbedFallbackEngine):
+    name = "DeezerEnginePro"
+    platform_label = "Deezer"
+    domains = ("deezer.com", "www.deezer.com")
+    embed_headers = {"Referer": "https://www.deezer.com/"}
+
+
+class PeerTubeEngine(EmbedFallbackEngine):
+    name = "PeerTubeEnginePro"
+    platform_label = "PeerTube"
+    domains = (
+        "video.blender.org", "diode.zone", "spectra.video", "peertube.stream",
+    )
+    embed_headers = {"Referer": "https://joinpeertube.org/"}
+
+
 class GenericEngine(YtDlpFallbackEngine):
     name = "GenericEngine"
     domains = ()
