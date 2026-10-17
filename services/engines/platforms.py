@@ -1110,6 +1110,8 @@ class TelegramPublicEngine(EmbedFallbackEngine):
     name = "TelegramPublicEnginePro"
     platform_label = "Telegram"
     domains = ("t.me", "telegram.me", "telegram.dog")
+    resolver_name = "resolve_telegram"
+    embed_headers = {"Referer": "https://t.me/"}
 
 
 class LikeeEngine(EmbedFallbackEngine):
@@ -1136,6 +1138,7 @@ class BilibiliEngine(EmbedFallbackEngine):
     name = "BilibiliEnginePro"
     platform_label = "Bilibili"
     domains = ("bilibili.com", "b23.tv", "bilibili.tv", "m.bilibili.com")
+    resolver_name = "resolve_bilibili"
     embed_headers = {"Referer": "https://www.bilibili.com/"}
 
 
@@ -1150,6 +1153,8 @@ class TumblrEngine(EmbedFallbackEngine):
     name = "TumblrEnginePro"
     platform_label = "Tumblr"
     domains = ("tumblr.com", "www.tumblr.com", "at.tumblr.com", "tmblr.co")
+    resolver_name = "resolve_tumblr"
+    embed_headers = {"Referer": "https://www.tumblr.com/"}
 
 
 class ImgurEngine(PlatformEngine):

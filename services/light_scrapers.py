@@ -708,6 +708,71 @@ def _rank_candidate(u: str) -> int:
     return score
 
 
+def _with_embed_param(url: str) -> str:
+    """Append ``embed=1`` to a URL (safe global crawl hint).
+
+    Many publishers only render og:video / player JSON on their embed or
+    publish variant. This is used as a second page fetch when the canonical
+    page yields no media, and is harmless when the site ignores the param.
+    """
+    if not url:
+        return url
+    try:
+        query = urlparse(url).query.lower()
+    except Exception:
+        query = ""
+    if "embed" in query:
+        return url
+    sep = "&" if "?" in url else "?"
+    return f"{url}{sep}embed=1"
+
+
+def _fetch_html_variants(url: str, headers: dict) -> tuple[str, str]:
+    """Desktop then mobile-UA browser-impersonated fetch.
+
+    Returns ``(html, resolved_url)``; html is "" when every profile fails.
+    """
+    for profile in ("desktop", "mobile"):
+        try:
+            r = _impersonate_get(
+                url,
+                headers={**headers, "User-Agent": _UA if profile == "desktop" else _MOBILE_UA},
+                timeout=20,
+                allow_redirects=True,
+            )
+            status = int(getattr(r, "status_code", 0) or 0)
+            if status != 200:
+                continue
+            html = getattr(r, "text", "") or ""
+            if html:
+                return html, getattr(r, "url", url) or url
+        except Exception as exc:
+            logger.debug("Embed meta fetch failed (%s) for %s: %s", profile, url, exc)
+    return "", url
+
+
+def _collect_video_candidates(html: str) -> list[str]:
+    """Ranked direct media URLs from every HTML layer the resolver supports."""
+    if not html:
+        return []
+    candidates: list[str] = []
+
+    def add(value: str | None) -> None:
+        value = _unescape_url(value)
+        if value.startswith("http") and _VIDEO_FILE_RE.search(value) and value not in candidates:
+            candidates.append(value)
+
+    for key in ("og:video:secure_url", "og:video:url", "og:video", "twitter:player:stream"):
+        add(_meta_any(html, key))
+    for value in _jsonld_video_urls(html):
+        add(value)
+    for value in _video_tag_urls(html):
+        add(value)
+    for value in _script_media_urls(html):
+        add(value)
+    return candidates
+
+
 def resolve_embed_media(url: str, extra_headers: dict | None = None) -> dict[str, Any] | None:
     """World-class generic direct-media resolver for embed/publish pages.
 
@@ -722,6 +787,7 @@ def resolve_embed_media(url: str, extra_headers: dict | None = None) -> dict[str
       5. Inline <script> JSON mining for direct CDN mp4/m3u8/webm URLs.
       6. oEmbed auto-discovery via <link> rel=alternate, then fetch the
          endpoint and mine its html block or direct url fields.
+      7. An ``embed=1`` variant of the page when the canonical URL hides media.
 
     Every candidate still passes the central audio guard later, so a silent
     direct file is always rejected and the engine falls back to the robust
@@ -734,52 +800,24 @@ def resolve_embed_media(url: str, extra_headers: dict | None = None) -> dict[str
     if extra_headers:
         headers.update(extra_headers)
 
-    html = ""
-    resolved_url = url
-    for profile in ("desktop", "mobile"):
-        try:
-            r = _impersonate_get(
-                url,
-                headers={**headers, "User-Agent": _UA if profile == "desktop" else _MOBILE_UA},
-                timeout=20,
-                allow_redirects=True,
-            )
-            status = int(getattr(r, "status_code", 0) or 0)
-            if status != 200:
-                continue
-            html = getattr(r, "text", "") or ""
-            resolved_url = getattr(r, "url", url) or url
-            if html:
-                break
-        except Exception as exc:
-            logger.debug("Embed meta fetch failed (%s) for %s: %s", profile, url, exc)
+    html, resolved_url = _fetch_html_variants(url, headers)
+    candidates = _collect_video_candidates(html)
 
-    if not html:
-        return None
-
-    candidates: list[str] = []
-
-    def add(value: str | None) -> None:
-        value = _unescape_url(value)
-        if value.startswith("http") and _VIDEO_FILE_RE.search(value) and value not in candidates:
+    oembed_endpoints = _oembed_endpoints(html) if html else []
+    for value in _oembed_media_urls(oembed_endpoints, extra_headers):
+        if value not in candidates:
             candidates.append(value)
 
-    for key in ("og:video:secure_url", "og:video:url", "og:video", "twitter:player:stream"):
-        add(_meta_any(html, key))
-
-    for value in _jsonld_video_urls(html):
-        add(value)
-
-    for value in _video_tag_urls(html):
-        add(value)
-
-    for value in _script_media_urls(html):
-        add(value)
-
-    oembed_endpoints = _oembed_endpoints(html)
-    if oembed_endpoints:
-        for value in _oembed_media_urls(oembed_endpoints, extra_headers):
-            add(value)
+    # Embed/publish variant (layer 7): many platforms only expose media there.
+    embed_variant = _with_embed_param(url)
+    if not candidates and embed_variant != url:
+        variant_html, _variant_resolved = _fetch_html_variants(embed_variant, headers)
+        for value in _collect_video_candidates(variant_html):
+            if value not in candidates:
+                candidates.append(value)
+        for value in _oembed_media_urls(_oembed_endpoints(variant_html), extra_headers):
+            if value not in candidates:
+                candidates.append(value)
 
     if not candidates:
         return None
@@ -887,6 +925,225 @@ def resolve_threads(url: str) -> dict[str, Any] | None:
         qualities=None,
         candidates=candidates,
         engine_profile="threads-embed-player+browser-impersonation",
+    )
+
+
+# --------------------------------------------------------------------------- #
+# Telegram (public channels via t.me embed og:video)
+# --------------------------------------------------------------------------- #
+_TG_EMBED_RE = re.compile(r"(?:t\.me|telegram\.me|telegram\.dog)/([^/?#]+)/(\d+)")
+
+
+def resolve_telegram(url: str) -> dict[str, Any] | None:
+    """Resolve a public t.me video through Telegram's embed preview page.
+
+    Telegram publishes a rich og:video / twitter:player:stream preview when the
+    message URL is loaded with ``?embed=1&mode=tme`` — the same world-class
+    technique every Telegram downloader uses. yt-dlp has no reliable t.me
+    extractor, so without this resolver the engine had no direct video path at
+    all.
+    """
+    m = _TG_EMBED_RE.search(url or "")
+    if not m:
+        return None
+    channel, message_id = m.group(1), m.group(2)
+    base = f"https://t.me/{channel}/{message_id}"
+    variants = [f"{base}?embed=1&mode=tme", f"{base}?embed=1", base]
+
+    headers = {
+        "Referer": "https://t.me/",
+        "Accept": "text/html,application/xhtml+xml,application/json;q=0.9,*/*;q=0.8",
+    }
+
+    html = ""
+    resolved_url = url
+    for variant in variants:
+        html, resolved_url = _fetch_html_variants(variant, headers)
+        if html:
+            break
+
+    if not html:
+        return None
+
+    candidates = _collect_video_candidates(html)
+    for value in _oembed_media_urls(_oembed_endpoints(html), headers):
+        if value not in candidates:
+            candidates.append(value)
+
+    if not candidates:
+        return None
+
+    candidates = sorted(candidates, key=_rank_candidate, reverse=True)[:12]
+    title = _meta_any(html, "og:title")
+    thumbnail = _meta_any(html, "og:image")
+
+    return _video_payload(
+        url=resolved_url,
+        media_id=message_id,
+        title=title,
+        uploader=channel,
+        duration=None,
+        platform="Telegram",
+        thumbnail=thumbnail,
+        qualities=None,
+        candidates=candidates,
+        engine_profile="telegram-embed-og-video",
+    )
+
+
+# --------------------------------------------------------------------------- #
+# Tumblr (public oEmbed JSON API + page fallback)
+# --------------------------------------------------------------------------- #
+def _tumblr_oembed_url(target: str) -> str:
+    return f"https://www.tumblr.com/oembed/1.0?url={quote(target, safe='')}"
+
+
+def resolve_tumblr(url: str) -> dict[str, Any] | None:
+    """Resolve a Tumblr video via the public oEmbed endpoint, then page HTML.
+
+    Tumblr exposes a public oEmbed JSON API whose ``html`` block frequently
+    contains the actual <video><source mp4>. This is a stable first-class API
+    (not scraping), so it survives the theme/JS churn that breaks HTML mining.
+    """
+    headers = {"Referer": "https://www.tumblr.com/", "Accept": "application/json,text/html,*/*;"}
+
+    candidates: list[str] = []
+    title: str | None = None
+    thumbnail: str | None = None
+    uploader: str | None = None
+
+    def add(value: str | None) -> None:
+        value = _unescape_url(value)
+        if value.startswith("http") and _VIDEO_FILE_RE.search(value) and value not in candidates:
+            candidates.append(value)
+
+    try:
+        r = _impersonate_get(_tumblr_oembed_url(url), headers=headers, timeout=15)
+        if int(getattr(r, "status_code", 0) or 0) == 200:
+            raw = (getattr(r, "text", "") or "").strip()
+            if raw.startswith("{"):
+                payload = json.loads(raw)
+                if isinstance(payload, dict):
+                    title = payload.get("title")
+                    uploader = payload.get("author_name")
+                    thumbnail = payload.get("thumbnail_url")
+                    for value in _collect_media_urls_from_html(payload.get("html") or ""):
+                        add(value)
+    except Exception as exc:
+        logger.debug("Tumblr oEmbed fetch failed for %s: %s", url, exc)
+
+    if not candidates:
+        html, _ = _fetch_html_variants(url, headers)
+        title = title or _meta_any(html, "og:title")
+        thumbnail = thumbnail or _meta_any(html, "og:image")
+        for value in _collect_video_candidates(html):
+            add(value)
+
+    if not candidates:
+        return None
+
+    candidates = sorted(candidates, key=_rank_candidate, reverse=True)[:12]
+    return _video_payload(
+        url=url,
+        media_id=None,
+        title=title,
+        uploader=uploader,
+        duration=None,
+        platform="Tumblr",
+        thumbnail=thumbnail,
+        qualities=None,
+        candidates=candidates,
+        engine_profile="tumblr-oembed+html",
+    )
+
+
+# --------------------------------------------------------------------------- #
+# Bilibili (window.__playinfo__ progressive durl extraction)
+# --------------------------------------------------------------------------- #
+_BILI_BVID_RE = re.compile(r"BV[0-9A-Za-z]{10}")
+
+
+def resolve_bilibili(url: str) -> dict[str, Any] | None:
+    """Resolve a Bilibili video from ``window.__playinfo__`` on the page.
+
+    Bilibili embeds its authoritative player state as a JSON assignment:
+    ``window.__playinfo__ = { data: { durl: [{url, backup_url, ...}] } }``.
+    The ``durl`` entries are progressive MP4 files that carry BOTH audio and
+    video and can be downloaded directly with just a Referer header — the same
+    extraction path used by every open-source Bilibili downloader. DASH-only
+    ``.m4s`` segments are intentionally ignored here (silent) and left to the
+    yt-dlp merge path.
+    """
+    m = _BILI_BVID_RE.search(url or "")
+    if not m:
+        return None
+    bvid = m.group(0)
+    headers = {
+        "Referer": "https://www.bilibili.com/",
+        "Accept": "text/html,application/xhtml+xml,application/json;q=0.9,*/*;q=0.8",
+        "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+    }
+    html, resolved_url = _fetch_html_variants(f"https://www.bilibili.com/video/{bvid}", headers)
+    if not html:
+        return None
+
+    candidates: list[str] = []
+
+    def add(value: str | None) -> None:
+        value = _unescape_url(value)
+        if not value:
+            return
+        if value.startswith("//"):
+            value = "https:" + value
+        if value.startswith("http") and _VIDEO_FILE_RE.search(value) and value not in candidates:
+            candidates.append(value)
+
+    # 1) Authoritative player state: progressive durl mp4s (with audio).
+    pm = re.search(r"window\.__playinfo__\s*=\s*(.*?)</script>", html, re.S)
+    if pm:
+        try:
+            play = json.loads(pm.group(1).strip())
+            data = play.get("data") or {}
+            for durl in data.get("durl") or []:
+                if isinstance(durl, dict):
+                    add(durl.get("url"))
+                    for backup in durl.get("backup_url") or []:
+                        add(backup)
+            # backup DASH audio/video (video-only .m4s is rejected later, so
+            # only progressive durl candidates survive — exactly what we want).
+            dash = data.get("dash") or {}
+            for stream in (dash.get("video") or []) + (dash.get("audio") or []):
+                if isinstance(stream, dict):
+                    add(stream.get("baseUrl") or stream.get("base_url"))
+        except Exception as exc:
+            logger.debug("Bilibili playinfo parse failed: %s", exc)
+
+    # 2) Generic mining (catches durl URLs even if playinfo shape drifts).
+    for value in _script_media_urls(html):
+        add(value)
+    for value in _video_tag_urls(html):
+        add(value)
+    for key in ("og:video", "og:video:url", "twitter:player:stream"):
+        add(_meta_any(html, key))
+
+    if not candidates:
+        return None
+
+    candidates = sorted(candidates, key=_rank_candidate, reverse=True)[:12]
+    title = _meta_any(html, "og:title")
+    thumbnail = _meta_any(html, "og:image")
+
+    return _video_payload(
+        url=resolved_url,
+        media_id=bvid,
+        title=title,
+        uploader=None,
+        duration=None,
+        platform="Bilibili",
+        thumbnail=thumbnail,
+        qualities=None,
+        candidates=candidates,
+        engine_profile="bilibili-playinfo-durl",
     )
 
 
