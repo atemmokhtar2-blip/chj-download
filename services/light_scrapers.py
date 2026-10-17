@@ -1871,3 +1871,167 @@ def resolve_bluesky(url: str) -> dict[str, Any] | None:
         candidates=candidates,
         engine_profile="bluesky-public-xrpc-video-embed",
     )
+
+
+# --------------------------------------------------------------------------- #
+# Kick — official public JSON API (VOD + clips)
+# --------------------------------------------------------------------------- #
+_KICK_VIDEO_RE = re.compile(r"kick\.com/(?:[^/?#]+/)?(?:videos|video)/([\w-]+)", re.I)
+_KICK_CLIP_QUERY_RE = re.compile(r"kick\.com/[^?#]*\?clip=([\w-]+)", re.I)
+_KICK_CLIP_PATH_RE = re.compile(r"kick\.com/[^/?#]+/clips/([\w-]+)", re.I)
+
+
+def resolve_kick(url: str) -> dict[str, Any] | None:
+    """Resolve Kick VODs/clips through the official unauthenticated JSON API.
+
+    Kick (Twitch's main rival) exposes public endpoints with no key/signature:
+
+      https://kick.com/api/v2/video/{slug}   -> playback_url / source (HLS mp4)
+      https://kick.com/api/v2/clips/{id}     -> clip_url / video_url (progressive)
+
+    The call rides the browser-grade (curl_cffi) session, so the API cannot
+    403 the plain-Python TLS fingerprint. Localised og tags supply title /
+    thumbnail before the authoritative JSON answers.
+    """
+    slug = clip_id = None
+    m = _KICK_VIDEO_RE.search(url or "")
+    if m:
+        slug = m.group(1)
+    else:
+        m = _KICK_CLIP_QUERY_RE.search(url or "") or _KICK_CLIP_PATH_RE.search(url or "")
+        if m:
+            clip_id = m.group(1)
+    if not slug and not clip_id:
+        return None
+
+    title = thumbnail = uploader = None
+    media_id = slug or clip_id
+    try:
+        html, _ = _fetch_html_variants(url, {"Referer": "https://kick.com/"})
+        if html:
+            title = _meta_any(html, "og:title")
+            thumbnail = _meta_any(html, "og:image")
+    except Exception:
+        pass
+
+    candidates: list[str] = []
+    try:
+        s = _session()
+        endpoint = (
+            f"https://kick.com/api/v2/video/{slug}"
+            if slug else f"https://kick.com/api/v2/clips/{clip_id}"
+        )
+        r = s.get(endpoint, headers={"Accept": "application/json"}, timeout=20)
+        if int(getattr(r, "status_code", 0) or 0) != 200:
+            return None
+        ctype = str(getattr(r, "headers", {}).get("Content-Type") or "").lower()
+        if "text/html" in ctype:
+            return None
+        body = r.json()
+
+        if slug:
+            play = body.get("playback_url") or body.get("source") or body.get("url")
+            if play and str(play).startswith("http"):
+                candidates.append(str(play))
+            media_id = body.get("slug") or slug
+            if not title:
+                title = body.get("session_title") or body.get("title")
+            thumb_node = body.get("thumbnail")
+            if not thumbnail and isinstance(thumb_node, dict) and isinstance(thumb_node.get("src"), str):
+                thumbnail = thumb_node["src"]
+            channel = body.get("channel") if isinstance(body.get("channel"), dict) else {}
+            user = channel.get("user") if isinstance(channel.get("user"), dict) else {}
+            uploader = user.get("username")
+        else:
+            clip = body.get("clip") if isinstance(body.get("clip"), dict) else body
+            if isinstance(clip, dict):
+                media_id = clip.get("id") or clip_id
+                if not title:
+                    title = clip.get("title")
+                for key in ("clip_url", "video_url", "mp4_url", "source", "url"):
+                    v = clip.get(key)
+                    if v and str(v).startswith("http"):
+                        candidates.append(str(v))
+    except Exception as exc:
+        logger.debug("Kick API resolve failed for %s: %s", url, exc)
+
+    if not candidates:
+        return None
+
+    return _video_payload(
+        url=url,
+        media_id=media_id,
+        title=title,
+        uploader=uploader,
+        duration=None,
+        platform="Kick",
+        thumbnail=thumbnail,
+        qualities=None,
+        candidates=candidates[:8],
+        engine_profile="kick-api-json-playback-url",
+    )
+
+
+# --------------------------------------------------------------------------- #
+# Rutube — official play/options JSON API
+# --------------------------------------------------------------------------- #
+_RUTUBE_VIDEO_RE = re.compile(r"rutube\.ru/(?:video|shorts|embed)/(?:private/)?([0-9a-fA-F]{8,64})", re.I)
+
+
+def resolve_rutube(url: str) -> dict[str, Any] | None:
+    """Resolve Rutube videos via the official play/options JSON API.
+
+    Rutube's public endpoint returns an authoritative HLS master with no auth
+    or key — the exact technique its own player and yt-dlp's extractor use:
+
+      https://rutube.ru/api/play/options/{id}/?format=json&no_404=true
+      -> video_balancer.m3u8 (mp4 HLS, carries audio) + title + thumbnail_url
+
+    Fetched through the browser-grade session to defeat the Python TLS
+    fingerprint. Returns None for clips/playlists so the embed/yt-dlp path
+    continues to own those shapes.
+    """
+    m = _RUTUBE_VIDEO_RE.search(url or "")
+    if not m:
+        return None
+    video_id = m.group(1)
+
+    try:
+        s = _session()
+        r = s.get(
+            f"https://rutube.ru/api/play/options/{video_id}/?format=json&no_404=true",
+            headers={"Accept": "application/json"},
+            timeout=20,
+        )
+        if int(getattr(r, "status_code", 0) or 0) != 200:
+            return None
+        body = r.json()
+    except Exception as exc:
+        logger.debug("Rutube play/options failed for %s: %s", url, exc)
+        return None
+
+    balancer = (body or {}).get("video_balancer") if isinstance((body or {}).get("video_balancer"), dict) else {}
+    m3u8 = balancer.get("m3u8") or balancer.get("default") or (body or {}).get("url")
+    if not m3u8 or not str(m3u8).startswith("http"):
+        return None
+
+    author = (body or {}).get("author")
+    uploader = author.get("name") if isinstance(author, dict) else None
+    thumb = (body or {}).get("thumbnail_url") or balancer.get("thumbnail_url")
+    try:
+        duration = int((body or {}).get("duration") or 0) or None
+    except (TypeError, ValueError):
+        duration = None
+
+    return _video_payload(
+        url=url,
+        media_id=video_id,
+        title=(body or {}).get("title"),
+        uploader=uploader,
+        duration=duration,
+        platform="Rutube",
+        thumbnail=thumb if isinstance(thumb, str) and thumb.startswith("http") else None,
+        qualities=None,
+        candidates=[str(m3u8)],
+        engine_profile="rutube-play-options-m3u8",
+    )

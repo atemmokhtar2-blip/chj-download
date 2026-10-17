@@ -1471,6 +1471,56 @@ class BlueskyEngine(EmbedFallbackEngine):
     embed_headers = {"Referer": "https://bsky.app/"}
 
 
+class KickEngine(EmbedFallbackEngine):
+    name = "KickEnginePro"
+    platform_label = "Kick"
+    domains = ("kick.com", "www.kick.com")
+    resolver_name = "resolve_kick"
+    embed_headers = {"Referer": "https://kick.com/"}
+
+
+class RutubeEngine(EmbedFallbackEngine):
+    name = "RutubeEnginePro"
+    platform_label = "Rutube"
+    domains = ("rutube.ru", "www.rutube.ru")
+    resolver_name = "resolve_rutube"
+    embed_headers = {"Referer": "https://rutube.ru/"}
+
+
+class KuaishouEngine(EmbedFallbackEngine):
+    name = "KuaishouEnginePro"
+    platform_label = "Kuaishou"
+    domains = (
+        "kuaishou.com", "v.kuaishou.com", "www.kuaishou.com",
+        "m.kuaishou.com", "gifshow.com", "kuaishouapp.com",
+    )
+    embed_headers = {"Referer": "https://www.kuaishou.com/"}
+
+
+class NaverTVEngine(EmbedFallbackEngine):
+    name = "NaverTVEnginePro"
+    platform_label = "Naver TV"
+    domains = ("tv.naver.com", "m.tv.naver.com")
+    embed_headers = {"Referer": "https://tv.naver.com/"}
+
+
+class KakaoTVEngine(EmbedFallbackEngine):
+    name = "KakaoTVEnginePro"
+    platform_label = "KakaoTV"
+    domains = ("tv.kakao.com", "m.tv.kakao.com")
+    embed_headers = {"Referer": "https://tv.kakao.com/"}
+
+
+class MastodonEngine(EmbedFallbackEngine):
+    name = "MastodonEnginePro"
+    platform_label = "Mastodon"
+    domains = (
+        "mastodon.social", "mas.to", "mastodon.online", "mstdn.social",
+        "fosstodon.org", "mastodon.world", "techhub.social", "mastodon.art",
+        "universeodon.com", "infosec.exchange",
+    )
+
+
 class GenericEngine(YtDlpFallbackEngine):
     name = "GenericEngine"
     domains = ()

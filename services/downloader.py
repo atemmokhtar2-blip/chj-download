@@ -1724,13 +1724,8 @@ async def download_image(url: str, image_url: str | None = None) -> str | None:
     Path(TEMP_DIR).mkdir(parents=True, exist_ok=True)
     fd, path = tempfile.mkstemp(prefix="xdl-img-", suffix=".jpg", dir=TEMP_DIR)
     os.close(fd)
-    headers = {
-        "User-Agent": (
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-            "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131 Safari/537.36"
-        ),
-        "Accept": "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
-    }
+    headers = tls.browser_headers()
+    headers["Accept"] = "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8"
 
     # Stream to disk with a hard size cap instead of buffering the whole image in
     # memory — a hostile/oversized response could otherwise exhaust RAM across
