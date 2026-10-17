@@ -972,6 +972,7 @@ class EmbedFallbackEngine(YtDlpFallbackEngine):
                         downloader.download_hls_mp4,
                         candidate,
                         f"xdl-{self.platform_label.lower()}",
+                        dict(self.embed_headers or {}),
                     )
                 else:
                     path = await loop.run_in_executor(
