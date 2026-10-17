@@ -1069,3 +1069,182 @@ def resolve_dailymotion(url: str) -> dict[str, Any] | None:
         candidates=[u for _, u in rows],
         engine_profile="dailymotion-player-metadata",
     )
+
+
+# --------------------------------------------------------------------------- #
+# Twitch (clips via the public GQL API + embed fallback)
+# --------------------------------------------------------------------------- #
+# Public client id used by Twitch's own web app; widely used by open-source
+# clip downloaders. It is not a secret — the Twitch site ships it in every
+# page bundle — but it unlocks the authoritative GQL endpoint instead of
+# scraping the heavy SPA.
+_TWITCH_CLIENT_ID = "kimne78kx3ncx6brgo4mv6wki5h1ko"
+
+
+def _twitch_clip_slug(url: str) -> str | None:
+    if not url:
+        return None
+    m = re.search(r"(?:clips\.twitch\.tv/|twitch\.tv/[^/?#]+/clip/)([A-Za-z0-9_-]+)", url)
+    return m.group(1) if m else None
+
+
+def resolve_twitch(url: str) -> dict[str, Any] | None:
+    """Resolve Twitch clips through the authoritative GQL API.
+
+    Twitch clip pages are heavy SPAs that defeat simple HTML scraping. The GQL
+    endpoint returns ``clip.videoQualities[].sourceURL`` — progressive MP4
+    renditions that already carry audio — which is the same world-class
+    technique every popular Twitch clip downloader uses. Non-clip Twitch URLs
+    (VODs, channels) intentionally fall straight back to the generic embed
+    resolver + yt-dlp.
+    """
+    slug = _twitch_clip_slug(url)
+    if not slug:
+        return resolve_embed_media(url, extra_headers={"Referer": "https://clips.twitch.tv/"})
+
+    s = _session()
+    headers = {
+        "Client-ID": _TWITCH_CLIENT_ID,
+        "Accept": "application/json",
+        "Content-Type": "application/json",
+        "User-Agent": _UA,
+    }
+    payload = {
+        "query": (
+            "query ClipsDownload($slug: ID!) {"
+            "  clip(slug: $slug) {"
+            "    title"
+            "    broadcaster { displayName login }"
+            "    videoQualities { frameRate quality sourceURL }"
+            "  }"
+            "}"
+        ),
+        "variables": {"slug": slug},
+    }
+    try:
+        r = s.post("https://gql.twitch.tv/gql", json=payload, headers=headers, timeout=20)
+        if int(getattr(r, "status_code", 0) or 0) != 200:
+            return resolve_embed_media(url, extra_headers={"Referer": "https://clips.twitch.tv/"})
+        data = r.json()
+    except Exception as exc:
+        logger.debug("Twitch GQL fetch failed for %s: %s", url, exc)
+        return resolve_embed_media(url, extra_headers={"Referer": "https://clips.twitch.tv/"})
+
+    clip = (data.get("data") or {}).get("clip") or {}
+    qualities = clip.get("videoQualities") or []
+
+    rows: list[tuple[int, str]] = []
+    for item in qualities or []:
+        if not isinstance(item, dict):
+            continue
+        src = item.get("sourceURL") or item.get("source_url")
+        if not isinstance(src, str) or not src.startswith("http"):
+            continue
+        try:
+            height = int(str(item.get("quality") or "0").strip().strip("p") or 0)
+        except (TypeError, ValueError):
+            height = 0
+        rows.append((height, src))
+
+    rows.sort(key=lambda row: row[0], reverse=True)
+    candidates: list[str] = []
+    labels: list[str] = []
+    for height, candidate in rows:
+        if candidate not in candidates:
+            candidates.append(candidate)
+            if height and f"{height}p" not in labels and len(labels) < 6:
+                labels.append(f"{height}p")
+
+    if not candidates:
+        return resolve_embed_media(url, extra_headers={"Referer": "https://clips.twitch.tv/"})
+
+    title = clip.get("title")
+    uploader = (clip.get("broadcaster") or {}).get("displayName") if isinstance(clip.get("broadcaster"), dict) else None
+    thumbnail = f"https://clips-media-assets2.twitch.tv/{slug}-preview-480x272.jpg"
+
+    return _video_payload(
+        url=url,
+        media_id=slug,
+        title=title,
+        uploader=uploader,
+        duration=None,
+        platform="Twitch",
+        thumbnail=thumbnail,
+        qualities=[{"label": q, "format_id": "best"} for q in (labels or ["best"])],
+        candidates=candidates,
+        engine_profile="twitch-gql-clips+embed-fallback",
+    )
+
+
+# --------------------------------------------------------------------------- #
+# Odnoklassniki (ok.ru videoembed JSON)
+# --------------------------------------------------------------------------- #
+def _ok_video_id(url: str) -> str | None:
+    if not url:
+        return None
+    m = re.search(r"ok\.ru/(?:video|live)/(\d{6,})", url)
+    return m.group(1) if m else None
+
+
+def resolve_odnoklassniki(url: str) -> dict[str, Any] | None:
+    """Resolve ok.ru videos via the public videoembed JSON endpoint.
+
+    ``ok.ru/videoembed/{id}`` returns an authoritative JSON payload with every
+    mp4 rendition and its height — no auth, no token dance, far more reliable
+    than HTML scraping the full player page.
+    """
+    video_id = _ok_video_id(url)
+    if not video_id:
+        return None
+
+    s = _session()
+    s.headers.update({"Accept": "application/json", "Referer": "https://ok.ru/"})
+    try:
+        r = s.get(f"https://ok.ru/videoembed/{video_id}", timeout=20)
+        if int(getattr(r, "status_code", 0) or 0) != 200:
+            return None
+        data = r.json()
+    except Exception as exc:
+        logger.debug("Odnoklassniki videoembed fetch failed for %s: %s", url, exc)
+        return None
+
+    rows: list[tuple[int, str]] = []
+    for entry in (data.get("videos") or []) if isinstance(data, dict) else []:
+        if not isinstance(entry, dict):
+            continue
+        candidate = entry.get("url")
+        if not isinstance(candidate, str) or not candidate.startswith("http"):
+            continue
+        try:
+            height = int(str(entry.get("quality") or entry.get("height") or "0").strip().strip("p") or 0)
+        except (TypeError, ValueError):
+            height = 0
+        rows.append((height, candidate))
+
+    rows.sort(key=lambda row: row[0], reverse=True)
+    candidates: list[str] = []
+    labels: list[str] = []
+    for height, candidate in rows:
+        if candidate not in candidates:
+            candidates.append(candidate)
+            if height and f"{height}p" not in labels and len(labels) < 6:
+                labels.append(f"{height}p")
+
+    if not candidates:
+        return None
+
+    title = data.get("movie") or data.get("title")
+    thumbnail = data.get("thumbnailUrl") or data.get("thumbnail")
+
+    return _video_payload(
+        url=url,
+        media_id=video_id,
+        title=title,
+        uploader=None,
+        duration=None,
+        platform="Odnoklassniki",
+        thumbnail=thumbnail,
+        qualities=[{"label": q, "format_id": "best"} for q in (labels or ["best"])],
+        candidates=candidates,
+        engine_profile="odnoklassniki-videoembed",
+    )

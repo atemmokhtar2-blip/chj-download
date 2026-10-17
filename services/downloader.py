@@ -506,7 +506,16 @@ def _download_direct_sync(
     prefix: str = "xdl-direct",
     retries: int = 2,
 ) -> str | None:
-    """Stream a direct CDN video with bounded size, transient retries, and cleanup."""
+    """Stream a direct CDN video with browser TLS impersonation + bounded size.
+
+    World-class hardening for every direct-CDN engine (TikTok/Instagram/Twitter/
+    Reddit/Pinterest/Vimeo/Imgur/Streamable/Coub and every embed engine):
+    the first pass runs through ``curl_cffi`` which impersonates Chrome's real
+    TLS handshake (JA3/HTTP2 fingerprint) — the only reliable way to get past
+    CDNs that 403/HTML-challenge the plain ``requests`` TLS fingerprint. If
+    curl_cffi is unavailable the plain requests path still runs with full
+    transient retries, size cap, cancellation and first-byte HTML sniffing.
+    """
     import requests
     from utils.url_safety import is_public_url
 
@@ -531,78 +540,115 @@ def _download_direct_sync(
     }
     request_headers.update(headers or {})
     attempts = max(1, int(retries) + 1)
+    cancel_check = getattr(progress, "cancel_check", None)
 
+    def _consume(response, out: str) -> str:
+        """Process a streaming GET into ``out``.
+
+        Returns ``"ok"`` when a usable file was written, ``"retry"`` for
+        transient HTTP/network failures, and ``"skip"`` for deterministic
+        rejections (wrong content type, HTML challenge). Raises
+        FileTooLargeError / DownloadCancelledError for hard aborts.
+        """
+        status = int(getattr(response, "status_code", 0) or 0)
+        if status not in (200, 206):
+            return "retry" if status in (408, 425, 429) or status >= 500 else "skip"
+
+        headers_http = getattr(response, "headers", None) or {}
+        content_type = str(headers_http.get("Content-Type") or "").lower()
+        if content_type and not (
+            content_type.startswith("video/")
+            or content_type in {
+                "application/octet-stream",
+                "application/mp4",
+                "binary/octet-stream",
+            }
+        ):
+            return "skip"
+
+        total = 0
+        try:
+            total = max(0, int(headers_http.get("Content-Length") or 0))
+        except (TypeError, ValueError):
+            pass
+        if total > MAX_FILE_SIZE_BYTES:
+            raise FileTooLargeError(size_bytes=total, limit_bytes=MAX_FILE_SIZE_BYTES)
+
+        downloaded = 0
+        with open(out, "wb") as output:
+            for chunk in response.iter_content(chunk_size=256 * 1024):
+                if not chunk:
+                    continue
+                if cancel_check is not None:
+                    cancel_check()
+                if downloaded + len(chunk) > MAX_FILE_SIZE_BYTES:
+                    raise FileTooLargeError(
+                        size_bytes=downloaded + len(chunk),
+                        limit_bytes=MAX_FILE_SIZE_BYTES,
+                    )
+                if downloaded == 0:
+                    sample = chunk.lstrip().lower()
+                    if sample.startswith((b"<!doctype html", b"<html", b"{", b"[")):
+                        return "skip"
+                output.write(chunk)
+                downloaded += len(chunk)
+                if progress and loop:
+                    try:
+                        asyncio.run_coroutine_threadsafe(progress({
+                            "pct": int(downloaded * 100 / total) if total else 0,
+                            "downloaded": downloaded,
+                            "total": total,
+                            "speed": 0,
+                            "eta": 0,
+                        }), loop)
+                    except RuntimeError as exc:
+                        logger.debug("Direct-download progress skipped: %s", exc)
+
+        return "ok" if downloaded > 2048 else "skip"
+
+    # Pass 1: curl_cffi Chrome TLS impersonation (single strong shot; the
+    # requests pass below owns the retry loop).
+    try:
+        from curl_cffi import requests as creq
+
+        _safe_remove(out_path)
+        response = creq.get(
+            url,
+            headers=request_headers,
+            impersonate="chrome",
+            timeout=timeout,
+            stream=True,
+        )
+        result = _consume(response, out_path)
+        if result == "ok":
+            return out_path
+        if result == "retry":
+            logger.debug("curl_cffi direct got transient HTTP status for %s", str(url)[:120])
+    except FileTooLargeError:
+        _safe_remove(out_path)
+        raise
+    except DownloadCancelledError:
+        _safe_remove(out_path)
+        raise
+    except Exception as exc:
+        logger.debug("curl_cffi direct pass unavailable/failed for %s: %s", str(url)[:120], exc)
+
+    # Pass 2: plain requests with transient retries + exponential backoff.
     for attempt in range(attempts):
         _safe_remove(out_path)
         try:
             with requests.get(
                 url, headers=request_headers, stream=True, timeout=timeout
             ) as response:
-                status = response.status_code
-                if status not in (200, 206):
-                    if status in (408, 425, 429) or status >= 500:
-                        if attempt + 1 < attempts:
-                            time.sleep(0.5 * (2 ** attempt))
-                            continue
-                    _safe_remove(out_path)
-                    return None
-
-                content_type = (response.headers.get("Content-Type") or "").lower()
-                if content_type and not (
-                    content_type.startswith("video/")
-                    or content_type in {
-                        "application/octet-stream",
-                        "application/mp4",
-                        "binary/octet-stream",
-                    }
-                ):
-                    _safe_remove(out_path)
-                    return None
-
-                total = 0
-                try:
-                    total = max(0, int(response.headers.get("Content-Length") or 0))
-                except (TypeError, ValueError):
-                    pass
-                if total > MAX_FILE_SIZE_BYTES:
-                    raise FileTooLargeError(
-                        size_bytes=total, limit_bytes=MAX_FILE_SIZE_BYTES
-                    )
-
-                downloaded = 0
-                cancel_check = getattr(progress, "cancel_check", None)
-                with open(out_path, "wb") as output:
-                    for chunk in response.iter_content(chunk_size=256 * 1024):
-                        if not chunk:
-                            continue
-                        if cancel_check is not None:
-                            cancel_check()
-                        if downloaded + len(chunk) > MAX_FILE_SIZE_BYTES:
-                            raise FileTooLargeError(
-                                size_bytes=downloaded + len(chunk),
-                                limit_bytes=MAX_FILE_SIZE_BYTES,
-                            )
-                        if downloaded == 0:
-                            sample = chunk.lstrip().lower()
-                            if sample.startswith((b"<!doctype html", b"<html", b"{", b"[")):
-                                _safe_remove(out_path)
-                                return None
-                        output.write(chunk)
-                        downloaded += len(chunk)
-                        if progress and loop:
-                            try:
-                                asyncio.run_coroutine_threadsafe(progress({
-                                    "pct": int(downloaded * 100 / total) if total else 0,
-                                    "downloaded": downloaded,
-                                    "total": total,
-                                    "speed": 0,
-                                    "eta": 0,
-                                }), loop)
-                            except RuntimeError as exc:
-                                logger.debug("Direct-download progress skipped: %s", exc)
-
-                if downloaded > 2048:
+                result = _consume(response, out_path)
+                if result == "ok":
                     return out_path
+                if result == "retry":
+                    _safe_remove(out_path)
+                    if attempt + 1 < attempts:
+                        time.sleep(0.5 * (2 ** attempt))
+                        continue
+                    return None
                 _safe_remove(out_path)
                 return None
         except FileTooLargeError:

@@ -583,26 +583,62 @@ class TwitterEngine(PlatformEngine):
         progress_callback: Callable | None = None,
         play_url: str | None = None,
     ) -> str | None:
+        """Walk every direct Twitter/X candidate before yt-dlp's login-walled pass.
+
+        The multi-provider race already ranks yt-dlp / vxtwitter / fxtwitter /
+        HTML extraction. This engine now walks the FULL ordered candidate list
+        (progressive mp4 first, HLS second) instead of trusting a single
+        ``play_url`` that may be expired or silent. The central audio guard still
+        verifies each successful download before delivery.
+        """
         from services import downloader
-        from services.twitter_scraper import scrape_twitter
+        from services.twitter_scraper import scrape_twitter, normalize_twitter_url
         from middlewares.concurrency import get_executor
         import asyncio
 
         loop = asyncio.get_running_loop()
-        candidate = play_url
-        if not candidate:
-            try:
-                meta = await loop.run_in_executor(get_executor(), scrape_twitter, url)
-                if meta:
-                    candidate = meta.get("play_url")
-                    download_logger.info(
-                        "TwitterEnginePro selected source=%s score=%s",
-                        meta.get("source"), meta.get("provider_score"),
-                    )
-            except Exception as exc:
-                error_logger.error("TwitterEnginePro resolve before download failed: %s", exc)
+        cancel_check = getattr(progress_callback, "cancel_check", None)
+        candidates: list[tuple[str, str, int]] = []  # (url, source, score)
+        seen: set[str] = set()
 
-        if candidate and (".mp4" in candidate or ".m3u8" in candidate):
+        def _add(candidate: str | None, source: str, score: int = 0) -> None:
+            candidate = (candidate or "").strip()
+            if candidate.startswith("http") and candidate not in seen:
+                seen.add(candidate)
+                candidates.append((candidate, source, int(score or 0)))
+
+        _add(play_url, "cached-play-url", 9999)
+        resolved_url = url
+        try:
+            meta = await loop.run_in_executor(get_executor(), scrape_twitter, url)
+            if meta:
+                resolved_url = meta.get("webpage_url") or normalize_twitter_url(url)
+                _add(
+                    meta.get("play_url"),
+                    meta.get("source") or "twitter-best",
+                    int(meta.get("provider_score") or 0),
+                )
+                # The scraper aggregates EVERY provider's direct URLs here
+                # (vxtwitter/fxtwitter/yt-dlp/html) so a dead "best" URL can
+                # never sink the whole download.
+                for item in meta.get("download_candidates") or []:
+                    _add(
+                        item.get("url"),
+                        f"twitter:{item.get('provider') or 'alt'}",
+                        int(item.get("score") or 0),
+                    )
+                download_logger.info(
+                    "TwitterEnginePro candidates=%s provider=%s score=%s",
+                    len(candidates), meta.get("source"), meta.get("provider_score"),
+                )
+        except Exception as exc:
+            error_logger.error("TwitterEnginePro resolve before download failed: %s", exc)
+
+        for candidate, source, _score in sorted(
+            candidates, key=lambda c: (0 if ".m3u8" not in c[0] else 1, -c[2])
+        ):
+            if cancel_check is not None:
+                cancel_check()
             try:
                 if ".m3u8" in candidate:
                     direct_path = await loop.run_in_executor(
@@ -623,17 +659,47 @@ class TwitterEngine(PlatformEngine):
                         loop,
                         "xdl-twitter",
                     )
-                direct_path = downloader._prepare_video_for_delivery(direct_path, source="direct-cdn")
+                direct_path = downloader._prepare_video_for_delivery(
+                    direct_path, source=f"twitter-direct:{source}", cancel_check=cancel_check
+                )
                 if direct_path:
                     return direct_path
+                download_logger.info("Twitter direct candidate failed/was silent source=%s", source)
             except downloader.FileTooLargeError:
                 raise
             except downloader.DownloadCancelledError:
                 raise
             except Exception as exc:
-                error_logger.error("TwitterEnginePro direct download failed: %s", exc)
+                error_logger.error("TwitterEnginePro direct candidate failed source=%s: %s", source, exc)
 
-        return await downloader._generic_download_video(url, format_id, quality_label, progress_callback)
+        # Final fallbacks through page URLs: the canonical URL plus the public
+        # vxtwitter/fxtwitter mirrors, whose extractors stay unauthenticated.
+        for page_url in dict.fromkeys([
+            resolved_url,
+            url,
+            url.replace("https://x.com", "https://twitter.com"),
+            url.replace("https://twitter.com", "https://fxtwitter.com"),
+            url.replace("https://twitter.com", "https://vxtwitter.com"),
+        ]):
+            if not page_url:
+                continue
+            if cancel_check is not None:
+                cancel_check()
+            try:
+                path = await downloader._generic_download_video(
+                    page_url, format_id, quality_label, progress_callback
+                )
+                if path:
+                    return path
+            except downloader.FileTooLargeError:
+                raise
+            except downloader.DownloadCancelledError:
+                raise
+            except Exception as exc:
+                error_logger.error(
+                    "TwitterEnginePro page fallback failed for %s: %s", page_url[:90], exc
+                )
+        return None
 
 
 class RedditEngine(PlatformEngine):
@@ -1062,6 +1128,7 @@ class TwitchEngine(EmbedFallbackEngine):
     name = "TwitchEnginePro"
     platform_label = "Twitch"
     domains = ("twitch.tv", "clips.twitch.tv", "m.twitch.tv", "player.twitch.tv")
+    resolver_name = "resolve_twitch"
     embed_headers = {"Referer": "https://clips.twitch.tv/"}
 
 
@@ -1344,6 +1411,7 @@ class OdnoklassnikiEngine(EmbedFallbackEngine):
     name = "OdnoklassnikiEnginePro"
     platform_label = "Odnoklassniki"
     domains = ("ok.ru", "m.ok.ru", "odnoklassniki.ru", "m.odnoklassniki.ru")
+    resolver_name = "resolve_odnoklassniki"
     embed_headers = {"Referer": "https://ok.ru/"}
 
 

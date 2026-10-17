@@ -473,6 +473,38 @@ def scrape_twitter(url: str) -> dict | None:
         for r in results
     ] + failures
     best["engine_profile"] = "yt-dlp+vxtwitter+html+cdn-probe"
+
+    # Aggregate EVERY provable direct video URL across all providers so the
+    # download path can walk them instead of trusting the single highest-scored
+    # play_url (which may be expired or silent). The strongest tweet often wins
+    # on one provider and misses on another; walking all of them is what makes
+    # the engine survive a dead CDN or a silent rendition instead of falling
+    # all the way down to a login-walled generic yt-dlp pass.
+    download_candidates: list[dict] = []
+    seen_candidates: set[str] = set()
+    for r in results:
+        score = int(r.get("provider_score") or 0)
+        source = r.get("source") or "twitter"
+
+        def _add_candidate(u: str | None, *, kind: str = "video") -> None:
+            u = (u or "").strip()
+            if not u.startswith("http") or u in seen_candidates:
+                return
+            seen_candidates.add(u)
+            download_candidates.append(
+                {"url": u, "provider": source, "score": score, "kind": kind}
+            )
+
+        _add_candidate(r.get("play_url"))
+        for item in r.get("album_items") or []:
+            if not isinstance(item, dict):
+                continue
+            if item.get("type") == "video":
+                _add_candidate(item.get("play_url") or item.get("url"))
+
+    if download_candidates:
+        download_candidates.sort(key=lambda c: (-int(c.get("score") or 0)))
+        best["download_candidates"] = download_candidates[:12]
     logger.info(
         "Twitter/X selected provider=%s score=%s type=%s candidates=%s",
         best.get("source"), best.get("provider_score"), best.get("media_type"), len(best.get("provider_candidates") or []),
