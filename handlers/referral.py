@@ -860,11 +860,11 @@ async def _render_status_screen(q, verified_title: str) -> None:
 
 
 async def _show_support_home(q) -> None:
-    """Send user-facing support requests directly to the developer."""
+    """Send user-facing help requests directly to the developer."""
     await _edit_ref(
         q,
-        "🧑‍💻 <b>التواصل مع المطوّر</b>\\n\\n"
-        "لو قابلتك مشكلة، ابعت للمطوّر @K_xv6 وصف المشكلة ورسالة الخطأ أو صورة منها.\\n\\n"
+        "🧑‍💻 <b>التواصل مع المطوّر</b>\n\n"
+        "لو قابلتك مشكلة، ابعت للمطوّر @K_xv6 وصف المشكلة ورسالة الخطأ أو صورة منها.\n\n"
         "🔐 ما تبعتش توكن البوت أو أي بيانات سرية.",
         InlineKeyboardMarkup([
             [InlineKeyboardButton("💬 مراسلة المطوّر @K_xv6", url="https://t.me/K_xv6")],
@@ -883,58 +883,6 @@ async def _open_support_ticket(q, category: str) -> None:
 
 async def _render_support_ticket(q, ticket_id: int, just_opened: bool = False) -> None:
     await _show_support_home(q)
-
-async def _show_support_new(q) -> None:
-    await _edit_ref(
-        q,
-        "🛟 <b>فتح تذكرة جديدة</b>\n\nاختر نوع المشكلة:",
-        InlineKeyboardMarkup([
-            [InlineKeyboardButton("🔑 التوكن مرفوض", callback_data="ref:support:open:token")],
-            [InlineKeyboardButton("🤖 نسختي مش شغالة", callback_data="ref:support:open:clone")],
-            [InlineKeyboardButton("🛠 مشكلة أخرى", callback_data="ref:support:open:other")],
-            _back_home_row(),
-        ]),
-    )
-
-
-async def _open_support_ticket(q, category: str) -> None:
-    uid = q.from_user.id
-    label = _SUPPORT_CATEGORY_LABELS.get(category, "مشكلة أخرى")
-    body = _SUPPORT_SUBJECT_BODY.get(category, "طلب دعم فني عام.")
-    ticket = support.open_ticket(uid, category, label, body)
-    await _render_support_ticket(q, ticket["id"], just_opened=True)
-
-
-async def _render_support_ticket(q, ticket_id: int, just_opened: bool = False) -> None:
-    uid = q.from_user.id
-    ticket = support.get_ticket_for_user(ticket_id, uid)
-    if not ticket:
-        await _edit_ref(q, "❌ التذكرة غير موجودة أو لا تخص حسابك.",
-                        InlineKeyboardMarkup([_back_home_row()]))
-        return
-    msgs = support.get_messages(ticket_id, limit=20)
-    lines = []
-    for m in msgs:
-        who = "🛟 الدعم" if m["sender"] == "admin" else "👤 أنت"
-        created = (m.get("created_at") or "—")[:16]
-        lines.append(f"{who} • <code>{created}</code>\n{m['body']}")
-    thread = "\n\n".join(lines) if lines else "لا توجد رسائل بعد."
-    head = "🎫 <b>تم فتح تذكرتك بنجاح!</b>\n" if just_opened else "🎫 <b>تذكرة الدعم</b>\n"
-    text = (
-        f"{head}\n"
-        f"🔢 الرقم الخاص: <code>{ticket['ticket_no']}</code>\n"
-        f"🏷 النوع: {_SUPPORT_CATEGORY_LABELS.get(ticket['category'], ticket['category'])}\n"
-        f"📌 الحالة: {_SUPPORT_STATUS_LABELS.get(ticket['status'], ticket['status'])}\n\n"
-        f"<b>المحادثة:</b>\n{thread}"
-    )
-    await _edit_ref(
-        q, text,
-        InlineKeyboardMarkup([
-            [InlineKeyboardButton("🔄 تحديث الحالة", callback_data=f"ref:support:view:{ticket_id}")],
-            [InlineKeyboardButton("🛟 مركز الدعم", callback_data="ref:support")],
-            _back_home_row(),
-        ]),
-    )
 
 
 async def referral_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
