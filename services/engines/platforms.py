@@ -1104,6 +1104,7 @@ class SnapchatEngine(EmbedFallbackEngine):
     name = "SnapchatEnginePro"
     platform_label = "Snapchat"
     domains = ("snapchat.com", "story.snapchat.com")
+    embed_headers = {"Referer": "https://www.snapchat.com/"}
 
 
 class TelegramPublicEngine(EmbedFallbackEngine):
@@ -1118,12 +1119,14 @@ class LikeeEngine(EmbedFallbackEngine):
     name = "LikeeEnginePro"
     platform_label = "Likee"
     domains = ("likee.video", "likee.com", "l.likee.video", "mobile.likee.video")
+    embed_headers = {"Referer": "https://likee.video/"}
 
 
 class KwaiEngine(EmbedFallbackEngine):
     name = "KwaiEnginePro"
     platform_label = "Kwai"
     domains = ("kwai.com", "kw.ai", "s.kw.ai", "m.kwai.com", "kwai-video.com")
+    embed_headers = {"Referer": "https://www.kwai.com/"}
 
 
 class TwitchEngine(EmbedFallbackEngine):
@@ -1432,6 +1435,8 @@ class OdyseeEngine(EmbedFallbackEngine):
     name = "OdyseeEnginePro"
     platform_label = "Odysee"
     domains = ("odysee.com", "www.odysee.com")
+    resolver_name = "resolve_odysee"
+    embed_headers = {"Referer": "https://odysee.com/"}
 
 
 class NiconicoEngine(EmbedFallbackEngine):
@@ -1452,6 +1457,7 @@ class XiaohongshuEngine(EmbedFallbackEngine):
     name = "XiaohongshuEnginePro"
     platform_label = "Xiaohongshu"
     domains = ("xiaohongshu.com", "xhslink.com", "www.xiaohongshu.com", "m.xiaohongshu.com")
+    embed_headers = {"Referer": "https://www.xiaohongshu.com/"}
 
 
 class GenericEngine(YtDlpFallbackEngine):

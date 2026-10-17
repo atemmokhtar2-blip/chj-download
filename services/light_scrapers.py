@@ -517,9 +517,19 @@ def _meta_any(html: str, key: str) -> str | None:
 
 def _walk_jsonld(node, out: list[str]) -> None:
     if isinstance(node, dict):
+        # Many publishers put the direct media file in the VideoObject's `url`
+        # field rather than the canonical contentUrl/embedUrl keys — and then
+        # nest it several objects deep. Detect the node type first so we can
+        # harvest `url` only where it is unambiguously a video.
+        node_type = node.get("@type") or node.get("type") or ""
+        type_items = node_type if isinstance(node_type, (list, tuple)) else [node_type]
+        is_video_object = any(
+            str(t).lower() in {"videoobject", "video"} for t in type_items
+        )
         for key, value in node.items():
-            if key in ("contentUrl", "embedUrl") and isinstance(value, str) and value.startswith("http"):
-                out.append(value)
+            if isinstance(value, str) and value.startswith("http"):
+                if key in ("contentUrl", "embedUrl") or (key == "url" and is_video_object):
+                    out.append(value)
             else:
                 _walk_jsonld(value, out)
     elif isinstance(node, list):
@@ -1504,4 +1514,72 @@ def resolve_odnoklassniki(url: str) -> dict[str, Any] | None:
         qualities=[{"label": q, "format_id": "best"} for q in (labels or ["best"])],
         candidates=candidates,
         engine_profile="odnoklassniki-videoembed",
+    )
+
+
+# --------------------------------------------------------------------------- #
+# Odysee (LBRY) — public JSON-RPC streaming URL
+# --------------------------------------------------------------------------- #
+def resolve_odysee(url: str) -> dict[str, Any] | None:
+    """Resolve an Odysee/LBRY video via the public LBRY JSON-RPC API.
+
+    Odysee content is blockchain-hosted (LBRY). Its page player is a heavy SPA,
+    but the official JSON-RPC endpoint returns an authoritative
+    ``streaming_url`` — a progressive mp4 that already carries audio — with no
+    auth or API key. This is the same world-class technique yt-dlp's Odysee
+    extractor uses, reusing the bot's own cookie-aware HTTP stack so it falls
+    back to the embed/yt-dlp path when the claim is unavailable.
+    """
+    parsed = urlparse(url or "")
+    segment = parsed.path.rstrip("/").rsplit("/", 1)[-1]
+    if ":" not in segment:
+        return None
+    name, claim_id = segment.rsplit(":", 1)
+    if not name or not claim_id:
+        return None
+
+    # Localised metadata first (cheap og tags from the canonical page).
+    title = thumbnail = None
+    try:
+        html, _ = _fetch_html_variants(url, {"Referer": "https://odysee.com/"})
+        if html:
+            title = _meta_any(html, "og:title")
+            thumbnail = _meta_any(html, "og:image")
+    except Exception:
+        pass
+
+    streaming_url = None
+    try:
+        s = _session()
+        r = s.post(
+            "https://api.na-backend.odysee.com/api/v1/proxy?m=get",
+            json={
+                "jsonrpc": "2.0",
+                "method": "get",
+                "params": {"uri": f"lbry://{name}#{claim_id}", "save_file": False, "timeout": 15},
+                "id": 1,
+            },
+            headers={"Content-Type": "application/json", "Accept": "application/json"},
+            timeout=25,
+        )
+        if int(getattr(r, "status_code", 0) or 0) == 200:
+            body = r.json()
+            streaming_url = ((body or {}).get("result") or {}).get("streaming_url")
+    except Exception as exc:
+        logger.debug("Odysee LBRY get failed for %s: %s", url, exc)
+
+    if not streaming_url or not str(streaming_url).startswith("http"):
+        return None
+
+    return _video_payload(
+        url=url,
+        media_id=claim_id,
+        title=title,
+        uploader=None,
+        duration=None,
+        platform="Odysee",
+        thumbnail=thumbnail,
+        qualities=None,
+        candidates=[str(streaming_url)],
+        engine_profile="lbry-jsonrpc-streaming-url",
     )
