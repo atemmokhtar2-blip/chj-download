@@ -729,9 +729,15 @@ def download_hls_mp4(play_url: str, prefix: str = "xdl-hls", headers: dict | Non
     os.close(fd)
     _safe_remove(out_path)
 
-    header_args: list[str] = []
+    # ffmpeg advertises its own Lavf user-agent by default — an obvious bot tell
+    # that HLS CDNs (Twitter, Kick, Rutube, Pinterest, Vimeo, ...) fingerprint.
+    # Merge a real browser UA + modern Client Hints / Fetch Metadata / Priority
+    # on top of the caller's Referer/Origin so every playlist AND segment request
+    # looks like a genuine Chrome fetch instead of a video tool.
+    effective_headers = tls.browser_headers()
     if headers:
-        header_args = ["-headers", "\r\n".join(f"{k}: {v}" for k, v in headers.items() if k and v)]
+        effective_headers.update(headers)
+    header_args = ["-headers", "\r\n".join(f"{k}: {v}" for k, v in effective_headers.items() if k and v)]
 
     passes = (
         [
