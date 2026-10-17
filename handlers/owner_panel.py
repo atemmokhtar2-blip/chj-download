@@ -211,14 +211,8 @@ def _build_home() -> tuple[str, InlineKeyboardMarkup]:
 # ---- users section --------------------------------------------------------------------
 
 def _users_home_text() -> str:
-    return (
-        "👥 <b>إدارة المستخدمين</b>\n"
-        "البحث والتحكم في كل حساب\n\n"
-        f"• الإجمالي: <b>{get_total_users()}</b>\n"
-        f"• نشط اليوم: <b>{get_active_today()}</b> • آخر 24 ساعة: <b>{get_active_24h()}</b>\n"
-        f"• جديد اليوم: <b>{get_new_users_today()}</b> • الأسبوع: <b>{get_new_users_week()}</b> • الشهر: <b>{get_new_users_month()}</b>\n"
-        f"• محظور: <b>{get_banned_users_count()}</b>"
-    )
+    # Keep the user-management screen button-only, matching the owner home.
+    return "\u2063"
 
 
 def _users_home_kb() -> InlineKeyboardMarkup:
@@ -233,7 +227,6 @@ def _users_home_kb() -> InlineKeyboardMarkup:
         *_back(),
     ])
 
-
 async def _show_users_page(query, page: int = 0, status: str = "all"):
     per_page = 8
     if status not in ("all", "active", "banned"):
@@ -242,37 +235,15 @@ async def _show_users_page(query, page: int = 0, status: str = "all"):
     total_pages = max(1, (total + per_page - 1) // per_page)
     page = max(0, min(page or 0, total_pages - 1))
     users = get_users_page(offset=page * per_page, limit=per_page, status=status)
-    label = {"all": "الكل", "active": "النشطون", "banned": "المحظورون"}[status]
 
-    if not users:
-        await _edit(query,
-            f"👥 <b>المستخدمون — {label}</b>\n\nلا يوجد مستخدمون في هذه الفئة.",
-            parse_mode="HTML", reply_markup=_users_home_kb())
-        return
-
-    lines = []
-    for u in users:
-        icon = "🚫" if u.get("is_banned") else "✅"
-        name = escape(u.get("first_name") or "بدون اسم")
-        uname = escape(u.get("username") or "—")
-        lines.append(
-            f"{icon} <b>{name}</b> @{uname}\n"
-            f"    🆔 <code>{u['user_id']}</code> • 📥 <b>{u.get('downloads', 0)}</b> • 🕑 {(u.get('last_seen') or '—')[:10]}"
-        )
-    text = (
-        f"👥 <b>قائمة المستخدمين — {label}</b>\n"
-        f"الصفحة <b>{page + 1}</b>/<b>{total_pages}</b> • العدد: <b>{total}</b>\n\n"
-        + "\n".join(lines)
-    )
     rows = []
-    row = []
     for u in users:
-        row.append(inline_button(f"👤 {u['user_id']}", callback_data=f"own_user_{u['user_id']}"))
-        if len(row) == 2:
-            rows.append(row)
-            row = []
-    if row:
-        rows.append(row)
+        icon = "🚫" if u.get("is_banned") else "👤"
+        name = (u.get("first_name") or "بدون اسم").strip()
+        # Keep labels compact; Telegram inline button text is easier to scan than a wall of text.
+        label = f"{icon} {name[:22]} · {u['user_id']}"
+        rows.append([inline_button(label, callback_data=f"own_user_{u['user_id']}")])
+
     nav = []
     if page > 0:
         nav.append(inline_button("⬅️ السابق", callback_data=f"own_users_page_{page - 1}"))
@@ -280,9 +251,10 @@ async def _show_users_page(query, page: int = 0, status: str = "all"):
         nav.append(inline_button("التالي ➡️", callback_data=f"own_users_page_{page + 1}"))
     if nav:
         rows.append(nav)
+    rows.append([inline_button(f"📄 صفحة {page + 1}/{total_pages} · الإجمالي {total}", callback_data="own_users")])
     rows.append([inline_button("🔙 إدارة المستخدمين", callback_data="own_users")])
-    await _edit(query, text, parse_mode="HTML", reply_markup=_kb(rows))
 
+    await _edit(query, "\u2063", parse_mode="HTML", reply_markup=_kb(rows))
 
 async def _show_banned(query):
     banned = get_banned_users(30)
