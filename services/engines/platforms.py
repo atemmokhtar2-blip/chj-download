@@ -1104,6 +1104,7 @@ class SnapchatEngine(EmbedFallbackEngine):
     name = "SnapchatEnginePro"
     platform_label = "Snapchat"
     domains = ("snapchat.com", "story.snapchat.com")
+    resolver_name = "resolve_snapchat"
     embed_headers = {"Referer": "https://www.snapchat.com/"}
 
 
@@ -1149,6 +1150,7 @@ class VkEngine(EmbedFallbackEngine):
     name = "VkEnginePro"
     platform_label = "VK"
     domains = ("vk.com", "vkvideo.ru", "vk.cc", "m.vk.com", "vkvideo.cc")
+    resolver_name = "resolve_vk"
     embed_headers = {"Referer": "https://vk.com/"}
 
 

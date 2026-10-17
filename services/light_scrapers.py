@@ -1583,3 +1583,139 @@ def resolve_odysee(url: str) -> dict[str, Any] | None:
         candidates=[str(streaming_url)],
         engine_profile="lbry-jsonrpc-streaming-url",
     )
+
+
+# --------------------------------------------------------------------------- #
+# VK — video_ext.php JSON (official player endpoint)
+# --------------------------------------------------------------------------- #
+_VK_VIDEO_RE = re.compile(r"vk(?:video)?\.(?:com|ru)/(?:video|clip)(-?\d+)_(\d+)", re.I)
+
+
+def resolve_vk(url: str) -> dict[str, Any] | None:
+    """Resolve VK videos/clips via the official ``video_ext.php`` JSON endpoint.
+
+    VK's HTML page player is a heavy JS app, but the site still ships the exact
+    ``video_ext.php?oid=...&id=...&hash=...`` endpoint inside the page (the same
+    technique yt-dlp's VK extractor uses). That endpoint returns an
+    authoritative JSON ``payload`` of progressive MP4 renditions — no app id,
+    no auth — so the resolver gets real CDN URLs with audio instead of relying
+    on HTML scraping. Clips fall back to script-mined CDN URLs from the page.
+    """
+    m = _VK_VIDEO_RE.search(url or "")
+    if not m:
+        return None
+    oid, vid = m.group(1), m.group(2)
+    kind = "clip" if "/clip" in url else "video"
+    page_url = f"https://vk.com/{kind}{oid}_{vid}"
+
+    html, resolved = _fetch_html_variants(
+        page_url,
+        {"Referer": "https://vk.com/", "Accept-Language": "ru-RU,ru;q=0.9,en;q=0.8"},
+    )
+    if not html:
+        return None
+
+    candidates: list[str] = []
+
+    def add(value: str | None) -> None:
+        value = _unescape_url(value)
+        if not value:
+            return
+        if value.startswith("//"):
+            value = "https:" + value
+        if value.startswith("http") and _VIDEO_FILE_RE.search(value) and value not in candidates:
+            candidates.append(value)
+
+    # 1) Authoritative video_ext.php payload (classic VK videos).
+    if kind == "video":
+        pm = re.search(r"video_ext\.php\?[^\"'&;\s]+", html)
+        if pm:
+            ext = pm.group(0)
+            if not ext.startswith("http"):
+                ext = "https://vk.com/" + ext
+            try:
+                s = _session()
+                r = s.get(ext, headers={"Referer": page_url, "Accept": "application/json"}, timeout=20)
+                if int(getattr(r, "status_code", 0) or 0) == 200:
+                    payload = (r.json() or {}).get("payload") or {}
+                    for entry in payload.values():
+                        if isinstance(entry, dict):
+                            for value in entry.values():
+                                add(value)
+            except Exception as exc:
+                logger.debug("VK video_ext.php fetch failed for %s: %s", url, exc)
+
+    # 2) Script-mined CDN URLs from the canonical page (works for clips and as
+    #    a fallback when video_ext.php is absent).
+    for value in _collect_video_candidates(html):
+        add(value)
+
+    if not candidates:
+        return None
+
+    candidates = sorted(candidates, key=_rank_candidate, reverse=True)[:12]
+    title = _meta_any(html, "og:title")
+    thumbnail = _meta_any(html, "og:image")
+
+    return _video_payload(
+        url=url,
+        media_id=f"{oid}_{vid}",
+        title=title,
+        uploader=None,
+        duration=None,
+        platform="VK",
+        thumbnail=thumbnail,
+        qualities=None,
+        candidates=candidates,
+        engine_profile=f"vk-video-ext-json+script-cdn-{kind}",
+    )
+
+
+# --------------------------------------------------------------------------- #
+# Snapchat — Spotlight canonical embed og:video
+# --------------------------------------------------------------------------- #
+_SNAP_SPOTLIGHT_RE = re.compile(r"snapchat\.com/spotlight/([A-Za-z0-9]+)", re.I)
+
+
+def resolve_snapchat(url: str) -> dict[str, Any] | None:
+    """Resolve a Snapchat Spotlight video from its canonical embed page.
+
+    Spotlight short links bounce through ``snapchat.com/spotlight/<id>``; that
+    canonical page publishes og:video with a CDN MP4 (already carrying audio)
+    to browser-TLS fetches. A dedicated resolver adds the right Referer and
+    canonical URL instead of trusting whatever short/redirect URL the user
+    pasted, then falls back to the generic layered extractor.
+    """
+    m = _SNAP_SPOTLIGHT_RE.search(url or "")
+    if not m:
+        return None
+    spotlight_id = m.group(1)
+    canonical = f"https://www.snapchat.com/spotlight/{spotlight_id}"
+
+    html, resolved = _fetch_html_variants(
+        canonical,
+        {"Referer": "https://www.snapchat.com/"},
+    )
+    if not html:
+        return None
+
+    candidates = [c for c in _collect_video_candidates(html) if c.startswith("http")]
+    if not candidates:
+        return None
+
+    candidates = sorted(candidates, key=_rank_candidate, reverse=True)[:12]
+    title = _meta_any(html, "og:title")
+    thumbnail = _meta_any(html, "og:image")
+
+    return _video_payload(
+        url=url,
+        media_id=spotlight_id,
+        title=title,
+        uploader=None,
+        duration=None,
+        platform="Snapchat",
+        thumbnail=thumbnail,
+        qualities=None,
+        candidates=candidates,
+        engine_profile="snapchat-spotlight-embed-og-video",
+    )
