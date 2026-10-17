@@ -35,7 +35,7 @@ from handlers.admin import (
 from handlers.referral import (
     referral_callback, try_handle_code_message, try_handle_token_message,
 )
-from handlers.owner_panel import owner_command, owner_callback, owner_text_handler
+from handlers.owner_panel import owner_command, owner_callback, owner_text_handler, warroom_command
 from workers.cleanup import cleanup_temp_files, cleanup_old_cache, cleanup_old_history, clone_expiry_worker
 
 # Arabic-only main menu. Matching is emoji-insensitive (see normalize_button_text)
@@ -221,6 +221,7 @@ def build_application(token: str | None = None, clone: bool = False) -> Applicat
 
     # 👑 Owner Control Center — owner-only, protected in code (see owner_panel).
     app.add_handler(CommandHandler("owner", owner_command))
+    app.add_handler(CommandHandler("warroom", warroom_command))
 
     app.add_handler(CommandHandler("admin", admin_command))
     app.add_handler(CommandHandler("stats", admin_command))

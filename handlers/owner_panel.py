@@ -42,12 +42,13 @@ from database.users import (
     get_new_users_month, get_active_today, get_active_24h,
     get_banned_users_count, get_users_page, search_users, get_all_user_ids,
     ban_user, unban_user, get_top_users, count_users, get_banned_users,
-    export_users_csv_rows,
+    export_users_csv_rows, get_ghost_users,
 )
 from database.downloads import (
     get_downloads_today, get_downloads_week, get_downloads_month,
     get_downloads_by_platform, get_total_downloads, get_downloads_24h,
     get_total_data_bytes, get_user_download_stats,
+    get_platform_analytics, get_suspicious_users, get_top_users_by_size,
 )
 from database.broadcast import log_broadcast, get_broadcast_history
 from database.bot_settings import (
@@ -204,9 +205,168 @@ def _build_home() -> tuple[str, InlineKeyboardMarkup]:
         [inline_button("📈 التقارير", callback_data="own_rep"),
          inline_button("⚙️ الإعدادات", callback_data="own_set")],
         [inline_button("🎟️ أكواد التفعيل", callback_data="own_codes")],
+        [inline_button("🩺 غرفة الحرب", callback_data="own_warroom"),
+         inline_button("🛰 تحليلات المنصات", callback_data="own_plat")],
+        [inline_button("🚨 المشبوهون", callback_data="own_sus"),
+         inline_button("👻 بلا تفعيل", callback_data="own_ghosts")],
         [inline_button("🔄 تحديث الأرقام", callback_data="own_home")],
     ])
     return text, keyboard
+
+
+# ---- war room & analytics (owner-only) -------------------------------------------------
+
+async def warroom_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """🩺 /warroom — one-shot health snapshot for the owner only."""
+    if not _owner_gate(update) or not _clone_guard(update):
+        await update.effective_message.reply_text("⛔ هذه اللوحة محمية للمالك الأساسي فقط.")
+        return
+    text, kb = _warroom_screen()
+    await update.effective_message.reply_text(text, parse_mode="HTML", reply_markup=kb)
+
+
+def _warroom_screen() -> tuple[str, InlineKeyboardMarkup]:
+    """غرفة الحرب: قاعدة البيانات + الكاش + الملفات المؤقتة + المحركات + الحدود."""
+    from database.db import db_cursor
+
+    db_ok, db_err = True, ""
+    try:
+        with db_cursor() as c:
+            c.execute("SELECT 1").fetchone()
+    except Exception as exc:
+        db_ok = False
+        db_err = escape(str(exc))[:200]
+
+    cache_items = cache_hits = 0
+    try:
+        with db_cursor() as c:
+            row = c.execute(
+                "SELECT COUNT(*) AS n, COALESCE(SUM(hits), 0) AS h FROM file_cache"
+            ).fetchone()
+            cache_items = int(row["n"] or 0)
+            cache_hits = int(row["h"] or 0)
+    except Exception:
+        pass
+
+    temp_bytes, temp_files = _temp_dir_stats()
+    try:
+        from services.engines import registered_engines
+        engines = len(registered_engines())
+    except Exception:
+        engines = 0
+
+    lines = [
+        "🩺 <b>غرفة الحرب — تقرير صحة موحّد</b>\n",
+        "• قاعدة البيانات: " + ("🟢 متاحة ✓" if db_ok else "🔴 ❌ " + db_err),
+        f"• الوقت منذ الإقلاع: <b>{_uptime()}</b>",
+        f"• المستخدمون: <b>{get_total_users()}</b> (محظورون: <b>{get_banned_users_count()}</b>)",
+        f"• تحميلات اليوم: <b>{get_downloads_today()}</b> • 24س: <b>{get_downloads_24h()}</b>",
+        f"• نشط 24س: <b>{get_active_24h()}</b> • جدد اليوم: <b>{get_new_users_today()}</b>",
+        f"• الكاش: <b>{cache_items}</b> عنصر / <b>{cache_hits}</b> hit",
+        f"• ملفات مؤقتة: <b>{_fmt_bytes(temp_bytes)}</b> ({temp_files} ملف)",
+        f"• المحركات المسجّلة: <b>{engines}</b>",
+    ]
+    text = "\n".join(lines)
+    kb = _kb([
+        [inline_button("🛰 تحليلات المنصات", callback_data="own_plat"),
+         inline_button("🚨 المشبوهون", callback_data="own_sus")],
+        [inline_button("👻 بلا تفعيل", callback_data="own_ghosts"),
+         inline_button("🔄 تحديث", callback_data="own_warroom")],
+        *_back(),
+    ])
+    return text, kb
+
+
+def _platforms_screen() -> tuple[str, InlineKeyboardMarkup]:
+    """🛰 تحليلات المنصات: توزيع التحميلات + الحصة % + حجم البيانات."""
+    lines = ["🛰 <b>تحليلات المنصات</b>\n"]
+    for label, days in (("آخر 24 ساعة", 1), ("آخر 7 أيام", 7), ("آخر 30 يوم", 30)):
+        rows = get_platform_analytics(days)
+        total = sum(int(r["cnt"]) for r in rows)
+        lines.append(f"<b>{label}:</b> {total} تحميل")
+        if not rows:
+            lines.append("  • لا توجد بيانات.")
+        for r in rows[:6]:
+            lines.append(
+                f"  • <b>{escape(str(r['platform']))}</b> — {r['cnt']} "
+                f"({r['share']}%) · {_fmt_bytes(r['bytes'])}"
+            )
+        lines.append("")
+    text = "\n".join(lines)
+    kb = _kb([
+        [inline_button("🩺 غرفة الحرب", callback_data="own_warroom"),
+         inline_button("🏋️ الأعلى استهلاكًا", callback_data="own_heavy")],
+        [inline_button("🚨 المشبوهون", callback_data="own_sus"),
+         inline_button("👻 بلا تفعيل", callback_data="own_ghosts")],
+        *_back(),
+    ])
+    return text, kb
+
+
+def _suspicious_screen() -> tuple[str, InlineKeyboardMarkup]:
+    """🚨 المستخدمون المشبوهون: تحميلات كثيرة لروابط متكررة قليلة."""
+    rows = get_suspicious_users(15)
+    lines = [
+        "🚨 <b>المستخدمون المشبوهون (آخر 24 ساعة)</b>\n",
+        "نمط: تحميلات كثيرة لروابط متكررة قليلة — إشارة سبام/إساءة.\n",
+    ]
+    if not rows:
+        lines.append("✅ لا يوجد مستخدمون مشبوهون حاليًا.")
+    for r in rows:
+        disp = escape(str(r.get("first_name") or r.get("username") or "بدون اسم"))
+        lines.append(
+            f"• <b>{disp}</b> <code>{r['user_id']}</code>\n"
+            f"  ↳ {r['total']} تحميل / {r['unique_urls']} رابط فريد"
+        )
+    text = "\n".join(lines)
+    kb = _kb([
+        [inline_button("🔍 فحص مستخدم يدويًا", callback_data="own_users_search")],
+        [inline_button("🩺 غرفة الحرب", callback_data="own_warroom"),
+         inline_button("👻 بلا تفعيل", callback_data="own_ghosts")],
+        *_back(),
+    ])
+    return text, kb
+
+
+def _ghosts_screen() -> tuple[str, InlineKeyboardMarkup]:
+    """👻 مستخدمون سجّلوا لكنهم لم يُحمّلوا أي شيء (مرشحون للتنظيف)."""
+    rows = get_ghost_users(20)
+    lines = ["👻 <b>مستخدمون بلا تفعيل (لم يُحمّلوا أي شيء)</b>\n"]
+    if not rows:
+        lines.append("✅ كل المستخدمين لديهم تحميلات.")
+    for r in rows:
+        disp = escape(str(r.get("first_name") or r.get("username") or "بدون اسم"))
+        joined = escape(str(r.get("join_date") or "—")[:10])
+        lines.append(f"• {disp} <code>{r['user_id']}</code> — انضم <code>{joined}</code>")
+    text = "\n".join(lines)
+    kb = _kb([
+        [inline_button("🩺 غرفة الحرب", callback_data="own_warroom"),
+         inline_button("🚨 المشبوهون", callback_data="own_sus")],
+        *_back(),
+    ])
+    return text, kb
+
+
+def _heavy_screen() -> tuple[str, InlineKeyboardMarkup]:
+    """🏋️ أعلى المستخدمين استهلاكًا للبيانات (بالبايت، كل الأوقات)."""
+    rows = get_top_users_by_size(10)
+    lines = ["🏋️ <b>أعلى المستخدمين استهلاكًا للبيانات</b>\n"]
+    if not rows:
+        lines.append("لا توجد بيانات بعد.")
+    for r in rows:
+        disp = escape(str(r.get("first_name") or r.get("username") or "بدون اسم"))
+        lines.append(
+            f"• <b>{disp}</b> <code>{r['user_id']}</code> — "
+            f"{r['downloads']} تحميل · {_fmt_bytes(r['bytes'])}"
+        )
+    text = "\n".join(lines)
+    kb = _kb([
+        [inline_button("🛰 تحليلات المنصات", callback_data="own_plat"),
+         inline_button("🩺 غرفة الحرب", callback_data="own_warroom")],
+        *_back(),
+    ])
+    return text, kb
+
 
 # ---- users section --------------------------------------------------------------------
 
@@ -1719,6 +1879,28 @@ async def owner_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         tid = _suffix_int(data)
         if tid:
             await _sup_detail(query, tid)
+
+    # ---- war room & analytics ----
+    elif data == "own_warroom":
+        OWNER_STATES.pop(uid, None)
+        text, kb = _warroom_screen()
+        await _edit(query, text, parse_mode="HTML", reply_markup=kb)
+    elif data == "own_plat":
+        OWNER_STATES.pop(uid, None)
+        text, kb = _platforms_screen()
+        await _edit(query, text, parse_mode="HTML", reply_markup=kb)
+    elif data == "own_sus":
+        OWNER_STATES.pop(uid, None)
+        text, kb = _suspicious_screen()
+        await _edit(query, text, parse_mode="HTML", reply_markup=kb)
+    elif data == "own_ghosts":
+        OWNER_STATES.pop(uid, None)
+        text, kb = _ghosts_screen()
+        await _edit(query, text, parse_mode="HTML", reply_markup=kb)
+    elif data == "own_heavy":
+        OWNER_STATES.pop(uid, None)
+        text, kb = _heavy_screen()
+        await _edit(query, text, parse_mode="HTML", reply_markup=kb)
 
     # ---- reports ----
     elif data == "own_rep":

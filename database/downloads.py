@@ -89,3 +89,65 @@ def get_top_user_today(limit: int = 3) -> list[dict]:
             LIMIT ?
         """, (limit,))
         return [dict(row) for row in c.fetchall()]
+
+
+def get_platform_analytics(days: int = 7) -> list[dict]:
+    """Per-platform download count + share % + data volume over the last N days."""
+    days = max(1, min(int(days or 7), 365))
+    with db_cursor() as c:
+        c.execute("""
+            SELECT COALESCE(platform, 'unknown') AS platform,
+                   COUNT(*) AS cnt,
+                   COALESCE(SUM(file_size), 0) AS bytes
+            FROM downloads
+            WHERE created_at >= datetime('now', ?)
+            GROUP BY COALESCE(platform, 'unknown')
+            ORDER BY cnt DESC
+        """, (f"-{days} days",))
+        rows = [dict(r) for r in c.fetchall()]
+    total = sum(r["cnt"] for r in rows) or 1
+    for r in rows:
+        r["share"] = round(int(r["cnt"]) * 100.0 / total, 1)
+    return rows
+
+
+def get_suspicious_users(limit: int = 15) -> list[dict]:
+    """Users whose last-24h pattern looks abusive: many downloads but few
+    distinct URLs (same link hammered) — the classic abuse/bot signal."""
+    with db_cursor() as c:
+        c.execute("""
+            SELECT d.user_id,
+                   MAX(u.username) AS username,
+                   MAX(u.first_name) AS first_name,
+                   COUNT(*) AS total,
+                   COUNT(DISTINCT d.url) AS unique_urls,
+                   MAX(d.created_at) AS last_dl
+            FROM downloads d
+            JOIN users u ON u.user_id = d.user_id
+            WHERE d.created_at >= datetime('now', '-1 day')
+              AND u.is_banned = 0
+            GROUP BY d.user_id
+            HAVING COUNT(*) >= 6
+               AND (COUNT(*) * 1.0 / (COUNT(DISTINCT d.url) * 1.0 + 1e-6)) >= 2.0
+            ORDER BY total DESC
+            LIMIT ?
+        """, (limit,))
+        return [dict(row) for row in c.fetchall()]
+
+
+def get_top_users_by_size(limit: int = 10) -> list[dict]:
+    """Heaviest bandwidth consumers (real bytes downloaded, all time)."""
+    with db_cursor() as c:
+        c.execute("""
+            SELECT u.user_id,
+                   MAX(u.username) AS username,
+                   MAX(u.first_name) AS first_name,
+                   COUNT(*) AS downloads,
+                   COALESCE(SUM(d.file_size), 0) AS bytes
+            FROM downloads d
+            JOIN users u ON u.user_id = d.user_id
+            GROUP BY u.user_id
+            ORDER BY bytes DESC
+            LIMIT ?
+        """, (limit,))
+        return [dict(row) for row in c.fetchall()]

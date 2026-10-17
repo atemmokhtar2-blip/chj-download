@@ -214,3 +214,20 @@ def search_users(query: str) -> list[dict]:
                 (term, f"%{term}%"),
             )
         return [dict(row) for row in c.fetchall()]
+
+
+def get_ghost_users(limit: int = 20) -> list[dict]:
+    """Registered users who NEVER completed a download (retention cleanup)."""
+    with db_cursor() as c:
+        c.execute("""
+            SELECT u.user_id, u.username, u.first_name, u.join_date, u.last_seen
+            FROM users u
+            LEFT JOIN (
+                SELECT user_id, COUNT(*) AS cnt FROM downloads GROUP BY user_id
+            ) d ON d.user_id = u.user_id
+            WHERE u.is_banned = 0
+              AND COALESCE(d.cnt, 0) = 0
+            ORDER BY u.join_date ASC
+            LIMIT ?
+        """, (limit,))
+        return [dict(row) for row in c.fetchall()]
