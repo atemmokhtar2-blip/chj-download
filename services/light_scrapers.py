@@ -2035,3 +2035,70 @@ def resolve_rutube(url: str) -> dict[str, Any] | None:
         candidates=[str(m3u8)],
         engine_profile="rutube-play-options-m3u8",
     )
+
+
+# --------------------------------------------------------------------------- #
+# Weibo — render_data CDN mining (f.video.weibocdn.com)
+# --------------------------------------------------------------------------- #
+_WEIBO_TV_RE = re.compile(
+    r"(?:weibo\.com/tv/show/(\d+)(?::(\d+))?|weibo\.tv/v/(\d+)|m\.weibo\.cn/detail/(\d+))",
+    re.I,
+)
+_WEIBO_CDN_RE = re.compile(
+    r'https?://(?:f\.video\.weibocdn\.com|video\.weibo\.com)/[^"\s<>()]+?\.(?:mp4|m3u8|webm|mov)(?:\?[^"\s<>()]*)?',
+    re.I,
+)
+
+
+def resolve_weibo(url: str) -> dict[str, Any] | None:
+    """Resolve a Weibo video by mining the SPA's render_data JSON.
+
+    Weibo (one of the largest CN social platforms) serves video exclusively
+    from ``f.video.weibocdn.com`` after the page hydrates its ``$render_data``
+    blob. That blob escapes slashes (``https:\\/\\/f.video...``), which plain
+    meta parsers cannot see. This resolver fetches through the browser-grade
+    TLS layer, normalises the JSON escaping, mines the CDN directly, then falls
+    back to the generic og/JSON-LD/`<video>` collector before yt-dlp.
+    """
+    m = _WEIBO_TV_RE.search(url or "")
+    if not m:
+        return None
+    media_id = next((g for g in m.groups() if g), None)
+
+    headers = {"Referer": "https://weibo.com/"}
+    html, resolved_url = _fetch_html_variants(url, headers)
+
+    candidates: list[str] = []
+    if html:
+        raw = html.replace("\\u0026", "&").replace("\\/", "/")
+        for value in _WEIBO_CDN_RE.findall(raw):
+            if value not in candidates:
+                candidates.append(value)
+        for value in _collect_video_candidates(html):
+            if value not in candidates:
+                candidates.append(value)
+
+    # Some posts only render media on the embed/publish variant.
+    if not candidates:
+        embed_url = _with_embed_param(url)
+        if embed_url and embed_url != url:
+            variant_html, _ = _fetch_html_variants(embed_url, headers)
+            for value in _collect_video_candidates(variant_html):
+                if value not in candidates:
+                    candidates.append(value)
+
+    if not candidates:
+        return None
+
+    return _video_payload(
+        url=resolved_url,
+        media_id=media_id or None,
+        title=_meta_any(html, "og:title") if html else None,
+        uploader=None,
+        duration=None,
+        platform="Weibo",
+        thumbnail=_meta_any(html, "og:image") if html else None,
+        qualities=None,
+        candidates=sorted(candidates, key=_rank_candidate, reverse=True)[:12],
+        engine_profile="weibo-render-data-cdn-mining",
+    )

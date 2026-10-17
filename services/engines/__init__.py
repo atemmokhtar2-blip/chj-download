@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 from services.engines.platforms import (
+    BandcampEngine,
     BilibiliEngine,
     BlueskyEngine,
     CoubEngine,
     DailymotionEngine,
     DouyinEngine,
+    DzenEngine,
     FacebookEngine,
     ImgurEngine,
     InstagramEngine,
@@ -13,10 +15,13 @@ from services.engines.platforms import (
     KickEngine,
     KuaishouEngine,
     KwaiEngine,
+    Lemon8Engine,
     LikeeEngine,
     MastodonEngine,
+    MixcloudEngine,
     NaverTVEngine,
     NiconicoEngine,
+    NineGagEngine,
     OdnoklassnikiEngine,
     OdyseeEngine,
     PinterestEngine,
@@ -27,6 +32,7 @@ from services.engines.platforms import (
     SoundCloudEngine,
     SpotifyEngine,
     StreamableEngine,
+    TedEngine,
     TelegramPublicEngine,
     ThreadsEngine,
     TikTokEngine,
@@ -35,6 +41,7 @@ from services.engines.platforms import (
     TwitterEngine,
     VimeoEngine,
     VkEngine,
+    WeiboEngine,
     XiaohongshuEngine,
     YouTubeEngine,
     UniversalEngine,
@@ -84,6 +91,13 @@ def registered_engines():
         NaverTVEngine(),
         KakaoTVEngine(),
         MastodonEngine(),
+        WeiboEngine(),
+        NineGagEngine(),
+        Lemon8Engine(),
+        DzenEngine(),
+        TedEngine(),
+        MixcloudEngine(),
+        BandcampEngine(),
     ]
 
 

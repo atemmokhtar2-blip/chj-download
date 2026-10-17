@@ -1521,6 +1521,56 @@ class MastodonEngine(EmbedFallbackEngine):
     )
 
 
+class WeiboEngine(EmbedFallbackEngine):
+    name = "WeiboEnginePro"
+    platform_label = "Weibo"
+    domains = ("weibo.com", "weibo.tv", "m.weibo.cn", "www.weibo.com")
+    resolver_name = "resolve_weibo"
+    embed_headers = {"Referer": "https://weibo.com/"}
+
+
+class NineGagEngine(EmbedFallbackEngine):
+    name = "NineGagEnginePro"
+    platform_label = "9GAG"
+    domains = ("9gag.com", "www.9gag.com", "m.9gag.com")
+    embed_headers = {"Referer": "https://9gag.com/"}
+
+
+class Lemon8Engine(EmbedFallbackEngine):
+    name = "Lemon8EnginePro"
+    platform_label = "Lemon8"
+    domains = ("lemon8-app.com", "www.lemon8-app.com")
+    embed_headers = {"Referer": "https://www.lemon8-app.com/"}
+
+
+class DzenEngine(EmbedFallbackEngine):
+    name = "DzenEnginePro"
+    platform_label = "Dzen"
+    domains = ("dzen.ru", "zen.yandex.ru", "www.dzen.ru")
+    embed_headers = {"Referer": "https://dzen.ru/"}
+
+
+class TedEngine(EmbedFallbackEngine):
+    name = "TedEnginePro"
+    platform_label = "TED"
+    domains = ("ted.com", "www.ted.com")
+    embed_headers = {"Referer": "https://www.ted.com/"}
+
+
+class MixcloudEngine(EmbedFallbackEngine):
+    name = "MixcloudEnginePro"
+    platform_label = "Mixcloud"
+    domains = ("mixcloud.com", "www.mixcloud.com")
+    embed_headers = {"Referer": "https://www.mixcloud.com/"}
+
+
+class BandcampEngine(EmbedFallbackEngine):
+    name = "BandcampEnginePro"
+    platform_label = "Bandcamp"
+    domains = ("bandcamp.com",)
+    embed_headers = {"Referer": "https://bandcamp.com/"}
+
+
 class GenericEngine(YtDlpFallbackEngine):
     name = "GenericEngine"
     domains = ()
