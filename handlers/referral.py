@@ -66,7 +66,7 @@ _FAQ_ITEMS = {
         "1. افتح @BotFather وانسخ التوكن كاملًا من غير مسافات.\n"
         "2. لو التوكن مربوط قبل كده، أنشئ بوتًا جديدًا بالأمر <code>/newbot</code> واستخدم توكنه.\n"
         "3. لو فيه مشكلة اتصال، استنى دقيقة وجرّب تاني.\n\n"
-        "لو المشكلة مستمرة، افتح تذكرة من «🛟 الدعم الفني» واكتب رسالة الخطأ فقط."
+        "لو المشكلة مستمرة، تواصل مع المطوّر @K_xv6 واكتب رسالة الخطأ فقط."
     ),
     "2": (
         "🤖 <b>نسختي الخاصة مش شغالة</b>\n\n"
@@ -74,7 +74,7 @@ _FAQ_ITEMS = {
         "1. ارجع لصفحة «🎁 اكسب نسختك».\n"
         "2. اضغط «🔄 تحديث حالة نسختي».\n"
         "3. اتأكد إنك ما ألغيتش التوكن بأمر <code>/revoke</code> من @BotFather.\n\n"
-        "لو لسه مش شغالة، افتح تذكرة دعم واكتب رسالة الخطأ اللي ظهرت لك."
+        "لو لسه مش شغالة، تواصل مع المطوّر @K_xv6 وابعت رسالة الخطأ اللي ظهرت لك."
     ),
     "3": (
         "👥 <b>إمتى الإحالة تتحسب مؤهلة؟</b>\n\n"
@@ -105,15 +105,14 @@ _FAQ_ITEMS = {
     ),
     "7": (
         "🔐 <b>أشارك توكن البوت مع حد؟</b>\n\n"
-        "<b>لا.</b> التوكن زي كلمة السر؛ ابعته في المحادثة الخاصة مع البوت أثناء الربط فقط، وما تبعتوش في قناة أو جروب أو تذكرة دعم.\n\n"
+        "<b>لا.</b> التوكن زي كلمة السر؛ ابعته في المحادثة الخاصة مع البوت أثناء الربط فقط، وما تبعتوش في قناة أو جروب أو للمطوّر.\n\n"
         "لو اتكشف، افتح @BotFather وألغيه باستخدام <code>/revoke</code>، وبعدها أنشئ توكنًا جديدًا."
     ),
     "8": (
-        "🛟 <b>إزاي أتواصل مع الدعم؟</b>\n\n"
+        "🧑‍💻 <b>إزاي أتواصل مع المطوّر؟</b>\n\n"
         "1. افتح «🎁 اكسب نسختك».\n"
-        "2. اضغط «🛟 الدعم الفني».\n"
-        "3. اختار «📨 فتح تذكرة جديدة» وحدد نوع المشكلة.\n\n"
-        "احتفظ برقم التذكرة بالشكل <code>TKT-XXXXXX</code> عشان تتابع حالتها والردود."
+        "2. اضغط زر «🧑‍💻 التواصل مع المطوّر».\n\n"
+        "ابعت وصف المشكلة وصورة أو رسالة الخطأ لو موجودة، ومن فضلك ما تبعتش توكن البوت."
     ),
 }
 
@@ -125,7 +124,7 @@ _FAQ_TITLES = {
     "5": "🔗 رابط الدعوة",
     "6": "🎁 تفعيل نسختي",
     "7": "🔐 أمان التوكن",
-    "8": "🛟 التواصل مع الدعم",
+    "8": "🧑‍💻 التواصل مع المطوّر",
 }
 
 _RULES_TEXT = (
@@ -232,7 +231,7 @@ def _rows_for(stats: dict, bot_username: str | None) -> list[list[InlineKeyboard
     elif stage == "expired":
         # An expired clone ONLY returns via an owner-approved renewal — the
         # user's path is a support ticket, never a self-service re-activation.
-        rows.append([InlineKeyboardButton("⌛ طلب تجديد مدة نسختي", callback_data="ref:support:open:clone")])
+        rows.append([InlineKeyboardButton("⌛ طلب تجديد مدة نسختي", url="https://t.me/K_xv6")])
         rows.append([InlineKeyboardButton("🧾 سجل العمليات", callback_data="ref:activity")])
     else:
         remaining = max(0, int(stats.get("target", 0)) - int(stats.get("qualified", 0)))
@@ -249,7 +248,7 @@ def _rows_for(stats: dict, bot_username: str | None) -> list[list[InlineKeyboard
     rows.append([InlineKeyboardButton("📦 الخطط والباقات", callback_data="ref:plans")])
     rows.append([
         InlineKeyboardButton("🧾 سجل العمليات", callback_data="ref:activity"),
-        InlineKeyboardButton("🛟 الدعم الفني", callback_data="ref:support"),
+        InlineKeyboardButton("🧑‍💻 المطوّر", url="https://t.me/K_xv6"),
     ])
     rows.append([InlineKeyboardButton("📜 قواعد الإحالات — مهم قبل المشاركة", callback_data="ref:rules")])
     rows.append([InlineKeyboardButton("❓ أسئلة شائعة", callback_data="ref:faq")])
@@ -467,16 +466,16 @@ async def _show_faq(q, topic: str | None = None) -> None:
     if topic in _FAQ_ITEMS:
         rows = []
         if topic == "1":
-            rows.append([InlineKeyboardButton("🛟 افتح تذكرة دعم", callback_data="ref:support")])
+            rows.append([InlineKeyboardButton("🧑‍💻 تواصل مع المطوّر", url="https://t.me/K_xv6")])
         elif topic == "2":
             rows.append([InlineKeyboardButton("🔄 تحديث حالة نسختي", callback_data="ref:refresh_status")])
-            rows.append([InlineKeyboardButton("🛟 افتح تذكرة دعم", callback_data="ref:support")])
+            rows.append([InlineKeyboardButton("🧑‍💻 تواصل مع المطوّر", url="https://t.me/K_xv6")])
         elif topic == "5":
             rows.append([InlineKeyboardButton("📋 نسخ رابط الإحالة", callback_data="ref:copy")])
         elif topic == "6":
             rows.append([InlineKeyboardButton("📖 دليل التفعيل", callback_data="ref:guide")])
         elif topic == "8":
-            rows.append([InlineKeyboardButton("🛟 افتح الدعم الفني", callback_data="ref:support")])
+            rows.append([InlineKeyboardButton("🧑‍💻 تواصل مع المطوّر", url="https://t.me/K_xv6")])
         rows.append([InlineKeyboardButton("⬅️ كل الأسئلة", callback_data="ref:faq")])
         rows.append(_back_home_row())
         await _edit_ref(q, _FAQ_ITEMS[topic], InlineKeyboardMarkup(rows))
@@ -491,7 +490,7 @@ async def _show_faq(q, topic: str | None = None) -> None:
         [InlineKeyboardButton(_FAQ_TITLES["6"], callback_data="ref:faq:6")],
         [InlineKeyboardButton(_FAQ_TITLES["7"], callback_data="ref:faq:7")],
         [InlineKeyboardButton(_FAQ_TITLES["8"], callback_data="ref:faq:8")],
-        [InlineKeyboardButton("🛟 الدعم الفني", callback_data="ref:support")],
+        [InlineKeyboardButton("🧑‍💻 المطوّر", url="https://t.me/K_xv6")],
         _back_home_row(),
     ]
     await _edit_ref(
@@ -535,7 +534,7 @@ def _rules_rich_html() -> str:
 async def _show_rules(q) -> None:
     markup = InlineKeyboardMarkup([
         [InlineKeyboardButton("📦 عرض الخطط والباقات", callback_data="ref:plans")],
-        [InlineKeyboardButton("🛟 عندك مشكلة؟ الدعم الفني", callback_data="ref:support")],
+        [InlineKeyboardButton("🧑‍💻 عندك مشكلة؟ كلم المطوّر", url="https://t.me/K_xv6")],
         _back_home_row(),
     ])
     message = getattr(q, "message", None)
@@ -593,7 +592,7 @@ def _plans_text(stats: dict) -> str:
         "• المدة تُحسب من <b>يوم التفعيل</b> وتظهر لك في صفحة 🎁 الرئيسية.\n"
         "• لما المدة تنتهي، النسخة <b>بتتوقف تلقائيًا</b> من النظام.\n"
         "• التجديد أو التمديد أو ترقية الخطة يتم <b>بقرار المالك</b> — من هنا:\n"
-        "   «⌛ طلب تجديد مدة نسختي» (تذكرة دعم).\n\n"
+        "   «⌛ طلب تجديد مدة نسختي» والتواصل مع المطوّر.\n\n"
         "📌 <b>حالتك أنت الآن:</b>\n"
     )
 
@@ -609,7 +608,7 @@ def _plans_text(stats: dict) -> str:
             )
         else:
             text += f"• خطتك: <b>{plan_badge}</b> — <b>منتهية</b> منذ {exp}\n"
-            text += "• للتجديد: افتح تذكرة «⌛ طلب تجديد مدة نسختي» من صفحة 🎁.\n"
+            text += "• للتجديد: اضغط «⌛ طلب تجديد مدة نسختي» وتواصل مع المطوّر.\n"
     else:
         remaining_basic = max(0, target - qualified)
         remaining_pro = max(0, pro_tgt - qualified)
@@ -673,7 +672,7 @@ def _plans_rich_html(stats: dict) -> str:
         "</details>",
         "<details><summary>⏳ المدة والانتهاء والتجديد</summary>",
         "<p>تبدأ المدة من يوم التفعيل، وتظهر في الصفحة الرئيسية. عند انتهائها تتوقف النسخة تلقائيًا.</p>",
-        "<p>التجديد أو التمديد أو الترقية يتم بقرار المالك عبر تذكرة الدعم: «⌛ طلب تجديد مدة نسختي».</p>",
+        "<p>التجديد أو التمديد أو الترقية يتم بقرار المالك بعد التواصل مع المطوّر عبر «⌛ طلب تجديد مدة نسختي».</p>",
         "</details>",
         "<details><summary>📌 حالتك الحالية</summary>",
     ]
@@ -706,7 +705,7 @@ async def _show_plans(q) -> None:
     rows = [_back_home_row()]
     inst = stats.get("instance") or {}
     if inst and inst.get("status") == "expired":
-        rows.insert(0, [InlineKeyboardButton("⌛ طلب تجديد مدة نسختي", callback_data="ref:support:open:clone")])
+        rows.insert(0, [InlineKeyboardButton("⌛ طلب تجديد مدة نسختي", url="https://t.me/K_xv6")])
     elif not inst:
         rows.insert(0, [InlineKeyboardButton("📋 نسخ رابط الإحالة", callback_data="ref:copy")])
     markup = InlineKeyboardMarkup(rows)
@@ -814,11 +813,11 @@ async def _render_status_screen(q, verified_title: str) -> None:
                 f"السبب: <code>{reason}</code>\n\n"
                 "• اتأكد إنك ما عملتش <code>/revoke</code> للتوكن في @BotFather.\n"
                 "• لو التوكن مرفوض، أعد الربط ببوت جديد.\n"
-                "• لو استمرت المشكلة، افتح تذكرة دعم."
+                "• لو استمرت المشكلة، تواصل مع المطوّر @K_xv6."
             )
             rows = [
                 [InlineKeyboardButton("🔑 إعادة ربط التوكن", callback_data="ref:claim")],
-                [InlineKeyboardButton("🛟 الدعم الفني", callback_data="ref:support")],
+                [InlineKeyboardButton("🧑‍💻 المطوّر", url="https://t.me/K_xv6")],
                 _back_home_row(),
             ]
         await _edit_ref(q, text, InlineKeyboardMarkup(rows))
@@ -861,29 +860,30 @@ async def _render_status_screen(q, verified_title: str) -> None:
 
 
 async def _show_support_home(q) -> None:
+    """Redirect user support requests directly to the developer."""
     uid = q.from_user.id
-    tickets = support.list_user_tickets(uid, limit=5)
-    if tickets:
-        lines = []
-        for t in tickets:
-            lines.append(
-                f"• <code>{t['ticket_no']}</code> — {_SUPPORT_CATEGORY_LABELS.get(t['category'], t['category'])} "
-                f"— {_SUPPORT_STATUS_LABELS.get(t['status'], t['status'])}"
-            )
-        body = "\n".join(lines)
-    else:
-        body = "لا توجد تذاكر مفتوحة عندك حاليًا."
-    rows = [[InlineKeyboardButton("📨 فتح تذكرة جديدة", callback_data="ref:support:new")]]
-    if tickets:
-        rows.insert(0, [InlineKeyboardButton("🔄 تحديث الحالة", callback_data="ref:support")])
-    rows.append(_back_home_row())
     await _edit_ref(
         q,
-        "🛟 <b>الدعم الفني</b>\n\n"
-        f"{body}\n\n"
-        "افتح تذكرة برقم خاص وتابع الردود وحالة مشكلتك من هنا.",
-        InlineKeyboardMarkup(rows),
+        "🧑‍💻 <b>التواصل مع المطوّر</b>\\n\\n"
+        "لو قابلتك مشكلة، ابعت للمطوّر @K_xv6 وصف المشكلة ورسالة الخطأ أو صورة منها.\\n\\n"
+        "🔐 ما تبعتش توكن البوت أو أي بيانات سرية.",
+        InlineKeyboardMarkup([
+            [InlineKeyboardButton("💬 مراسلة المطوّر @K_xv6", url="https://t.me/K_xv6")],
+            _back_home_row(),
+        ]),
     )
+
+
+async def _show_support_new(q) -> None:
+    await _show_support_home(q)
+
+
+async def _open_support_ticket(q, category: str) -> None:
+    await _show_support_home(q)
+
+
+async def _render_support_ticket(q, ticket_id: int, just_opened: bool = False) -> None:
+    await _show_support_home(q)
 
 
 async def _show_support_new(q) -> None:
@@ -1146,7 +1146,7 @@ async def referral_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) 
                 "🤖 <b>لديك نسخة نشطة بالفعل!</b>\n\n"
                 f"بوتك: <a href=\"https://t.me/{inst['bot_username']}\">@{inst['bot_username']}</a>\n"
                 "الكود مخصص لمن لا يملك نسخة عاملة — لو نسختك منتهية المدة، "
-                "التجديد يتم بقرار المالك عبر تذكرة دعم.",
+                "التجديد يتم بقرار المالك بعد التواصل مع المطوّر.",
                 parse_mode="HTML",
                 reply_markup=InlineKeyboardMarkup([[_back_home_row()[0]]]),
             )
@@ -1289,13 +1289,13 @@ async def _render_private_hub(update: Update, context: ContextTypes.DEFAULT_TYPE
             + (f"⌛ تنتهي خلال <b>{days_left}</b> يومًا ({exp})\n" if days_left is not None
                else (f"⌛ تنتهي في {exp}\n" if exp else ""))
             + f"🔗 البوت: <a href=\"https://t.me/{inst['bot_username']}\">@{inst['bot_username']}</a>\n\n"
-            "التجديد يتم بقرار المالك — لو نسختك اقتربت من الانتهاء افتح تذكرة دعم."
+            "التجديد يتم بقرار المالك — لو نسختك اقتربت من الانتهاء تواصل مع المطوّر @K_xv6."
         )
         rows = [
             [InlineKeyboardButton("🤖 افتح نسختك", url=f"https://t.me/{inst['bot_username']}")],
             [InlineKeyboardButton("🔄 تحديث حالة نسختي", callback_data="ref:refresh_status"),
              InlineKeyboardButton("✅ تحقق من التفعيل", callback_data="ref:verify_activation")],
-            [InlineKeyboardButton("🛟 الدعم الفني", callback_data="ref:support")],
+            [InlineKeyboardButton("🧑‍💻 المطوّر", url="https://t.me/K_xv6")],
             _back_home_row(),
         ]
         await _edit_ref(q, text, InlineKeyboardMarkup(rows))
@@ -1325,7 +1325,7 @@ async def _render_private_hub(update: Update, context: ContextTypes.DEFAULT_TYPE
         label = "🚀 فعّل نسختك الآن" if stage == "eligible" else "🔑 ربط توكن البوت"
         rows.append([InlineKeyboardButton(f"🏆 مكافأة الإحالات — {label}", callback_data="ref:claim")])
     elif stage == "expired":
-        rows.append([InlineKeyboardButton("⌛ طلب تجديد مدة نسختي", callback_data="ref:support:open:clone")])
+        rows.append([InlineKeyboardButton("⌛ طلب تجديد مدة نسختي", url="https://t.me/K_xv6")])
     else:
         remaining = max(0, int(stats.get("target", 0)) - int(stats.get("qualified", 0)))
         rows.append([InlineKeyboardButton(
@@ -1510,7 +1510,7 @@ async def try_handle_token_message(update: Update, context: ContextTypes.DEFAULT
                 except Exception:
                     logger.exception("code/trial release failed")
             text = ("⚠️ <b>لديك نسخة أخرى نشطة أو قيد التفعيل</b> — لا يمكن ربط نسختين "
-                    "لنفس الحساب.\nأنهِ أو ألغِ المحاولة الأخرى أولًا، أو تواصل مع الدعم."
+                    "لنفس الحساب.\nأنهِ أو ألغِ المحاولة الأخرى أولًا، أو تواصل مع المطوّر @K_xv6."
                     + ("\n\n✅ الكود محفوظ ولم يُستهلك." if failed_cr else ""))
         elif attempts >= _MAX_TOKEN_ATTEMPTS:
             context.user_data.pop("awaiting_token", None)
