@@ -20,6 +20,8 @@ import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from urllib.parse import quote, urlparse
 
+from utils import tls
+
 logger = logging.getLogger(__name__)
 
 _SHORTCODE_RE = re.compile(
@@ -170,8 +172,9 @@ def _http_get(url: str, headers: dict | None = None, timeout: int = 20):
     if sid:
         hdrs["Cookie"] = f"sessionid={sid};"
     try:
-        from curl_cffi import requests as creq
-        return creq.get(url, headers=hdrs, impersonate="chrome", timeout=timeout)
+        resp = tls.get(url, headers=hdrs, timeout=timeout)
+        if resp is not None:
+            return resp
     except Exception:
         pass
     import requests

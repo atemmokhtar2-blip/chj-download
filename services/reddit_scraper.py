@@ -13,6 +13,7 @@ from urllib.parse import urlparse, urlunparse
 import requests
 
 from utils.logger import download_logger, error_logger
+from utils import tls
 
 UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131 Safari/537.36"
 MOBILE_UA = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 Version/17.0 Mobile/15E148 Safari/604.1"
@@ -56,28 +57,28 @@ def _request_get(
     stream: bool = False,
     allow_redirects: bool = True,
 ):
-    """Browser-grade GET: curl_cffi Chrome JA3/HTTP2 impersonation + cookies.
+    """Browser-grade GET: newest Chrome TLS impersonation + cookies.
 
     Reddit's JSON endpoint and CDN block plain-requests TLS fingerprints from
-    datacenter IPs with 403. The curl_cffi ``impersonate="chrome"`` pass presents
-    a real Chrome handshake (same technique as the light scrapers), and the
-    requests fallback keeps the path working when curl_cffi is unavailable.
+    datacenter IPs with 403. The shared tls layer replays a real Chrome
+    handshake (chrome131 → safari fallback chain), and the requests fallback
+    keeps the path working when curl_cffi is unavailable.
     """
     hdrs = _headers()
     if headers:
         hdrs.update(headers)
     cookies = _cookies()
     try:
-        from curl_cffi import requests as creq
-        return creq.get(
+        resp = tls.get(
             url,
             headers=hdrs,
             cookies=cookies or None,
-            impersonate="chrome",
             timeout=timeout,
             allow_redirects=allow_redirects,
             stream=stream,
         )
+        if resp is not None:
+            return resp
     except Exception:
         pass
     return requests.get(

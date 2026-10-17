@@ -18,6 +18,8 @@ import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from urllib.parse import urlparse
 
+from utils import tls
+
 logger = logging.getLogger(__name__)
 
 _TWEET_RE = re.compile(r"(?:twitter\.com|x\.com|mobile\.twitter\.com|fxtwitter\.com|fixupx\.com|vxtwitter\.com)/([^/]+)/status(?:es)?/(\d+)")
@@ -70,8 +72,9 @@ def _http_get(url: str, headers: dict | None = None, timeout: int = 18, allow_re
     if headers:
         hdrs.update(headers)
     try:
-        from curl_cffi import requests as creq
-        return creq.get(url, headers=hdrs, impersonate="chrome", timeout=timeout, allow_redirects=allow_redirects)
+        resp = tls.get(url, headers=hdrs, timeout=timeout, allow_redirects=allow_redirects)
+        if resp is not None:
+            return resp
     except Exception:
         pass
     import requests

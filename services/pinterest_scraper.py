@@ -22,6 +22,8 @@ from middlewares.cancellation import DownloadCancelledError
 
 import requests
 
+from utils import tls
+
 logger = logging.getLogger(__name__)
 
 PLACEHOLDER_HASHES = (
@@ -52,11 +54,8 @@ def _session():
     probes) presents a real Chrome handshake, with the requests Session as a
     safe fallback where curl_cffi is unavailable.
     """
-    try:
-        from curl_cffi import requests as creq
-
-        s = creq.Session(impersonate="chrome")
-    except Exception:
+    s = tls.session()
+    if s is None:
         s = requests.Session()
     s.headers.update(_HEADERS)
     return s

@@ -19,6 +19,8 @@ import requests
 
 from config.settings import MAX_FILE_SIZE_BYTES
 
+from utils import tls
+
 logger = logging.getLogger(__name__)
 
 MOBILE_UA = (
@@ -107,9 +109,8 @@ def _safe_get(url: str, **kwargs) -> Optional[requests.Response]:
     timeout = kwargs.pop("timeout", PROVIDER_TIMEOUT)
     session = kwargs.pop("session", None)
     headers = kwargs.pop("headers", None)
-    # Prefer curl_cffi Chrome impersonation — TikTok blocks plain Python TLS often
+    # Prefer browser-grade TLS impersonation — TikTok blocks plain Python TLS often
     try:
-        from curl_cffi import requests as creq
         hdrs = {}
         if session is not None and getattr(session, "headers", None):
             hdrs.update(dict(session.headers))
@@ -117,11 +118,12 @@ def _safe_get(url: str, **kwargs) -> Optional[requests.Response]:
             hdrs.update(headers)
         if not hdrs.get("User-Agent"):
             hdrs["User-Agent"] = DESKTOP_UA
-        r = creq.get(
-            url, headers=hdrs, impersonate="chrome",
+        r = tls.get(
+            url, headers=hdrs,
             timeout=timeout, allow_redirects=True, **kwargs,
         )
-        return r
+        if r is not None:
+            return r
     except Exception:
         pass
     try:
@@ -143,16 +145,17 @@ def _safe_post(url: str, **kwargs) -> Optional[requests.Response]:
     session = kwargs.pop("session", None)
     headers = kwargs.pop("headers", None)
     try:
-        from curl_cffi import requests as creq
         hdrs = {}
         if session is not None and getattr(session, "headers", None):
             hdrs.update(dict(session.headers))
         if headers:
             hdrs.update(headers)
-        return creq.post(
-            url, headers=hdrs if hdrs else None, impersonate="chrome",
+        r = tls.post(
+            url, headers=hdrs if hdrs else None,
             timeout=timeout, allow_redirects=True, **kwargs,
         )
+        if r is not None:
+            return r
     except Exception:
         pass
     try:
@@ -1133,15 +1136,16 @@ def download_tiktok_direct(play_url: str, out_path: str) -> Optional[str]:
         headers = headers_list[attempt % len(headers_list)]
         try:
             try:
-                from curl_cffi import requests as creq
-                response_ctx = creq.get(
+                response_ctx = tls.get(
                     play_url,
                     headers=headers,
                     timeout=DOWNLOAD_TIMEOUT,
                     stream=True,
-                    impersonate="chrome",
                     allow_redirects=True,
                 )
+                if response_ctx is None:
+                    s = _session(headers["User-Agent"])
+                    response_ctx = s.get(play_url, headers=headers, timeout=DOWNLOAD_TIMEOUT, stream=True)
             except Exception:
                 s = _session(headers["User-Agent"])
                 response_ctx = s.get(play_url, headers=headers, timeout=DOWNLOAD_TIMEOUT, stream=True)
@@ -1231,11 +1235,13 @@ def download_tiktok_audio_direct(music_url: str, out_path: str) -> Optional[str]
         headers = headers_list[attempt % len(headers_list)]
         try:
             try:
-                from curl_cffi import requests as creq
-                response_ctx = creq.get(
+                response_ctx = tls.get(
                     music_url, headers=headers, timeout=DOWNLOAD_TIMEOUT,
-                    stream=True, impersonate="chrome", allow_redirects=True,
+                    stream=True, allow_redirects=True,
                 )
+                if response_ctx is None:
+                    s = _session(headers["User-Agent"])
+                    response_ctx = s.get(music_url, headers=headers, timeout=DOWNLOAD_TIMEOUT, stream=True)
             except Exception:
                 s = _session(headers["User-Agent"])
                 response_ctx = s.get(music_url, headers=headers, timeout=DOWNLOAD_TIMEOUT, stream=True)

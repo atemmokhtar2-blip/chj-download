@@ -31,6 +31,8 @@ from urllib.parse import quote, urlparse
 
 import requests
 
+from utils import tls
+
 logger = logging.getLogger(__name__)
 
 _UA = (
@@ -113,16 +115,15 @@ def _impersonate_get(
     if headers:
         base.update(headers)
     try:
-        from curl_cffi import requests as creq
-
-        return creq.get(
+        resp = tls.get(
             url,
             headers=base,
             cookies=_cookie_dict() or None,
-            impersonate="chrome",
             timeout=timeout,
             allow_redirects=allow_redirects,
         )
+        if resp is not None:
+            return resp
     except Exception:
         pass
     s = _session()

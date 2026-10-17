@@ -21,6 +21,7 @@ from config.settings import (
 )
 from middlewares.cancellation import DownloadCancelledError
 from services.content_intelligence import build_content_intelligence
+from utils import tls
 
 ALBUM_MAX_ITEMS = 10
 QUALITY_MAX_ROWS = 6
@@ -640,21 +641,19 @@ def _download_direct_sync(
     # Pass 1: curl_cffi Chrome TLS impersonation (single strong shot; the
     # requests pass below owns the retry loop).
     try:
-        from curl_cffi import requests as creq
-
-        _safe_remove(out_path)
-        response = creq.get(
+        response = tls.get(
             url,
             headers=request_headers,
-            impersonate="chrome",
             timeout=timeout,
             stream=True,
         )
-        result = _consume(response, out_path)
-        if result == "ok":
-            return out_path
-        if result == "retry":
-            logger.debug("curl_cffi direct got transient HTTP status for %s", str(url)[:120])
+        if response is not None:
+            _safe_remove(out_path)
+            result = _consume(response, out_path)
+            if result == "ok":
+                return out_path
+            if result == "retry":
+                logger.debug("curl_cffi direct got transient HTTP status for %s", str(url)[:120])
     except FileTooLargeError:
         _safe_remove(out_path)
         raise

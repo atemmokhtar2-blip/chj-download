@@ -20,6 +20,8 @@ import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from urllib.parse import unquote, urlparse
 
+from utils import tls
+
 logger = logging.getLogger(__name__)
 
 _PROVIDER_TIMEOUT = 24
@@ -57,8 +59,9 @@ def _http_get(url: str, headers: dict | None = None, timeout: int = 20):
     if cookie:
         hdrs["Cookie"] = cookie
     try:
-        from curl_cffi import requests as creq
-        return creq.get(url, headers=hdrs, impersonate="chrome", timeout=timeout, allow_redirects=True)
+        resp = tls.get(url, headers=hdrs, timeout=timeout, allow_redirects=True)
+        if resp is not None:
+            return resp
     except Exception:
         pass
     import requests
