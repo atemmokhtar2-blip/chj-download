@@ -35,10 +35,7 @@ from utils import tls
 
 logger = logging.getLogger(__name__)
 
-_UA = (
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-    "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131 Safari/537.36"
-)
+_UA = tls.chrome_ua()
 _MOBILE_UA = (
     "Mozilla/5.0 (iPhone; CPU iPhone OS 17_4 like Mac OS X) "
     "AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Mobile/15E148 Safari/604.1"
@@ -111,6 +108,10 @@ def _impersonate_get(
         "Sec-Fetch-Mode": "navigate",
         "Sec-Fetch-Site": "none",
         "Sec-Fetch-User": "?1",
+        "Priority": "u=0, i",
+        "Sec-CH-UA": '"Chromium";v="139", "Google Chrome";v="139", "Not_A Brand";v="24"',
+        "Sec-CH-UA-Mobile": "?0",
+        "Sec-CH-UA-Platform": '"Windows"',
     }
     if headers:
         base.update(headers)

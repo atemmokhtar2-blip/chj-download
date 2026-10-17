@@ -28,11 +28,7 @@ MOBILE_UA = (
     "AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 "
     "Mobile/15E148 Safari/604.1"
 )
-DESKTOP_UA = (
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-    "AppleWebKit/537.36 (KHTML, like Gecko) "
-    "Chrome/124.0.0.0 Safari/537.36"
-)
+DESKTOP_UA = tls.chrome_ua()
 ANDROID_UA = (
     "com.ss.android.ugc.trill/340003 (Linux; U; Android 13; en_US; "
     "Pixel 7; Build/TQ3A.230805.001; Cronet/58.0.2991.0)"
@@ -98,6 +94,11 @@ def _session(ua: str = DESKTOP_UA) -> requests.Session:
         "Referer": "https://www.tiktok.com/",
         "Origin": "https://www.tiktok.com",
         "Connection": "keep-alive",
+        "Sec-Fetch-Dest": "document",
+        "Sec-Fetch-Mode": "navigate",
+        "Sec-Fetch-Site": "same-origin",
+        "Sec-Fetch-User": "?1",
+        "Priority": "u=0, i",
     })
     # Don't leak exceptions from bad SSL on some hosts
     s.verify = True

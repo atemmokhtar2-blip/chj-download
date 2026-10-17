@@ -15,19 +15,16 @@ import requests
 from utils.logger import download_logger, error_logger
 from utils import tls
 
-UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131 Safari/537.36"
+UA = tls.chrome_ua()
 MOBILE_UA = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 Version/17.0 Mobile/15E148 Safari/604.1"
 TIMEOUT = 14
 CDN_HINTS = ("v.redd.it", "redd.it", "redditmedia.com", "reddituploads.com", "preview.redd.it", "i.redd.it")
 
 
 def _headers(referer: str = "https://www.reddit.com/") -> dict[str, str]:
-    return {
-        "User-Agent": UA,
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,application/json;q=0.8,*/*;q=0.7",
-        "Accept-Language": "en-US,en;q=0.9,ar;q=0.8",
-        "Referer": referer,
-    }
+    h = tls.browser_headers(referer=referer)
+    h["User-Agent"] = UA
+    return h
 
 
 def _cookies() -> dict:
