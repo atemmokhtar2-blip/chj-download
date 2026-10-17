@@ -43,8 +43,21 @@ _HEADERS = {
 }
 
 
-def _session() -> requests.Session:
-    s = requests.Session()
+def _session():
+    """Browser-grade session: curl_cffi Chrome JA3/HTTP2 impersonation.
+
+    Pinterest's PinResource API, GraphQL closeup and HTML pages all bot-gate
+    plain-requests TLS fingerprints. Returning a curl_cffi Session means every
+    GET/POST in this module (URL expansion, API/GraphQL/HTML providers, CDN
+    probes) presents a real Chrome handshake, with the requests Session as a
+    safe fallback where curl_cffi is unavailable.
+    """
+    try:
+        from curl_cffi import requests as creq
+
+        s = creq.Session(impersonate="chrome")
+    except Exception:
+        s = requests.Session()
     s.headers.update(_HEADERS)
     return s
 
